@@ -33,7 +33,7 @@ OUTPUT_DATASET_DIR = os.path.join(PROCESSED_ROOT, DATASET_NAME)
 OUTPUT_DIR = os.path.join(OUTPUT_DATASET_DIR, "lidar_detections")
 
 OUTPUT_JSON = os.path.join(OUTPUT_DIR, "lidar_detections.json")
-OUTPUT_TXT = os.path.join(OUTPUT_DIR, "final_clusters.txt")
+OUTPUT_TXT = os.path.join(OUTPUT_DIR, "unified_clusters.txt")
 OUTPUT_BB_TXT = os.path.join(OUTPUT_DIR, "lidar_bboxes.txt")
 OUTPUT_SCREENSHOT_DIR = os.path.join(OUTPUT_DIR, "screenshots")
 TEMP_BIN_FILE = os.path.join(OUTPUT_DIR, "_temp_calc.bin")

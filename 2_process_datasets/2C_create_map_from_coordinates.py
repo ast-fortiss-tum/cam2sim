@@ -39,7 +39,7 @@ ADDRESS = "Guerickestraße, Alte Heide, Munich"
 # Required map name.
 # This name defines the output folder:
 # data/maps/<MAP_NAME>/
-MAP_NAME = "guerickestrasse_alte_heide_munich"
+MAP_NAME = "reference_bag"
 
 # Output root.
 # This is relative to the directory where you run the script.

@@ -496,3 +496,6 @@ The exported timestamps are written in seconds.
 - The scripts assume a single ROS bag file configured by `bag_path`.
 - Make sure the topic names in each script match the topics in your ROS bag.
 - Run `1UTIL_print_bag_info.py` first when working with a new bag.
+
+
+# 2_process_dataset
