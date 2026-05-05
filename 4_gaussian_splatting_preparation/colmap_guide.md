@@ -150,11 +150,13 @@ Wait until COLMAP finishes.
 
 ## 6. Export the sparse model
 
-After reconstruction finishes, export the sparse model for the current split.
+After reconstruction finishes in the COLMAP GUI, export the sparse model for the current split into the matching split folder created by `2E`.
 
-- Split 1 → `data/data_for_gaussian_splatting/reference_bag/colmap/sparse/0`
-- Split 2 → `data/data_for_gaussian_splatting/reference_bag/colmap/sparse/1`
-- Split 3 → `data/data_for_gaussian_splatting/reference_bag/colmap/sparse/2`
+The current layout is:
+
+- Split 1 → `data/data_for_gaussian_splatting/reference_bag/colmap/split_1/sparse/0`
+- Split 2 → `data/data_for_gaussian_splatting/reference_bag/colmap/split_2/sparse/0`
+- Split 3 → `data/data_for_gaussian_splatting/reference_bag/colmap/split_3/sparse/0`
 
 Each exported sparse model folder must contain:
 
@@ -168,11 +170,13 @@ points3D.bin
 
 ## 7. Repeat for each split
 
-Repeat the full COLMAP procedure for every split:
+Repeat the full COLMAP procedure for every split.
 
-- Split 1 → `colmap/sparse/0`
-- Split 2 → `colmap/sparse/1`
-- Split 3 → `colmap/sparse/2`
+Use this export layout:
+
+- Split 1 → `colmap/split_1/sparse/0`
+- Split 2 → `colmap/split_2/sparse/0`
+- Split 3 → `colmap/split_3/sparse/0`
 
 At the end, the expected folder structure is:
 
@@ -181,26 +185,25 @@ data/data_for_gaussian_splatting/reference_bag/
 ├── images_gs_split_1_1_of_3/
 ├── images_gs_split_2_1_of_3/
 ├── images_gs_split_3_1_of_3/
-├── sky_masks_gs_split_1_1_of_3/
-├── sky_masks_gs_split_2_1_of_3/
-├── sky_masks_gs_split_3_1_of_3/
 ├── frame_positions_split_1_1_of_3.txt
 ├── frame_positions_split_2_1_of_3.txt
 ├── frame_positions_split_3_1_of_3.txt
 └── colmap/
-    └── sparse/
-        ├── 0/
-        │   ├── cameras.bin
-        │   ├── images.bin
-        │   └── points3D.bin
-        ├── 1/
-        │   ├── cameras.bin
-        │   ├── images.bin
-        │   └── points3D.bin
-        └── 2/
-            ├── cameras.bin
-            ├── images.bin
-            └── points3D.bin
-```
-
-After this, the COLMAP sparse reconstructions are ready to be used for Gaussian Splatting training.
+    ├── split_1/
+    │   └── sparse/
+    │       └── 0/
+    │           ├── cameras.bin
+    │           ├── images.bin
+    │           └── points3D.bin
+    ├── split_2/
+    │   └── sparse/
+    │       └── 0/
+    │           ├── cameras.bin
+    │           ├── images.bin
+    │           └── points3D.bin
+    └── split_3/
+        └── sparse/
+            └── 0/
+                ├── cameras.bin
+                ├── images.bin
+                └── points3D.bin
