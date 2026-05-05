@@ -5,7 +5,7 @@ import shutil
 import unicodedata
 import re
 import datetime
-from config import MAPS_FOLDER_NAME, DATASETS_FOLDER_NAME, MODEL_FOLDER_NAME, OUTPUT_FOLDER_NAME
+from utils.config import MAPS_FOLDER_NAME, DATASETS_FOLDER_NAME, MODEL_FOLDER_NAME, OUTPUT_FOLDER_NAME
 from utils.buildings import get_buildings_object
 from PIL import Image
 #from utils.map_data import save_graph_to_osm
@@ -14,8 +14,8 @@ from PIL import Image
 def get_map_folder_name(address) -> str:
     return get_folder_name(address)
 
-def get_dataset_folder_name(input) -> str:
-    return get_folder_name(input)
+def get_dataset_folder_name(video_filename) -> str:
+    return get_folder_name(video_filename)
 
 def get_folder_name(name) -> str:
     name_ascii = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')

@@ -1,18 +1,20 @@
 import os
 import math
-import numpy as np
+import csv
 from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # ---------------- CONFIG ----------------
-bag_path = Path('/media/cam2sim/New Volume/02-03-2026 cloudy/2026-02-16-23-07-19.bag')
-odom_topic = '/odom'
+bag_path = Path("data/raw_ros_data/reference_bag.bag")
+odom_topic = "/odom"
 
-dataset_dir = Path.cwd() / "datasets" / bag_path.stem
-dataset_dir.mkdir(parents=True, exist_ok=True)
+bag_name = bag_path.stem
 
-odom_path = dataset_dir / "odometry.txt"
-traj_path = dataset_dir / "trajectory.txt"
+dataset_dir = os.path.join(os.getcwd(), "data", "extracted_ros_data", bag_name)
+os.makedirs(dataset_dir, exist_ok=True)
+
+odom_path = os.path.join(dataset_dir, "odometry.csv")
+traj_path = os.path.join(dataset_dir, "trajectory.csv")
 
 print(f"Output: {dataset_dir}")
 # ----------------------------------------
@@ -25,9 +27,8 @@ def quat_to_yaw(x, y, z, w):
 
 
 def main():
-
     if not bag_path.exists():
-        print("Bag file not found")
+        print(f"Bag file not found: {bag_path}")
         return
 
     print(f"Reading: {bag_path}")
@@ -35,64 +36,104 @@ def main():
     odom_data = []
 
     with AnyReader([bag_path]) as reader:
-
         conns = {}
         for c in reader.connections:
             conns.setdefault(c.topic, []).append(c)
 
         if odom_topic not in conns:
-            raise RuntimeError("Odom topic not found")
+            raise RuntimeError(f"Odom topic not found: {odom_topic}")
 
         print("Reading odometry...")
 
         for c in conns[odom_topic]:
             for conn, ts, raw in reader.messages(connections=[c]):
-
                 msg = reader.deserialize(raw, conn.msgtype)
 
                 p = msg.pose.pose.position
                 q = msg.pose.pose.orientation
 
-                t = ts * 1e-9
+                timestamp = ts * 1e-9
                 yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
 
-                odom_data.append((t, p.x, p.y, p.z, q.x, q.y, q.z, q.w, yaw))
+                odom_data.append((
+                    timestamp,
+                    p.x,
+                    p.y,
+                    p.z,
+                    q.x,
+                    q.y,
+                    q.z,
+                    q.w,
+                    yaw,
+                ))
 
                 if len(odom_data) % 1000 == 0:
                     print(f"Extracted {len(odom_data)} odometry messages...")
 
-    # sort by time (important)
     odom_data.sort(key=lambda x: x[0])
 
     # =========================
-    # SAVE FULL ODOMETRY
+    # SAVE FULL ODOMETRY CSV
     # =========================
     print(f"Writing: {odom_path}")
 
-    with open(odom_path, "w") as f:
-        f.write("# timestamp tx ty tz qx qy qz qw yaw\n")
+    with open(odom_path, "w", newline="") as f:
+        writer = csv.writer(f)
+
+        writer.writerow([
+            "timestamp",
+            "tx",
+            "ty",
+            "tz",
+            "qx",
+            "qy",
+            "qz",
+            "qw",
+            "yaw",
+        ])
 
         for t, x, y, z, qx, qy, qz, qw, yaw in odom_data:
-            f.write(
-                f"{t:.9f}, "
-                f"{x:.6f}, {y:.6f}, {z:.6f}, "
-                f"{qx:.6f}, {qy:.6f}, {qz:.6f}, {qw:.6f}, "
-                f"{yaw:.6f}\n"
-            )
+            writer.writerow([
+                f"{t:.9f}",
+                f"{x:.6f}",
+                f"{y:.6f}",
+                f"{z:.6f}",
+                f"{qx:.6f}",
+                f"{qy:.6f}",
+                f"{qz:.6f}",
+                f"{qw:.6f}",
+                f"{yaw:.6f}",
+            ])
 
     # =========================
-    # SAVE TRAJECTORY ONLY
+    # SAVE TRAJECTORY CSV
     # =========================
     print(f"Writing: {traj_path}")
 
-    with open(traj_path, "w") as f:
-        f.write("# timestamp x y z yaw\n")
+    with open(traj_path, "w", newline="") as f:
+        writer = csv.writer(f)
+
+        writer.writerow([
+            "timestamp",
+            "x",
+            "y",
+            "z",
+            "yaw",
+        ])
 
         for t, x, y, z, _, _, _, _, yaw in odom_data:
-            f.write(f"{t:.9f}, {x:.6f}, {y:.6f}, {z:.6f}, {yaw:.6f}\n")
+            writer.writerow([
+                f"{t:.9f}",
+                f"{x:.6f}",
+                f"{y:.6f}",
+                f"{z:.6f}",
+                f"{yaw:.6f}",
+            ])
 
     print("Done.")
     print(f"Saved {len(odom_data)} odometry samples")
+    print(f"Odometry CSV: {odom_path}")
+    print(f"Trajectory CSV: {traj_path}")
 
 
 if __name__ == "__main__":

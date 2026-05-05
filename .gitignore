@@ -3,5 +3,9 @@ raw_scripts/*
 datasets/*
 datasets_old/*
 *.pth
-1_extract_ROS_data/datasets/*
 *.pyc
+data/raw_ros_data/reference_bag.bag
+data/extracted_ros_data/reference_bag/*
+data/generated_data_from_extracted_data/*
+data/maps/*
+

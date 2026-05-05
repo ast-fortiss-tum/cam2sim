@@ -6,13 +6,13 @@ from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # --------------------- USER SETTINGS ---------------------
-bag_path = Path('/media/cam2sim/New Volume/02-03-2026 cloudy/2026-02-16-23-07-19.bag')
+bag_path = Path('data/raw_ros_data/reference_bag.bag')
 odom_topic = "/odom"
 cam_topic  = "/gmsl_camera/front_narrow/image_raw" 
 
 bag_name = bag_path.stem 
 
-dataset_dir = os.path.join(os.getcwd(), "datasets", bag_name)
+dataset_dir = os.path.join(os.getcwd(), "data", "extracted_ros_data", bag_name)
 images_dir  = os.path.join(dataset_dir, "images")
 
 os.makedirs(images_dir, exist_ok=True)

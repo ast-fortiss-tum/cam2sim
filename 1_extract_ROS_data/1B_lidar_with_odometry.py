@@ -5,16 +5,18 @@ from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # ---------------- CONFIG ----------------
-bag_path = Path('/media/davidejannussi/New Volume/02-03-2026 cloudy/2026-02-16-23-07-19.bag')
+bag_path = Path('data/raw_ros_data/reference_bag.bag')
 lidar_topic = '/velodyne_points'
 odom_topic = '/odom'
 
-dataset_dir = Path.cwd() / "datasets" / bag_path.stem
-pc_dir = dataset_dir / "point_clouds"
+bag_name = bag_path.stem
 
-lidar_sync_path = dataset_dir / "lidar_positions.txt"
+dataset_dir = os.path.join(os.getcwd(), "data", "extracted_ros_data", bag_name)
+pc_dir = os.path.join(dataset_dir, "point_clouds")
 
-pc_dir.mkdir(parents=True, exist_ok=True)
+lidar_sync_path = os.path.join(dataset_dir, "lidar_positions.txt")
+
+os.makedirs(pc_dir, exist_ok=True)
 
 print(f"Output: {dataset_dir}")
 # ---------------------------------------
@@ -122,7 +124,7 @@ def main():
                     continue
 
                 # save pointcloud
-                save_path = pc_dir / f"point_cloud_{frame_idx:06d}.bin"
+                save_path = os.path.join(pc_dir, f"point_cloud_{frame_idx:06d}.bin")
                 points.tofile(save_path)
 
                 t = ts * 1e-9

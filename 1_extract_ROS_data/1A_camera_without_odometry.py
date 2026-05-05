@@ -5,11 +5,11 @@ from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # --------------------- USER SETTINGS ---------------------
-bag_path = Path('/media/davidejannussi/New Volume/07-11-2025/2025-11-07-11-34-46_fixed.bag')
-cam_topic = "/gmsl_camera/front_narrow/image_raw"
+bag_path = Path('data/raw_ros_data/reference_bag.bag')
+cam_topic  = "/gmsl_camera/front_narrow/image_raw" 
 
 bag_name = bag_path.stem
-dataset_dir = os.path.join(os.getcwd(), "datasets", bag_name)
+dataset_dir = os.path.join(os.getcwd(), "data", "extracted_ros_data", bag_name)
 images_dir = os.path.join(dataset_dir, "images")
 
 os.makedirs(images_dir, exist_ok=True)

@@ -3,7 +3,7 @@ from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # ---------------- CONFIG ----------------
-bag_path = Path('/media/davidejannussi/New Volume/02-03-2026 cloudy/2026-02-16-23-07-19.bag')
+bag_path = Path('data/raw_ros_data/reference_bag.bag')
 # ---------------------------------------
 
 
