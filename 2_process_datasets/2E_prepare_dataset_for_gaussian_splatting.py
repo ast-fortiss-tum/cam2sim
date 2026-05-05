@@ -111,7 +111,7 @@ FRAME_SKIP = 3
 
 # Split configuration.
 OVERLAP_FRAMES = 100
-NUM_SPLITS = 2
+NUM_SPLITS = 3
 
 # Sky mask model.
 MODEL_NAME = "nvidia/segformer-b1-finetuned-cityscapes-1024-1024"
