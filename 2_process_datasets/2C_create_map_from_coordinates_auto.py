@@ -239,21 +239,20 @@ def load_existing_vehicle_data(folder_name):
 
 def build_vehicle_output_from_first_pose(first_pose, dist):
     """
-    Build vehicle data from the first trajectory pose instead of a GUI click.
+    Build placeholder vehicle data.
 
-    This assumes the downstream vehicle_data.json format stores the hero/start
-    position under the key "start".
+    The real hero car trajectory is generated later by:
+      3A_transform_coordinates_yaw_to_carla.py
 
-    If your old GUI-generated vehicle_data.json uses a different key, adjust
-    only this function.
+    Therefore we do not store odom/UTM coordinates here.
     """
     return {
         "dist": dist,
         "start": {
-            "x": float(first_pose["x"]),
-            "y": float(first_pose["y"]),
-            "z": float(first_pose["z"]),
-            "yaw": float(first_pose["yaw"]),
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "yaw": 0.0,
         },
         "parking": [],
         "offset": None,
