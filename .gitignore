@@ -6,7 +6,10 @@ datasets_old/*
 *.pyc
 data/raw_ros_data/reference_bag.bag
 data/extracted_ros_data/reference_bag/*
+data/data_for_gaussian_splatting/*
 data/generated_data_from_extracted_data/*
 data/maps/*
+system_under_test/dave2_input_images/*
 cache
 *.json
+*.h5
