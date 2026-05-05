@@ -223,7 +223,30 @@ def write_split_positions_file(path, header_lines, split_frames, data_lines):
         for original_index, _filename in split_frames:
             f.write(data_lines[original_index] + "\n")
 
+def create_empty_colmap_split_folders():
+    """
+    Create empty COLMAP sparse folders for each split.
 
+    Example with NUM_SPLITS=3:
+      OUTPUT_ROOT/colmap/sparse/0
+      OUTPUT_ROOT/colmap/sparse/1
+      OUTPUT_ROOT/colmap/sparse/2
+    """
+    colmap_sparse_root = os.path.join(
+        OUTPUT_ROOT,
+        "colmap",
+        "sparse",
+    )
+
+    for split_id in range(NUM_SPLITS):
+        split_sparse_dir = os.path.join(
+            colmap_sparse_root,
+            str(split_id),
+        )
+
+        os.makedirs(split_sparse_dir, exist_ok=True)
+
+    print(f"[INFO] Empty COLMAP sparse folders created in: {colmap_sparse_root}")
 # =======================
 # SKY MASK MODEL
 # =======================
@@ -508,6 +531,7 @@ def process_frames():
 
 def main():
     ensure_input_paths()
+    create_empty_colmap_split_folders()
     process_frames()
 
 
