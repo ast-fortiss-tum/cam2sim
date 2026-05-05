@@ -55,7 +55,7 @@ MAP_NAME = DATASET_NAME
 # Input/output roots.
 EXTRACTED_ROOT = os.path.join("data", "extracted_ros_data")
 GENERATED_ROOT = os.path.join("data", "generated_data_from_extracted_data")
-MAP_ROOT = os.path.join("data", "maps")
+MAP_ROOT = os.path.join("data", "generated_data_from_extracted_data", MAP_NAME, "maps")
 
 # Input files.
 TRAJECTORY_PATH = os.path.join(
@@ -94,7 +94,7 @@ SHIFT_FILE = os.path.join(
 OUTPUT_FILTERED_FILE = os.path.splitext(CENTROID_FILE)[0] + "_filtered.txt"
 
 # Map folder created by the map-download script.
-MAP_FOLDER = os.path.join(MAP_ROOT, MAP_NAME)
+MAP_FOLDER = os.path.join(MAP_ROOT)
 
 # Plot settings.
 BUFFER_M = 150

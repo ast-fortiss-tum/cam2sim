@@ -2,15 +2,19 @@
 # -*- coding: utf-8 -*-
 
 """
-Create / overwrite spawn_positions in:
+Create / overwrite spawn_positions in final CARLA vehicle_data.json.
 
-    data/maps/reference_bag/vehicle_data.json
+Reads map data from:
 
-from cluster centroids expressed in odom / UTM coordinates.
+    data/generated_data_from_extracted_data/<BAG_NAME>/maps
 
-Hardcoded centroid input:
+Reads centroid input from:
 
-    data/generated_data_from_extracted_data/reference_bag/lidar_detections/unified_clusters.txt
+    data/generated_data_from_extracted_data/<BAG_NAME>/lidar_detections/unified_clusters.txt
+
+Writes final vehicle data to:
+
+    data/data_for_carla/<BAG_NAME>/vehicle_data.json
 
 The centroid parser is flexible and ignores RGB/color columns.
 
@@ -55,10 +59,6 @@ if not os.path.isdir(LOCAL_UTILS_DIR):
     )
 
 # Force Python to import utils from SCRIPT_DIR first.
-# Do NOT insert PROJECT_ROOT before SCRIPT_DIR, otherwise it may import:
-# /home/cam2sim/Documents/cam2sim/utils
-# instead of:
-# /home/cam2sim/Documents/cam2sim/3_generate_simulation_data/utils
 if SCRIPT_DIR in sys.path:
     sys.path.remove(SCRIPT_DIR)
 
@@ -66,25 +66,55 @@ sys.path.insert(0, SCRIPT_DIR)
 
 
 # =======================
-# HARDCODED INPUTS
+# HARDCODED BAG NAME
 # =======================
 
-MAP_NAME = "reference_bag"
+# Change this to select another bag.
+# No command-line parameters are used.
+BAG_NAME = "reference_bag"
 
+
+# =======================
+# HARDCODED INPUTS / OUTPUTS
+# =======================
+
+# Read map geometry and map.xodr from here.
 MAP_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
+    "generated_data_from_extracted_data",
+    BAG_NAME,
     "maps",
-    MAP_NAME,
 )
 
+# Read centroid file from here.
 CENTROIDS_FILE = os.path.join(
     PROJECT_ROOT,
     "data",
     "generated_data_from_extracted_data",
-    MAP_NAME,
+    BAG_NAME,
     "lidar_detections",
     "unified_clusters.txt",
+)
+
+# Save final CARLA-ready data here.
+OUTPUT_FOLDER = os.path.join(
+    PROJECT_ROOT,
+    "data",
+    "data_for_carla",
+    BAG_NAME,
+)
+
+# Final CARLA vehicle_data.json.
+FINAL_VEHICLE_DATA_PATH = os.path.join(
+    OUTPUT_FOLDER,
+    "vehicle_data.json",
+)
+
+# Optional source vehicle_data.json from map-generation step.
+SOURCE_VEHICLE_DATA_PATH = os.path.join(
+    MAP_FOLDER,
+    "vehicle_data.json",
 )
 
 
@@ -112,6 +142,109 @@ from utils.carla_simulator import (
     get_xodr_projection_params,
     calculate_grid_convergence,
 )
+
+
+# =======================
+# VEHICLE DATA HELPERS
+# =======================
+
+def load_base_vehicle_data():
+    """
+    Load vehicle_data.json for preservation.
+
+    Priority:
+      1. Existing final CARLA vehicle_data.json in data/data_for_carla/<BAG_NAME>
+      2. Source vehicle_data.json from generated map folder
+      3. Empty dict
+
+    This preserves hero_car if trajectory script already wrote it.
+    """
+    if os.path.exists(FINAL_VEHICLE_DATA_PATH):
+        with open(FINAL_VEHICLE_DATA_PATH, "r") as f:
+            return json.load(f)
+
+    if os.path.exists(SOURCE_VEHICLE_DATA_PATH):
+        with open(SOURCE_VEHICLE_DATA_PATH, "r") as f:
+            return json.load(f)
+
+    return {}
+
+
+def normalize_vehicle_data(vehicle_data):
+    """
+    Normalize vehicle_data.json into final expected format.
+
+    Final format:
+    {
+      "offset": {
+        "x": 0.0,
+        "y": 0.0,
+        "heading": 0.0
+      },
+      "dist": 200,
+      "hero_car": {
+        "position": [x, y, z],
+        "heading": yaw
+      },
+      "spawn_positions": [...]
+    }
+
+    Removes old keys:
+      - start
+      - parking
+    """
+    if vehicle_data is None:
+        vehicle_data = {}
+
+    offset = vehicle_data.get(
+        "offset",
+        {
+            "x": 0.0,
+            "y": 0.0,
+            "heading": 0.0,
+        },
+    )
+
+    if offset is None:
+        offset = {
+            "x": 0.0,
+            "y": 0.0,
+            "heading": 0.0,
+        }
+
+    hero_car = vehicle_data.get("hero_car")
+
+    if hero_car is None and isinstance(vehicle_data.get("start"), dict):
+        start = vehicle_data["start"]
+        hero_car = {
+            "position": [
+                float(start.get("x", 0.0)),
+                float(start.get("y", 0.0)),
+                float(start.get("z", 0.0)),
+            ],
+            "heading": float(start.get("yaw", 0.0)),
+        }
+
+    if hero_car is None:
+        hero_car = {
+            "position": [
+                0.0,
+                0.0,
+                0.0,
+            ],
+            "heading": 0.0,
+        }
+
+    spawn_positions = vehicle_data.get("spawn_positions", [])
+
+    normalized = {
+        "offset": offset,
+        "dist": int(vehicle_data.get("dist", 200)),
+        "hero_car": hero_car,
+        "spawn_positions": spawn_positions,
+    }
+
+    return normalized
 
 
 # =======================
@@ -301,7 +434,7 @@ def build_spawn_positions_from_centroids_xodr(
 
     print(
         f"[INFO] Grid convergence at "
-        f"({avg_lat:.6f}, {avg_lon:.6f}): {grid_convergence:.2f}°"
+        f"({avg_lat:.6f}, {avg_lon:.6f}): {grid_convergence:.2f} degrees"
     )
 
     # Generate candidate parking lines from road edges.
@@ -443,12 +576,15 @@ def main():
     print("=" * 80)
     print("CREATE PARKED VEHICLE SPAWN POSITIONS FROM CENTROIDS")
     print("=" * 80)
-    print(f"[INFO] Script folder:  {SCRIPT_DIR}")
-    print(f"[INFO] Local utils:    {LOCAL_UTILS_DIR}")
-    print(f"[INFO] Project root:   {PROJECT_ROOT}")
-    print(f"[INFO] Map name:       {MAP_NAME}")
-    print(f"[INFO] Map folder:     {MAP_FOLDER}")
-    print(f"[INFO] Centroid file:  {CENTROIDS_FILE}")
+    print(f"[INFO] Script folder:              {SCRIPT_DIR}")
+    print(f"[INFO] Local utils:                {LOCAL_UTILS_DIR}")
+    print(f"[INFO] Project root:               {PROJECT_ROOT}")
+    print(f"[INFO] Bag name:                   {BAG_NAME}")
+    print(f"[INFO] Map folder:                 {MAP_FOLDER}")
+    print(f"[INFO] Centroid file:              {CENTROIDS_FILE}")
+    print(f"[INFO] Final CARLA output folder:  {OUTPUT_FOLDER}")
+    print(f"[INFO] Source vehicle data path:   {SOURCE_VEHICLE_DATA_PATH}")
+    print(f"[INFO] Final vehicle data path:    {FINAL_VEHICLE_DATA_PATH}")
     print("=" * 80)
 
     if not os.path.isdir(MAP_FOLDER):
@@ -456,6 +592,8 @@ def main():
 
     if not os.path.exists(CENTROIDS_FILE):
         raise FileNotFoundError(f"Centroid file not found: {CENTROIDS_FILE}")
+
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
     # Load centroid data.
     cluster_ids, cent_x, cent_y, orientation, side_labels = load_centroids_xy(
@@ -491,19 +629,12 @@ def main():
         xodr_params=xodr_params,
     )
 
-    # Load existing vehicle_data.json.
-    vehicle_data_path = os.path.join(MAP_FOLDER, "vehicle_data.json")
+    # Load and normalize existing vehicle data.
+    vehicle_data = load_base_vehicle_data()
+    vehicle_data = normalize_vehicle_data(vehicle_data)
 
-    if not os.path.exists(vehicle_data_path):
-        raise FileNotFoundError(
-            f"vehicle_data.json not found in {MAP_FOLDER}.\n"
-            "First run the map creation script to generate it."
-        )
-
-    with open(vehicle_data_path, "r") as f:
-        vehicle_data = json.load(f)
-
-    # Overwrite spawn_positions.
+    # Overwrite spawn_positions only.
+    # Preserve hero_car from trajectory script if it already exists.
     vehicle_data["spawn_positions"] = spawn_positions
 
     # Fine-tuning offsets.
@@ -513,13 +644,15 @@ def main():
         "heading": 0.0,
     }
 
-    # Save vehicle_data.json.
-    with open(vehicle_data_path, "w") as f:
+    # Save final CARLA vehicle_data.json.
+    with open(FINAL_VEHICLE_DATA_PATH, "w") as f:
         json.dump(vehicle_data, f, indent=2)
 
-    print("\n✅ Updated vehicle_data.json")
-    print(f"   File: {vehicle_data_path}")
+    print("\nUpdated final CARLA vehicle_data.json")
+    print(f"   File: {FINAL_VEHICLE_DATA_PATH}")
     print(f"   Number of parked cars: {len(spawn_positions)}")
+    print(f"   Hero car preserved: {vehicle_data.get('hero_car') is not None}")
+    print("\nDone.")
 
 
 if __name__ == "__main__":

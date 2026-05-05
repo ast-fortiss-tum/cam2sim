@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import json
 import os
 import sys
@@ -10,19 +13,65 @@ import urllib.request
 import pandas as pd
 from pyproj import Transformer
 
+
 # =======================
 # PATH SETUP
 # =======================
-# This makes imports work even if the script is launched from another directory.
-# The utils/ folder is expected to be in the same folder as this script.
+
+# Folder where this script is located.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+# Force imports from the utils folder next to this script.
+if SCRIPT_DIR in sys.path:
+    sys.path.remove(SCRIPT_DIR)
+
+sys.path.insert(0, SCRIPT_DIR)
+
+LOCAL_UTILS_DIR = os.path.join(SCRIPT_DIR, "utils")
+
+if not os.path.isdir(LOCAL_UTILS_DIR):
+    raise FileNotFoundError(
+        f"Expected utils folder next to this script, but not found: {LOCAL_UTILS_DIR}"
+    )
+
+
+def find_project_root(start_dir):
+    """
+    Find the project root by walking upward until a data/ folder is found.
+
+    This avoids creating data folders relative to the terminal launch directory.
+    """
+    current = os.path.abspath(start_dir)
+
+    while True:
+        data_dir = os.path.join(current, "data")
+
+        if os.path.isdir(data_dir):
+            return current
+
+        parent = os.path.dirname(current)
+
+        if parent == current:
+            # Fallback: assume the parent of the script folder is project root.
+            return os.path.abspath(os.path.join(start_dir, ".."))
+
+        current = parent
+
+
+PROJECT_ROOT = find_project_root(SCRIPT_DIR)
+
+
+def project_path(*parts):
+    """
+    Build an absolute path relative to the project root.
+    """
+    return os.path.abspath(os.path.join(PROJECT_ROOT, *parts))
+
 
 # =======================
 # IMPORTS
 # =======================
+
 from utils.map_data import get_street_data, fetch_osm_data
 
 from utils.save_data import (
@@ -41,14 +90,11 @@ from utils.plotting import create_plot, show_plot, get_output
 # CONFIGURATION
 # =======================
 
-# Required map name.
-# This name defines the output folder:
-# data/maps/<DATASET_NAME>/
+# Bag / dataset name.
 DATASET_NAME = "reference_bag"
 
 # Input trajectory file.
-# This path is relative to the directory where you run the script.
-TRAJECTORY_FILE = os.path.join(
+TRAJECTORY_FILE = project_path(
     "data",
     "extracted_ros_data",
     DATASET_NAME,
@@ -60,9 +106,15 @@ TRAJECTORY_FILE = os.path.join(
 # EPSG:32632 = WGS84 / UTM zone 32N.
 UTM_EPSG = 32632
 
-# Output root.
-# This is relative to the directory where you run the script.
-MAP_OUTPUT_ROOT = os.path.join("data", "maps")
+# Output folder.
+# Everything for this bag is saved under:
+# data/generated_data_from_extracted_data/<DATASET_NAME>/maps/
+MAP_OUTPUT_ROOT = project_path(
+    "data",
+    "generated_data_from_extracted_data",
+    DATASET_NAME,
+    "maps",
+)
 
 # Radius around the detected road-level location used for OSM extraction.
 DIST = 200
@@ -70,10 +122,12 @@ DIST = 200
 # Map creation mode.
 # Use:
 # - "manual" to select hero car and parking areas manually
-# - "auto" to use first trajectory pose as hero car/start position
+# - "auto" to skip GUI and write placeholder hero_car
 MODE = "auto"
 
-# In auto mode, use the first pose from trajectory.txt instead of clicking.
+# In auto mode, use placeholder hero car data.
+# The real CARLA hero position is later written by:
+# 3A_transform_coordinates_yaw_to_carla.py
 USE_FIRST_TRAJECTORY_POSE_AS_START = True
 
 # If True, CARLA functionality is not checked.
@@ -90,7 +144,6 @@ NOMINATIM_USER_AGENT = "cam2sim-map-generation"
 
 # If this is not None, the script uses this exact address instead of the
 # automatically built road-level address.
-# Keep this as None for full automatic mode.
 ADDRESS_OVERRIDE = None
 # Example:
 # ADDRESS_OVERRIDE = "Guerickestraße, Alte Heide, Munich"
@@ -225,8 +278,7 @@ def load_existing_vehicle_data(folder_name):
     """
     Load existing vehicle data from the selected map folder.
 
-    This is used only to preserve previously saved offset values when re-running
-    the script with the same distance.
+    This is used only to preserve previously saved offset values when re-running.
     """
     vehicle_data_path = os.path.join(folder_name, "vehicle_data.json")
 
@@ -241,22 +293,99 @@ def build_vehicle_output_from_first_pose(first_pose, dist):
     """
     Build placeholder vehicle data.
 
-    The real hero car trajectory is generated later by:
+    The real hero car CARLA position is generated later by:
       3A_transform_coordinates_yaw_to_carla.py
 
-    Therefore we do not store odom/UTM coordinates here.
+    Therefore we do not store odom / UTM coordinates here.
+
+    Correct vehicle_data.json format:
+    {
+      "offset": {
+        "x": 0.0,
+        "y": 0.0,
+        "heading": 0.0
+      },
+      "dist": 200,
+      "hero_car": {
+        "position": [0.0, 0.0, 0.0],
+        "heading": 0.0
+      },
+      "spawn_positions": []
+    }
     """
     return {
-        "dist": dist,
-        "start": {
+        "offset": {
             "x": 0.0,
             "y": 0.0,
-            "z": 0.0,
-            "yaw": 0.0,
+            "heading": 0.0,
         },
-        "parking": [],
-        "offset": None,
+        "dist": dist,
+        "hero_car": {
+            "position": [
+                0.0,
+                0.0,
+                0.0,
+            ],
+            "heading": 0.0,
+        },
+        "spawn_positions": [],
     }
+
+
+def normalize_vehicle_data_schema(vehicle_data, dist):
+    """
+    Convert any old vehicle_data.json schema into the current expected schema.
+
+    Removes old keys:
+      - start
+      - parking
+
+    Preserves:
+      - offset
+      - spawn_positions
+      - hero_car if already present
+    """
+    if vehicle_data is None:
+        vehicle_data = {}
+
+    offset = vehicle_data.get(
+        "offset",
+        {
+            "x": 0.0,
+            "y": 0.0,
+            "heading": 0.0,
+        },
+    )
+
+    if offset is None:
+        offset = {
+            "x": 0.0,
+            "y": 0.0,
+            "heading": 0.0,
+        }
+
+    hero_car = vehicle_data.get(
+        "hero_car",
+        {
+            "position": [
+                0.0,
+                0.0,
+                0.0,
+            ],
+            "heading": 0.0,
+        },
+    )
+
+    spawn_positions = vehicle_data.get("spawn_positions", [])
+
+    normalized = {
+        "offset": offset,
+        "dist": dist,
+        "hero_car": hero_car,
+        "spawn_positions": spawn_positions,
+    }
+
+    return normalized
 
 
 # =======================
@@ -272,8 +401,7 @@ def main():
         raise ValueError("MODE must be either 'manual' or 'auto'.")
 
     # 2. Set up output paths
-    maps_root = os.path.abspath(MAP_OUTPUT_ROOT)
-    folder_name = os.path.join(maps_root, DATASET_NAME)
+    folder_name = MAP_OUTPUT_ROOT
 
     # 3. Read trajectory and convert UTM to lat/lon
     first_pose = load_first_trajectory_pose(TRAJECTORY_FILE)
@@ -287,8 +415,11 @@ def main():
     print("=" * 70)
     print("MAP DATA GENERATION")
     print("=" * 70)
+    print(f"Project root: {PROJECT_ROOT}")
+    print(f"Script folder: {SCRIPT_DIR}")
+    print(f"Local utils: {LOCAL_UTILS_DIR}")
     print(f"Map name: {DATASET_NAME}")
-    print(f"Trajectory file: {os.path.abspath(TRAJECTORY_FILE)}")
+    print(f"Trajectory file: {TRAJECTORY_FILE}")
     print(f"UTM EPSG: {UTM_EPSG}")
     print(f"UTM easting: {first_pose['x']}")
     print(f"UTM northing: {first_pose['y']}")
@@ -299,6 +430,7 @@ def main():
     print(f"No CARLA: {NO_CARLA}")
     print(f"Skip OSM fetch: {SKIP_FETCH}")
     print(f"Output folder: {folder_name}")
+    print("=" * 70)
 
     # 4. Determine OSM query address
     if SKIP_FETCH:
@@ -324,7 +456,7 @@ def main():
         print(f"Detected full address: {full_detected_address}")
         print(f"Road-level OSM query address: {osm_query_address}")
 
-    # 5. Load existing vehicle data to preserve offsets when re-running
+    # 5. Load existing vehicle data to preserve offset and spawn positions
     existing_vehicle_data = load_existing_vehicle_data(folder_name)
 
     # 6. Check CARLA functionality if requested
@@ -337,6 +469,7 @@ def main():
         print(osm_query_address)
 
         osm_data = get_street_data(osm_query_address, dist=DIST)
+
     else:
         print(f"\nLoading existing OSM data from: {folder_name}")
         osm_data = get_existing_osm_data(folder_name)
@@ -355,14 +488,27 @@ def main():
     # 11. Get hero/start position
     if MODE == "auto" and USE_FIRST_TRAJECTORY_POSE_AS_START:
         print("\nMode: AUTO.")
-        print("Using first trajectory pose as hero car/start position.")
-        print("No GUI click needed.")
-        print(f"Start x: {first_pose['x']}")
-        print(f"Start y: {first_pose['y']}")
-        print(f"Start z: {first_pose['z']}")
-        print(f"Start yaw: {first_pose['yaw']}")
+        print("Writing placeholder hero_car position.")
+        print("The real CARLA hero position will be written later by:")
+        print("3A_transform_coordinates_yaw_to_carla.py")
 
         output_json = build_vehicle_output_from_first_pose(first_pose, DIST)
+
+        # Preserve existing offset / spawn_positions if vehicle_data.json already exists.
+        if existing_vehicle_data is not None:
+            existing_normalized = normalize_vehicle_data_schema(
+                existing_vehicle_data,
+                DIST,
+            )
+
+            output_json["offset"] = existing_normalized["offset"]
+            output_json["spawn_positions"] = existing_normalized["spawn_positions"]
+
+            # Preserve existing hero_car too if it was already computed.
+            if existing_normalized.get("hero_car") is not None:
+                output_json["hero_car"] = existing_normalized["hero_car"]
+
+            print("Preserved existing offset, hero_car, and spawn_positions where available.")
 
     else:
         print(f"\nMode: {MODE.upper()}. Opening GUI.")
@@ -382,17 +528,24 @@ def main():
         # Retrieve GUI output
         output_json = get_output(DIST)
 
-    # 12. Preserve previous offset values if possible
-    if existing_vehicle_data is not None:
-        if (
-            existing_vehicle_data.get("dist") == DIST
-            and existing_vehicle_data.get("offset") is not None
-            and output_json is not None
-        ):
-            output_json["offset"] = existing_vehicle_data["offset"]
-            print("Copied offset values from existing vehicle data.")
+        # Normalize old GUI output into current vehicle_data.json format.
+        output_json = normalize_vehicle_data_schema(output_json, DIST)
 
-    # 13. Save map and vehicle data
+        # Preserve existing spawn positions if present.
+        if existing_vehicle_data is not None:
+            existing_normalized = normalize_vehicle_data_schema(
+                existing_vehicle_data,
+                DIST,
+            )
+
+            output_json["spawn_positions"] = existing_normalized["spawn_positions"]
+
+            if existing_normalized.get("offset") is not None:
+                output_json["offset"] = existing_normalized["offset"]
+
+            print("Preserved existing offset and spawn_positions where available.")
+
+    # 12. Save map and vehicle data
     if output_json is not None:
         save_map_data(folder_name, osm_data, NO_CARLA)
         save_vehicle_data(folder_name, output_json)
@@ -402,8 +555,9 @@ def main():
 
         if MODE != "manual":
             print(
-                "JSON created with hero car data from first trajectory pose. "
-                "Run create_vehicle_data_from_centroids.py to add clusters."
+                "vehicle_data.json created with placeholder hero_car data. "
+                "Run 3A_transform_coordinates_yaw_to_carla.py to write the real hero_car, "
+                "and run the centroid script to add spawn_positions."
             )
     else:
         print("\nPlot closed without selection. Nothing saved.")

@@ -4,40 +4,24 @@
 """
 3A_transform_coordinates_yaw_to_carla.py
 
-Generates trajectory JSON files using real odom yaw from images_positions.txt.
+Generates CARLA trajectory JSON files using real odom yaw from images_positions.txt.
 
 This version:
-  - Uses hardcoded input paths
+  - Uses hardcoded BAG_NAME, no command-line parameters
   - Reads the new images_positions.txt format:
       FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Z,
       Qx, Qy, Qz, Qw, Odom_Yaw, ImageFile
   - Imports utils from the same folder where this script is located:
       3_generate_simulation_data/utils/
   - Reads the map from:
-      /home/cam2sim/Documents/cam2sim/data/maps/reference_bag
+      data/generated_data_from_extracted_data/<BAG_NAME>/maps
   - Reads trajectory positions from:
-      /home/cam2sim/Documents/cam2sim/data/extracted_ros_data/reference_bag/images_positions.txt
-  - Saves trajectory JSON outputs to:
-      /home/cam2sim/Documents/cam2sim/data/data_for_carla
-  - Updates:
-      /home/cam2sim/Documents/cam2sim/data/maps/reference_bag/vehicle_data.json
+      data/extracted_ros_data/<BAG_NAME>/images_positions.txt
+  - Saves EVERYTHING for CARLA to:
+      data/data_for_carla/<BAG_NAME>
 
-vehicle_data.json format:
-{
-  "offset": {
-    "x": 0.0,
-    "y": 0.0,
-    "heading": 0.0
-  },
-  "dist": 200,
-  "hero_car": {
-    "position": [x, y, z],
-    "heading": yaw
-  },
-  "spawn_positions": [...]
-}
-
-Outputs:
+Outputs in data/data_for_carla/<BAG_NAME>:
+  vehicle_data.json
   trajectory_positions.json
   trajectory_positions_rear.json
   trajectory_positions_odom_yaw.json
@@ -56,16 +40,10 @@ from pyproj import Transformer
 # PATH SETUP
 # ==========================================
 
-# Folder where this script is located:
-# /home/cam2sim/Documents/cam2sim/3_generate_simulation_data
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Project root:
-# /home/cam2sim/Documents/cam2sim
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
-# Local utils folder:
-# /home/cam2sim/Documents/cam2sim/3_generate_simulation_data/utils
 LOCAL_UTILS_DIR = os.path.join(SCRIPT_DIR, "utils")
 
 if not os.path.isdir(LOCAL_UTILS_DIR):
@@ -73,11 +51,6 @@ if not os.path.isdir(LOCAL_UTILS_DIR):
         f"Expected local utils folder not found: {LOCAL_UTILS_DIR}"
     )
 
-# IMPORTANT:
-# Put SCRIPT_DIR first so Python imports:
-#   3_generate_simulation_data/utils/...
-# instead of:
-#   /home/cam2sim/Documents/cam2sim/utils/...
 if SCRIPT_DIR in sys.path:
     sys.path.remove(SCRIPT_DIR)
 
@@ -88,31 +61,44 @@ sys.path.insert(0, SCRIPT_DIR)
 # HARDCODED INPUTS / OUTPUTS
 # ==========================================
 
-MAP_NAME = "reference_bag"
+# Change this to select another bag.
+# No command-line parameters are used.
+BAG_NAME = "reference_bag"
 
 POSITIONS_FILE = os.path.join(
     PROJECT_ROOT,
     "data",
     "extracted_ros_data",
-    MAP_NAME,
+    BAG_NAME,
     "images_positions.txt",
 )
 
+# Read map from generated extracted data.
 MAP_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
+    "generated_data_from_extracted_data",
+    BAG_NAME,
     "maps",
-    MAP_NAME,
 )
 
+# Save EVERYTHING for CARLA here.
 OUTPUT_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
     "data_for_carla",
+    BAG_NAME,
 )
 
-VEHICLE_DATA_PATH = os.path.join(
+# Optional source vehicle_data.json from map-generation step.
+SOURCE_VEHICLE_DATA_PATH = os.path.join(
     MAP_FOLDER,
+    "vehicle_data.json",
+)
+
+# Final vehicle_data.json used by CARLA.
+VEHICLE_DATA_PATH = os.path.join(
+    OUTPUT_FOLDER,
     "vehicle_data.json",
 )
 
@@ -131,21 +117,10 @@ from utils.carla_simulator import get_xodr_projection_params
 
 MAP_DIST = 200
 
-# Distance from vehicle center to rear axle.
-#
-# Keeping your original value/sign.
-# Note: with the formula below:
-#   rear_x = cx - cos(yaw) * REAR_OFFSET
-# a negative REAR_OFFSET moves the point forward.
-#
-# If you want the rear axle behind the center, use:
-#   REAR_OFFSET = 1.393
 REAR_OFFSET = -1.393
 
 LOOKAHEAD = 5
 
-# Use fixed CARLA z.
-# Odom_Z is loaded from the file but not used for CARLA spawn height.
 OUTPUT_Z = 0.0
 
 
@@ -194,7 +169,6 @@ def load_positions_with_yaw(path):
 
             parts = [p.strip() for p in line.split(",")]
 
-            # Need at least up to Odom_Yaw, index 9
             if len(parts) < 10:
                 skipped += 1
                 continue
@@ -263,7 +237,6 @@ def setup_projection(map_folder):
     xodr_offset = xodr_params["offset"]
     proj_string = xodr_params["geo_reference"].strip()
 
-    # Fallback for incomplete XODR projection string
     if proj_string == "+proj=tmerc":
         proj_string = (
             "+proj=tmerc "
@@ -345,12 +318,6 @@ def utm_to_carla(utm_x, utm_y, transformer, xodr_offset):
 def compute_utm_x_angle_in_carla(utm_x, utm_y, transformer, xodr_offset):
     """
     Compute what angle UTM +X, East, becomes in CARLA space.
-
-    This is done numerically by transforming:
-      point A = utm_x, utm_y
-      point B = utm_x + 1.0, utm_y
-
-    Then measuring the resulting angle in CARLA coordinates.
     """
     cx0, cy0 = utm_to_carla(utm_x, utm_y, transformer, xodr_offset)
     cx1, cy1 = utm_to_carla(utm_x + 1.0, utm_y, transformer, xodr_offset)
@@ -360,7 +327,6 @@ def compute_utm_x_angle_in_carla(utm_x, utm_y, transformer, xodr_offset):
 
     angle = math.atan2(dy, dx)
 
-    # Also check UTM +Y for sanity
     cx2, cy2 = utm_to_carla(utm_x, utm_y + 1.0, transformer, xodr_offset)
     angle_y = math.atan2(cy2 - cy0, cx2 - cx0)
 
@@ -370,9 +336,9 @@ def compute_utm_x_angle_in_carla(utm_x, utm_y, transformer, xodr_offset):
     )
 
     print("[INFO] UTM -> CARLA axis mapping:")
-    print(f"   UTM +X, East  -> CARLA angle: {math.degrees(angle):.4f}°")
-    print(f"   UTM +Y, North -> CARLA angle: {math.degrees(angle_y):.4f}°")
-    print(f"   Axes orthogonality check: {actual_diff:.4f}° should be near 0°")
+    print(f"   UTM +X, East  -> CARLA angle: {math.degrees(angle):.4f} degrees")
+    print(f"   UTM +Y, North -> CARLA angle: {math.degrees(angle_y):.4f} degrees")
+    print(f"   Axes orthogonality check: {actual_diff:.4f} degrees, should be near 0")
 
     return angle
 
@@ -383,11 +349,6 @@ def utm_yaw_to_carla_yaw(odom_yaw_rad, utm_x_angle_in_carla):
 
     Formula:
       carla_yaw = A - odom_yaw + pi/2
-
-    where:
-      A = angle of UTM +X direction in CARLA space.
-
-    The +pi/2 is kept from your empirically verified version.
     """
     carla_yaw_rad = utm_x_angle_in_carla - odom_yaw_rad + math.pi / 2
     return math.degrees(carla_yaw_rad) % 360.0
@@ -423,6 +384,28 @@ def make_transform_entry(frame_id, timestamp, x, y, z, yaw):
 # VEHICLE DATA UPDATE
 # ==========================================
 
+def load_base_vehicle_data():
+    """
+    Load vehicle_data.json for preservation.
+
+    Priority:
+      1. Existing final CARLA vehicle_data.json in OUTPUT_FOLDER
+      2. Source vehicle_data.json from MAP_FOLDER
+      3. Empty dict
+
+    This preserves spawn_positions when they already exist.
+    """
+    if os.path.exists(VEHICLE_DATA_PATH):
+        with open(VEHICLE_DATA_PATH, "r") as f:
+            return json.load(f)
+
+    if os.path.exists(SOURCE_VEHICLE_DATA_PATH):
+        with open(SOURCE_VEHICLE_DATA_PATH, "r") as f:
+            return json.load(f)
+
+    return {}
+
+
 def update_vehicle_data_hero_car(
     vehicle_data_path,
     hero_x,
@@ -431,35 +414,15 @@ def update_vehicle_data_hero_car(
     hero_heading,
 ):
     """
-    Update vehicle_data.json using the correct format:
-
-    {
-      "offset": {
-        "x": 0.0,
-        "y": 0.0,
-        "heading": 0.0
-      },
-      "dist": 200,
-      "hero_car": {
-        "position": [x, y, z],
-        "heading": yaw
-      },
-      "spawn_positions": [...]
-    }
+    Write final vehicle_data.json into data/data_for_carla/<BAG_NAME>.
 
     Existing spawn_positions are preserved.
     Old keys "start" and "parking" are removed.
     """
-    if os.path.exists(vehicle_data_path):
-        with open(vehicle_data_path, "r") as f:
-            vehicle_data = json.load(f)
-    else:
-        vehicle_data = {}
+    vehicle_data = load_base_vehicle_data()
 
-    # Preserve existing parked vehicles if present.
     spawn_positions = vehicle_data.get("spawn_positions", [])
 
-    # Preserve offset if present, otherwise use zeros.
     offset = vehicle_data.get(
         "offset",
         {
@@ -476,11 +439,9 @@ def update_vehicle_data_hero_car(
             "heading": 0.0,
         }
 
-    # Remove old format keys.
     vehicle_data.pop("start", None)
     vehicle_data.pop("parking", None)
 
-    # Write correct structure.
     vehicle_data["offset"] = offset
     vehicle_data["dist"] = MAP_DIST
     vehicle_data["hero_car"] = {
@@ -493,10 +454,12 @@ def update_vehicle_data_hero_car(
     }
     vehicle_data["spawn_positions"] = spawn_positions
 
+    os.makedirs(os.path.dirname(vehicle_data_path), exist_ok=True)
+
     with open(vehicle_data_path, "w") as f:
         json.dump(vehicle_data, f, indent=2)
 
-    print("\n✅ Updated vehicle_data.json hero_car")
+    print("\nUpdated final CARLA vehicle_data.json")
     print(f"   File:    {vehicle_data_path}")
     print(f"   x:       {hero_x:.3f}")
     print(f"   y:       {hero_y:.3f}")
@@ -513,16 +476,17 @@ def main():
     print("=" * 80)
     print("GENERATE TRAJECTORY WITH ODOM YAW")
     print("=" * 80)
-    print(f"[INFO] Script folder:      {SCRIPT_DIR}")
-    print(f"[INFO] Local utils:        {LOCAL_UTILS_DIR}")
-    print(f"[INFO] Project root:       {PROJECT_ROOT}")
-    print(f"[INFO] Map name:           {MAP_NAME}")
-    print(f"[INFO] Map folder:         {MAP_FOLDER}")
-    print(f"[INFO] Positions file:     {POSITIONS_FILE}")
-    print(f"[INFO] Output folder:      {OUTPUT_FOLDER}")
-    print(f"[INFO] Vehicle data path:  {VEHICLE_DATA_PATH}")
-    print(f"[INFO] Output z:           {OUTPUT_Z}")
-    print(f"[INFO] Rear offset:        {REAR_OFFSET}")
+    print(f"[INFO] Script folder:              {SCRIPT_DIR}")
+    print(f"[INFO] Local utils:                {LOCAL_UTILS_DIR}")
+    print(f"[INFO] Project root:               {PROJECT_ROOT}")
+    print(f"[INFO] Bag name:                   {BAG_NAME}")
+    print(f"[INFO] Map folder:                 {MAP_FOLDER}")
+    print(f"[INFO] Positions file:             {POSITIONS_FILE}")
+    print(f"[INFO] Final CARLA output folder:  {OUTPUT_FOLDER}")
+    print(f"[INFO] Source vehicle data path:   {SOURCE_VEHICLE_DATA_PATH}")
+    print(f"[INFO] Final vehicle data path:    {VEHICLE_DATA_PATH}")
+    print(f"[INFO] Output z:                   {OUTPUT_Z}")
+    print(f"[INFO] Rear offset:                {REAR_OFFSET}")
     print("=" * 80)
 
     if not os.path.exists(MAP_FOLDER):
@@ -530,7 +494,6 @@ def main():
 
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-    # 1. Load trajectory data
     frames, times, ox, oy, oz, odom_yaws, images = load_positions_with_yaw(
         POSITIONS_FILE
     )
@@ -543,18 +506,16 @@ def main():
     print(f"   First odom z:    {oz[0]:.4f}")
     print(
         f"   First odom yaw:  {odom_yaws[0]:.4f} rad "
-        f"= {math.degrees(odom_yaws[0]):.2f}°"
+        f"= {math.degrees(odom_yaws[0]):.2f} degrees"
     )
 
     if images[0]:
         print(f"   First image:     {images[0]}")
 
-    # 2. Setup projection from XODR
     print("\n[INFO] Loading XODR projection...")
     transformer, xodr_offset = setup_projection(MAP_FOLDER)
     print(f"   XODR offset: {xodr_offset}")
 
-    # 3. Compute UTM to CARLA axis rotation
     print("\n[INFO] Computing UTM -> CARLA axis rotation at start...")
     utm_x_angle = compute_utm_x_angle_in_carla(
         ox[0],
@@ -563,7 +524,6 @@ def main():
         xodr_offset,
     )
 
-    # Verify consistency at middle point
     mid = len(frames) // 2
 
     print("\n[INFO] Computing UTM -> CARLA axis rotation at middle...")
@@ -579,19 +539,18 @@ def main():
     )
 
     print("\n[INFO] Axis rotation consistency:")
-    print(f"   Rotation at start: {math.degrees(utm_x_angle):.4f}°")
-    print(f"   Rotation at mid:   {math.degrees(utm_x_angle_mid):.4f}°")
-    print(f"   Difference:        {angle_diff:.4f}°")
+    print(f"   Rotation at start: {math.degrees(utm_x_angle):.4f} degrees")
+    print(f"   Rotation at mid:   {math.degrees(utm_x_angle_mid):.4f} degrees")
+    print(f"   Difference:        {angle_diff:.4f} degrees")
 
     if abs(angle_diff) < 0.1:
-        print("   ✅ Consistent — using single rotation for all frames.")
+        print("   OK: Consistent, using single rotation for all frames.")
     else:
         print(
-            f"   ⚠️ Varies by {angle_diff:.2f}°. "
+            f"   WARNING: Varies by {angle_diff:.2f} degrees. "
             "For very long trajectories, consider per-frame yaw conversion."
         )
 
-    # 4. Convert all positions to CARLA coordinates
     print("\n[INFO] Converting trajectory positions to CARLA coordinates...")
 
     carla_positions = []
@@ -607,7 +566,6 @@ def main():
 
     print("   Done.")
 
-    # 5. Compute odom yaw converted to CARLA yaw
     print("\n[INFO] Converting odom yaw to CARLA yaw...")
 
     odom_carla_yaws = [
@@ -615,7 +573,6 @@ def main():
         for yaw in odom_yaws
     ]
 
-    # 6. Compute kinematic yaw from trajectory movement
     print("[INFO] Computing kinematic yaw from trajectory movement...")
 
     last_valid_kinematic_yaw = 0.0
@@ -641,7 +598,6 @@ def main():
 
         kinematic_yaws.append(last_valid_kinematic_yaw)
 
-    # 7. Build output trajectories
     print("\n[INFO] Building output JSON files...")
 
     all_trajectories = {
@@ -694,8 +650,7 @@ def main():
             all_trajectories[center_key].append(center_entry)
             all_trajectories[rear_key].append(rear_entry)
 
-    # 8. Save trajectory outputs
-    print("\n[INFO] Saving output trajectory files...")
+    print("\n[INFO] Saving final CARLA trajectory files...")
 
     for filename, data in all_trajectories.items():
         output_path = os.path.join(OUTPUT_FOLDER, filename)
@@ -703,9 +658,8 @@ def main():
         with open(output_path, "w") as f:
             json.dump(data, f, indent=2)
 
-        print(f"   ✅ {output_path} ({len(data)} frames)")
+        print(f"   Saved {output_path} ({len(data)} frames)")
 
-    # 9. First/last position verification
     first_center = all_trajectories["trajectory_positions_odom_yaw.json"][0]
     last_center = all_trajectories["trajectory_positions_odom_yaw.json"][-1]
 
@@ -715,7 +669,6 @@ def main():
     last_location = last_center["transform"]["location"]
     last_rotation = last_center["transform"]["rotation"]
 
-    # 10. Update vehicle_data.json hero_car with first computed CARLA position
     update_vehicle_data_hero_car(
         vehicle_data_path=VEHICLE_DATA_PATH,
         hero_x=first_location["x"],
@@ -724,8 +677,7 @@ def main():
         hero_heading=first_rotation["yaw"],
     )
 
-    # 11. Print comparison
-    print("\n📊 Yaw comparison, first 15 frames:")
+    print("\nYaw comparison, first 15 frames:")
     print(f"   {'Frame':>5}  {'Kinematic':>10}  {'Odom':>10}  {'Diff':>8}")
 
     for i in range(min(15, len(frames))):
@@ -743,15 +695,15 @@ def main():
         for odom_yaw, kin_yaw in zip(odom_carla_yaws, kinematic_yaws)
     ])
 
-    print("\n📊 Overall yaw statistics:")
-    print(f"   Mean diff:   {np.mean(diffs):+.2f}°")
-    print(f"   Std:         {np.std(diffs):.2f}°")
-    print(f"   Max |diff|:  {np.max(np.abs(diffs)):.2f}°")
+    print("\nOverall yaw statistics:")
+    print(f"   Mean diff:   {np.mean(diffs):+.2f} degrees")
+    print(f"   Std:         {np.std(diffs):.2f} degrees")
+    print(f"   Max |diff|:  {np.max(np.abs(diffs)):.2f} degrees")
 
-    print("\n🔍 First frame verification:")
-    print(f"   Input odom yaw:    {math.degrees(odom_yaws[0]):.2f}°")
-    print(f"   CARLA odom yaw:    {first_rotation['yaw']:.2f}°")
-    print(f"   Kinematic yaw:     {kinematic_yaws[0]:.2f}")
+    print("\nFirst frame verification:")
+    print(f"   Input odom yaw:    {math.degrees(odom_yaws[0]):.2f} degrees")
+    print(f"   CARLA odom yaw:    {first_rotation['yaw']:.2f} degrees")
+    print(f"   Kinematic yaw:     {kinematic_yaws[0]:.2f} degrees")
     print(
         f"   CARLA position:    "
         f"({first_location['x']:.2f}, "
@@ -759,8 +711,8 @@ def main():
         f"{first_location['z']:.2f})"
     )
 
-    print("\n🔍 Last frame verification:")
-    print(f"   CARLA odom yaw:    {last_rotation['yaw']:.2f}°")
+    print("\nLast frame verification:")
+    print(f"   CARLA odom yaw:    {last_rotation['yaw']:.2f} degrees")
     print(
         f"   CARLA position:    "
         f"({last_location['x']:.2f}, "
@@ -768,9 +720,9 @@ def main():
         f"{last_location['z']:.2f})"
     )
 
-    print("\n✅ Done.")
-    print(f"   Trajectory outputs saved in: {OUTPUT_FOLDER}")
-    print(f"   vehicle_data.json updated:   {VEHICLE_DATA_PATH}")
+    print("\nDone.")
+    print(f"   Final CARLA data saved in: {OUTPUT_FOLDER}")
+    print(f"   Final vehicle_data.json:   {VEHICLE_DATA_PATH}")
 
 
 if __name__ == "__main__":
