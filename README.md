@@ -1130,3 +1130,518 @@ If you only need LiDAR-based detections, you can skip `2A_camera_parked_cars_det
 
 </details>
 
+<details>
+<summary><code>3_generate_simulation_data</code></summary>
+
+# 3_generate_simulation_data
+
+This folder contains the third step of the data-processing pipeline.
+
+The scripts convert the processed dataset from step 2 into CARLA-ready simulation inputs. They transform the recorded trajectory and detected parked vehicles into CARLA coordinates, prepare `vehicle_data.json`, start CARLA if needed, visualize the generated positions, and set up a CARLA scene with the hero vehicle and parked cars.
+
+Each script is intended to be run from the project root:
+
+```bash
+python 3_generate_simulation_data/<script_name>.py
+```
+
+For example:
+
+```bash
+python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
+```
+
+---
+
+## Purpose
+
+The goal of this step is to prepare all data needed to recreate the recorded scene inside CARLA.
+
+The scripts can produce or use:
+
+- CARLA-coordinate hero trajectory files
+- Rear-axle trajectory files for accurate hero spawning
+- CARLA-ready `vehicle_data.json`
+- Parked-vehicle spawn positions from detected clusters
+- OpenDRIVE map loading inside CARLA
+- Visual checks for parked cars and trajectory alignment
+- A prepared CARLA world containing the hero vehicle and parked cars
+
+---
+
+## Expected project structure
+
+```text
+project_root/
+├── 3_generate_simulation_data/
+│   ├── 3A_transform_coordinates_to_carla.py
+│   ├── 3B_transform_parked_vehicles_to_carla.py
+│   ├── 3C_setup_carla.py
+│   ├── 3D_visualize_parked_spawn_positions.py
+│   ├── 3E_visualize_trajectory.py
+│   ├── 3F_generate_carla_scenario.py
+│   └── utils/
+│       ├── carla_simulator.py
+│       ├── config.py
+│       ├── coordinates.py
+│       ├── map_data.py
+│       └── other helper files
+│
+├── data/
+│   ├── raw_dataset/
+│   │   └── <bag_name>/
+│   │       └── images_positions.txt
+│   │
+│   ├── processed_dataset/
+│   │   └── <bag_name>/
+│   │       ├── lidar_detections/
+│   │       │   └── unified_clusters.txt
+│   │       └── maps/
+│   │           ├── map.osm
+│   │           ├── map.xodr
+│   │           └── vehicle_data.json
+│   │
+│   └── data_for_carla/
+│       └── <bag_name>/
+│           ├── vehicle_data.json
+│           ├── trajectory_positions.json
+│           ├── trajectory_positions_rear.json
+│           ├── trajectory_positions_odom_yaw.json
+│           └── trajectory_positions_rear_odom_yaw.json
+```
+
+Scripts read input from:
+
+```text
+data/raw_dataset/<bag_name>/
+data/processed_dataset/<bag_name>/
+```
+
+and write CARLA-ready output to:
+
+```text
+data/data_for_carla/<bag_name>/
+```
+
+---
+
+## Requirements
+
+Use the existing Conda environment named `data_extraction`.
+
+Activate it before running any script in this folder:
+
+```bash
+conda activate data_extraction
+```
+
+The scripts use packages for coordinate conversion, map processing, JSON generation, CARLA control, and visualization.
+
+CARLA-related scripts also require:
+
+- A working CARLA installation
+- The Python `carla` package available in the active environment
+- A valid CARLA installation path set in `3_generate_simulation_data/utils/config.py`
+- A generated `map.xodr` file inside `data/processed_dataset/<bag_name>/maps/`
+
+---
+
+## The `utils/` subfolder
+
+The `utils/` folder contains shared helper code and configuration used by the simulation-generation scripts.
+
+Typical contents include:
+
+```text
+3_generate_simulation_data/utils/
+├── carla_simulator.py
+├── config.py
+├── coordinates.py
+├── map_data.py
+└── other helper files
+```
+
+The files are used as follows:
+
+| File | Purpose |
+|---|---|
+| `config.py` | CARLA connection settings, CARLA installation path, spawn offsets, hero vehicle type, and other shared constants |
+| `carla_simulator.py` | CARLA helper functions for loading OpenDRIVE maps, setting synchronous mode, filtering vehicle blueprints, and reading XODR projection information |
+| `coordinates.py` | Coordinate conversion utilities, including odometry / UTM to WGS84 conversion |
+| `map_data.py` | Map and road-edge helper functions used to generate parked-car spawn positions |
+| Other helper files | Additional shared utilities used by the scripts |
+
+Do not move or rename files in `utils/` unless the corresponding import paths in the scripts are also updated.
+
+Important values to check in `utils/config.py` include:
+
+```python
+CARLA_INSTALLATION_PATH = "..."
+CARLA_IP = "127.0.0.1"
+CARLA_PORT = 2000
+HERO_VEHICLE_TYPE = "vehicle.tesla.model3"
+```
+
+Some scripts also use spawn-offset and heading constants from `utils/config.py`, for example:
+
+```python
+SPAWN_OFFSET_METERS
+SPAWN_OFFSET_METERS_LEFT
+SPAWN_OFFSET_METERS_RIGHT
+CARLA_OFFSET_X
+CARLA_OFFSET_Y
+ROTATION_DEGREES
+```
+
+---
+
+## Configuration
+
+Each script has a configuration section near the top.
+
+The most important value is the bag name:
+
+```python
+BAG_NAME = "reference_bag"
+```
+
+This must match the dataset folder created by the previous steps.
+
+For example:
+
+```text
+data/raw_dataset/reference_bag/
+data/processed_dataset/reference_bag/
+```
+
+The CARLA output will be written to:
+
+```text
+data/data_for_carla/reference_bag/
+```
+
+Before running the scripts, check that:
+
+1. `data/raw_dataset/<BAG_NAME>/images_positions.txt` exists.
+2. `data/processed_dataset/<BAG_NAME>/maps/map.osm` exists.
+3. `data/processed_dataset/<BAG_NAME>/maps/map.xodr` exists.
+4. `data/processed_dataset/<BAG_NAME>/maps/vehicle_data.json` exists.
+5. If parked cars are needed, `data/processed_dataset/<BAG_NAME>/lidar_detections/unified_clusters.txt` exists.
+6. `3_generate_simulation_data/utils/config.py` contains the correct CARLA paths and connection settings.
+7. You are running the command from the project root.
+
+---
+
+## Scripts
+
+### 3A_transform_coordinates_to_carla.py
+
+Converts the recorded trajectory from odometry coordinates into CARLA coordinates.
+
+This script reads `images_positions.txt`, uses the generated map projection from the OpenDRIVE map, converts the trajectory to CARLA coordinates, and writes multiple trajectory JSON files for later simulation.
+
+Default input:
+
+```text
+data/raw_dataset/<bag_name>/images_positions.txt
+data/processed_dataset/<bag_name>/maps/
+data/processed_dataset/<bag_name>/maps/vehicle_data.json
+```
+
+Outputs:
+
+```text
+data/data_for_carla/<bag_name>/
+├── vehicle_data.json
+├── trajectory_positions.json
+├── trajectory_positions_rear.json
+├── trajectory_positions_odom_yaw.json
+└── trajectory_positions_rear_odom_yaw.json
+```
+
+The output trajectory files contain CARLA transform entries with location and rotation data.
+
+The four trajectory files are:
+
+| File | Meaning |
+|---|---|
+| `trajectory_positions.json` | Center trajectory using kinematic yaw |
+| `trajectory_positions_rear.json` | Rear-offset trajectory using kinematic yaw |
+| `trajectory_positions_odom_yaw.json` | Center trajectory using odometry yaw from `images_positions.txt` |
+| `trajectory_positions_rear_odom_yaw.json` | Rear-offset trajectory using odometry yaw |
+
+The script also updates:
+
+```text
+data/data_for_carla/<bag_name>/vehicle_data.json
+```
+
+with the initial `hero_car` position and heading.
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
+```
+
+---
+
+### 3B_transform_parked_vehicles_to_carla.py
+
+Converts parked-vehicle centroids from the processed LiDAR detections into CARLA spawn positions.
+
+This script reads detected parked-car clusters, projects them into the CARLA/OpenDRIVE coordinate system, snaps them to generated parking lines, assigns heading based on side and orientation, and writes the result into the final CARLA `vehicle_data.json`.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/maps/
+data/processed_dataset/<bag_name>/maps/map.xodr
+data/processed_dataset/<bag_name>/lidar_detections/unified_clusters.txt
+```
+
+Output:
+
+```text
+data/data_for_carla/<bag_name>/vehicle_data.json
+```
+
+The script preserves the existing `hero_car` entry if it was already written by `3A_transform_coordinates_to_carla.py`.
+
+It overwrites or updates the `spawn_positions` field in `vehicle_data.json`.
+
+The final `vehicle_data.json` has the following structure:
+
+```text
+{
+  "offset": {
+    "x": 0.0,
+    "y": 0.0,
+    "heading": 0.0
+  },
+  "dist": 200,
+  "hero_car": {
+    "position": [x, y, z],
+    "heading": yaw
+  },
+  "spawn_positions": [...]
+}
+```
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py
+```
+
+---
+
+### 3C_setup_carla.py
+
+Starts CARLA from the installation path configured in `utils/config.py`.
+
+The script reads:
+
+```python
+CARLA_INSTALLATION_PATH
+```
+
+from:
+
+```text
+3_generate_simulation_data/utils/config.py
+```
+
+and runs:
+
+```text
+<Carla installation path>/CarlaUE4.sh
+```
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3C_setup_carla.py
+```
+
+If CARLA is already running, this script is not needed.
+
+If the CARLA path is missing or invalid, the script raises an error and prints the path that failed.
+
+---
+
+### 3D_visualize_parked_spawn_positions.py
+
+Visualizes the generated parked-car spawn positions inside CARLA.
+
+This script loads the OpenDRIVE map into CARLA, reads `spawn_positions` from `vehicle_data.json`, spawns static parked vehicles at those locations, and moves the spectator above the first parked car.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/maps/map.xodr
+data/data_for_carla/<bag_name>/vehicle_data.json
+```
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3D_visualize_parked_spawn_positions.py
+```
+
+This script keeps running so the scene remains visible.
+
+To exit:
+
+```text
+Ctrl+C
+```
+
+When interrupted, the script destroys the parked vehicles it spawned.
+
+Use this script to check that parked-car positions and headings look correct before generating the final CARLA scenario.
+
+---
+
+### 3E_visualize_trajectory.py
+
+Visualizes the converted hero trajectory inside CARLA.
+
+This script loads the OpenDRIVE map, reads the converted trajectory, and spawns static “ghost” hero vehicles along the path. The cars are frozen in place so the trajectory alignment can be inspected visually.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/maps/map.xodr
+data/data_for_carla/<bag_name>/trajectory_positions_odom_yaw.json
+data/data_for_carla/<bag_name>/vehicle_data.json
+```
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3E_visualize_trajectory.py
+```
+
+Useful configuration values near the top of the script include:
+
+```python
+SPAWN_STEP = 5
+SPAWN_Z_OFFSET = 0.1
+MANUAL_OFFSET_X = 0.0
+MANUAL_OFFSET_Y = 0.0
+MANUAL_Z_OFFSET = 0.0
+MANUAL_YAW_OFFSET = 0.0
+```
+
+This script keeps running so the trajectory remains visible.
+
+To exit:
+
+```text
+Ctrl+C
+```
+
+When interrupted, the script destroys the ghost vehicles it spawned.
+
+---
+
+### 3F_generate_carla_scenario.py
+
+Prepares the CARLA world with the OpenDRIVE map, parked vehicles, and the hero vehicle.
+
+This script is used after the CARLA-ready trajectory and parked-car spawn positions have been generated. It loads the map, spawns parked vehicles, spawns the hero car at the first rear-trajectory pose, freezes all spawned actors, disables synchronous mode, and exits while leaving the actors alive in CARLA.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/maps/map.xodr
+data/data_for_carla/<bag_name>/vehicle_data.json
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+```
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3F_generate_carla_scenario.py
+```
+
+The script chooses the hero start in this order:
+
+1. `trajectory_positions_rear_odom_yaw.json`
+2. `trajectory_positions_rear.json`
+3. `hero_car` from `vehicle_data.json`
+
+By default, this script leaves the actors alive in CARLA and exits. This allows a later replay or execution script to take over the simulation without this setup script continuing to tick the world.
+
+Important configuration values near the top of the script include:
+
+```python
+DESTROY_EXISTING_VEHICLES = True
+DESTROY_ACTORS_ON_EXIT = False
+LEAVE_WORLD_READY_AND_EXIT = True
+USE_SYNCHRONOUS_MODE_DURING_PREP = True
+MAX_PARKED_CARS = None
+```
+
+---
+
+## Suggested execution order
+
+A typical workflow is:
+
+```bash
+# Convert trajectory to CARLA coordinates
+python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
+
+# Convert detected parked vehicles to CARLA spawn positions
+python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py
+
+# Start CARLA if it is not already running
+python 3_generate_simulation_data/3C_setup_carla.py
+
+# Optional visual checks
+python 3_generate_simulation_data/3D_visualize_parked_spawn_positions.py
+python 3_generate_simulation_data/3E_visualize_trajectory.py
+
+# Prepare final CARLA scenario
+python 3_generate_simulation_data/3F_generate_carla_scenario.py
+```
+
+If CARLA is already running, skip `3C_setup_carla.py`.
+
+If you only want to generate CARLA JSON files and do not need to inspect or spawn the scene yet, run only:
+
+```bash
+python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
+python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py
+```
+
+---
+
+## Output files summary
+
+| Script | Main output |
+|---|---|
+| `3A_transform_coordinates_to_carla.py` | `data/data_for_carla/<bag_name>/trajectory_positions*.json`, `vehicle_data.json` with `hero_car` |
+| `3B_transform_parked_vehicles_to_carla.py` | `data/data_for_carla/<bag_name>/vehicle_data.json` with `spawn_positions` |
+| `3C_setup_carla.py` | Starts CARLA from `CARLA_INSTALLATION_PATH` |
+| `3D_visualize_parked_spawn_positions.py` | Temporary parked vehicles spawned in CARLA for visual inspection |
+| `3E_visualize_trajectory.py` | Temporary ghost hero vehicles spawned in CARLA for visual inspection |
+| `3F_generate_carla_scenario.py` | CARLA world prepared with map, hero vehicle, and parked vehicles |
+
+---
+
+## Notes
+
+- The scripts use a hardcoded `BAG_NAME`; change it near the top of each script before running a different dataset.
+- Run the scripts from the project root so relative paths resolve correctly.
+- `3A_transform_coordinates_to_carla.py` should usually be run before `3B_transform_parked_vehicles_to_carla.py`, because it writes the `hero_car` entry that `3B` preserves.
+- `3B_transform_parked_vehicles_to_carla.py` requires `map.xodr`; this file is expected to exist in `data/processed_dataset/<bag_name>/maps/`.
+- `3D_visualize_parked_spawn_positions.py`, `3E_visualize_trajectory.py`, and `3F_generate_carla_scenario.py` require a running CARLA server.
+- The visualization scripts spawn temporary actors and clean them up when interrupted.
+- `3F_generate_carla_scenario.py` is designed to leave the prepared actors alive in CARLA and then exit.
+- If positions look slightly shifted in CARLA, check the offset constants in `utils/config.py` and the manual offset constants near the top of the visualization scripts.
+
+</details>
+
