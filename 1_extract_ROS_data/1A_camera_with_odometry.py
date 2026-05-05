@@ -6,7 +6,7 @@ from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # --------------------- USER SETTINGS ---------------------
-bag_path = Path('/media/davidejannussi/New Volume/02-03-2026 cloudy/2026-02-16-23-07-19.bag')
+bag_path = Path('/media/cam2sim/New Volume/02-03-2026 cloudy/2026-02-16-23-07-19.bag')
 odom_topic = "/odom"
 cam_topic  = "/gmsl_camera/front_narrow/image_raw" 
 
@@ -70,8 +70,11 @@ with AnyReader([bag_path]) as reader:
                 m = reader.deserialize(raw, connection.msgtype)
                 p = m.pose.pose.position
                 q = m.pose.pose.orientation
-                yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
-                odoms.append((ts * 1e-9, float(p.x), float(p.y), yaw))
+                odoms.append((
+                    ts * 1e-9,
+                    float(p.x), float(p.y), float(p.z),
+                    float(q.x), float(q.y), float(q.z), float(q.w),
+                ))
 
     # --- IMAGES ---
     if cam_topic in conns:
@@ -112,10 +115,14 @@ if not odoms:
     raise RuntimeError("No odometry messages found.")
 
 odom_arr = np.array(odoms)
-odom_t_all = odom_arr[:, 0]
-odom_x_all = odom_arr[:, 1]
-odom_y_all = odom_arr[:, 2]
-odom_yaw_all = odom_arr[:, 3]
+odom_t_all  = odom_arr[:, 0]
+odom_tx_all = odom_arr[:, 1]
+odom_ty_all = odom_arr[:, 2]
+odom_tz_all = odom_arr[:, 3]
+odom_qx_all = odom_arr[:, 4]
+odom_qy_all = odom_arr[:, 5]
+odom_qz_all = odom_arr[:, 6]
+odom_qw_all = odom_arr[:, 7]
 
 # =========================================================================
 # 2. Export Camera Sync
@@ -124,20 +131,45 @@ print(f"\nProcessing Sync for {len(cam_data)} camera frames...")
 
 if len(cam_data) > 0:
     cam_timestamps = np.array([c['ts'] for c in cam_data])
-    cam_sync_x = np.interp(cam_timestamps, odom_t_all, odom_x_all)
-    cam_sync_y = np.interp(cam_timestamps, odom_t_all, odom_y_all)
-    cam_sync_yaw = np.interp(cam_timestamps, odom_t_all, np.unwrap(odom_yaw_all))
+
+    # Interpola posizione (x, y, z)
+    cam_tx = np.interp(cam_timestamps, odom_t_all, odom_tx_all)
+    cam_ty = np.interp(cam_timestamps, odom_t_all, odom_ty_all)
+    cam_tz = np.interp(cam_timestamps, odom_t_all, odom_tz_all)
+
+    # Interpola quaternione componente-per-componente, poi rinormalizza
+    # (lineare + rinormalizzazione e' una buona approssimazione di slerp
+    # quando le pose adiacenti sono vicine, come nel nostro caso ~100Hz)
+    cam_qx = np.interp(cam_timestamps, odom_t_all, odom_qx_all)
+    cam_qy = np.interp(cam_timestamps, odom_t_all, odom_qy_all)
+    cam_qz = np.interp(cam_timestamps, odom_t_all, odom_qz_all)
+    cam_qw = np.interp(cam_timestamps, odom_t_all, odom_qw_all)
+
+    q_norm = np.sqrt(cam_qx**2 + cam_qy**2 + cam_qz**2 + cam_qw**2)
+    cam_qx /= q_norm
+    cam_qy /= q_norm
+    cam_qz /= q_norm
+    cam_qw /= q_norm
+
+    # Yaw derivato dal quaternione interpolato (consistente con qx,qy,qz,qw)
+    cam_yaw = np.array([
+        quat_to_yaw(qx, qy, qz, qw)
+        for qx, qy, qz, qw in zip(cam_qx, cam_qy, cam_qz, cam_qw)
+    ])
 
     print(f"Exporting synchronized camera data to: {camera_sync_path}")
 
     try:
         with open(camera_sync_path, 'w') as f:
-            f.write("# FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Yaw, ImageFile\n")
+            f.write("# FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Z, "
+                    "Qx, Qy, Qz, Qw, Odom_Yaw, ImageFile\n")
 
             for i, c in enumerate(cam_data):
                 f.write(
                     f"{c['id']}, {c['ts']:.6f}, "
-                    f"{cam_sync_x[i]:.4f}, {cam_sync_y[i]:.4f}, {cam_sync_yaw[i]:.4f}, "
+                    f"{cam_tx[i]:.4f}, {cam_ty[i]:.4f}, {cam_tz[i]:.4f}, "
+                    f"{cam_qx[i]:.6f}, {cam_qy[i]:.6f}, {cam_qz[i]:.6f}, {cam_qw[i]:.6f}, "
+                    f"{cam_yaw[i]:.4f}, "
                     f"{c['filename']}\n"
                 )
 

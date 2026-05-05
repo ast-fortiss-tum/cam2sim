@@ -5,7 +5,7 @@ from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # ---------------- CONFIG ----------------
-bag_path = Path('/media/davidejannussi/New Volume/02-03-2026 cloudy/2026-02-16-23-07-19.bag')
+bag_path = Path('/media/cam2sim/New Volume/02-03-2026 cloudy/2026-02-16-23-07-19.bag')
 odom_topic = '/odom'
 
 dataset_dir = Path.cwd() / "datasets" / bag_path.stem
