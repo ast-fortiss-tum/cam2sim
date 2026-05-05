@@ -28,12 +28,16 @@ pip install tensorflow==2.13.1
 pip install pillow
 pip install opencv-python
 
+<details>
+<summary><code>1_extract_ROS_data</code></summary>
+
 # 1_extract_ROS_data
 
-This folder contains the first step of the data-processing pipeline.  
-The scripts read data from a ROS bag file and export selected sensor, odometry, steering, and model-output data into a structured dataset folder.
+This folder contains the first step of the data-processing pipeline.
 
-Each script is intended to be run from the project root as:
+The scripts read data from a ROS bag file and export selected camera, LiDAR, odometry, steering, and model-output data into a structured dataset folder.
+
+Each script is intended to be run from the project root:
 
 ```bash
 python 1_extract_ROS_data/<script_name>.py
@@ -49,7 +53,7 @@ python 1_extract_ROS_data/1A_camera_with_odometry.py
 
 ## Purpose
 
-The goal of this step is to convert raw ROS bag messages into files that are easier to use in the following stages of the pipeline.
+The goal of this step is to convert raw ROS bag messages into files that are easier to use in later stages of the pipeline.
 
 The scripts can extract:
 
@@ -88,19 +92,33 @@ project_root/
 │           ├── point_clouds/
 │           ├── images_positions.txt
 │           ├── lidar_positions.txt
-│           ├── odometry.txt
-│           ├── trajectory.txt
+│           ├── odometry.csv
+│           ├── trajectory.csv
 │           ├── steering_pct.txt
 │           └── steering_predictions.txt
 ```
 
-Scripts write their output to:
+All scripts write their output to:
 
 ```text
 data/raw_dataset/<bag_name>/
 ```
 
 where `<bag_name>` is automatically taken from the ROS bag filename.
+
+For example, if the bag file is:
+
+```text
+data/raw_ros_data/reference_bag.bag
+```
+
+then the output folder will be:
+
+```text
+data/raw_dataset/reference_bag/
+```
+
+---
 
 ## Requirements
 
@@ -112,6 +130,10 @@ Activate it before running any extraction script:
 conda activate data_extraction
 ```
 
+The scripts use `rosbags`, `numpy`, and, for camera extraction, `opencv-python`.
+
+---
+
 ## Configuration
 
 Each script has a configuration section near the top.
@@ -119,7 +141,7 @@ Each script has a configuration section near the top.
 Typical configuration values include:
 
 ```python
-bag_path = Path('data/raw_ros_data/reference_bag.bag')
+bag_path = Path("data/raw_ros_data/reference_bag.bag")
 ```
 
 and one or more ROS topic names, for example:
@@ -131,10 +153,10 @@ odom_topic = "/odom"
 topic = "/vehicle/steering_pct"
 ```
 
-Before running the scripts, check that:
+Before running a script, check that:
 
 1. The ROS bag exists at the configured `bag_path`.
-2. The topic names match the topics in your bag.
+2. The topic names match the topics in your ROS bag.
 3. You are running the command from the project root.
 
 To inspect the available topics in a bag, run:
@@ -145,16 +167,15 @@ python 1_extract_ROS_data/1UTIL_print_bag_info.py
 
 ---
 
-
 ## Scripts
 
 ### 1UTIL_print_bag_info.py
 
 Utility script for inspecting a ROS bag.
 
-It prints:
+It prints information such as:
 
-- All available ROS topics
+- Available ROS topics
 - Message type for each topic
 - Number of messages per topic
 - Start and end timestamps of the bag
@@ -165,7 +186,7 @@ Run:
 python 1_extract_ROS_data/1UTIL_print_bag_info.py
 ```
 
-Use this script before extraction to confirm the correct topic names for camera, LiDAR, odometry, and steering messages.
+Use this script before extraction to confirm the correct topic names for camera, LiDAR, odometry, steering status, and steering target messages.
 
 ---
 
@@ -193,7 +214,7 @@ Run:
 python 1_extract_ROS_data/1A_camera_without_odometry.py
 ```
 
-This script only extracts images. It does not associate the camera frames with odometry.
+This script only extracts images. It does not associate camera frames with odometry.
 
 Supported image encodings include:
 
@@ -201,6 +222,8 @@ Supported image encodings include:
 - `rgb8`
 - `bgr8`
 - Bayer encodings
+
+Unsupported image encodings raise an error for the affected frame.
 
 ---
 
@@ -233,7 +256,7 @@ frame_000001.png
 The synchronized metadata file contains:
 
 ```text
-FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Z, Qx, Qy, Qz, Qw, Odom_Yaw, ImageFile
+# FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Z, Qx, Qy, Qz, Qw, Odom_Yaw, ImageFile
 ```
 
 Run:
@@ -244,10 +267,9 @@ python 1_extract_ROS_data/1A_camera_with_odometry.py
 
 This script interpolates odometry values at each camera timestamp.
 
-Position values are linearly interpolated. Quaternion components are also interpolated and then normalized before yaw is computed.
+Position values are linearly interpolated. Quaternion components are also interpolated component-by-component, normalized, and then used to compute yaw.
 
 ---
-
 
 ### 1B_lidar_without_odometry.py
 
@@ -259,7 +281,6 @@ Default LiDAR topic:
 /velodyne_points
 ```
 
-
 Output:
 
 ```text
@@ -268,7 +289,7 @@ data/raw_dataset/<bag_name>/point_clouds/point_cloud_000001.bin
 ...
 ```
 
-Each `.bin` file stores points in the following format:
+Each `.bin` file stores points as float32 values in the following order:
 
 ```text
 x, y, z, intensity
@@ -280,7 +301,9 @@ Run:
 python 1_extract_ROS_data/1B_lidar_without_odometry.py
 ```
 
-This script only extracts point clouds. It does not associate the LiDAR scans with odometry.
+This script only extracts point clouds. It does not associate LiDAR scans with odometry.
+
+If the point cloud message does not contain an `intensity` field, intensity is written as `0.0`.
 
 ---
 
@@ -310,10 +333,16 @@ point_cloud_000001.bin
 ...
 ```
 
+Each `.bin` file stores points as float32 values in the following order:
+
+```text
+x, y, z, intensity
+```
+
 The synchronized metadata file contains:
 
 ```text
-FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Yaw, PointCloudFile
+# FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Yaw, PointCloudFile
 ```
 
 Run:
@@ -323,12 +352,6 @@ python 1_extract_ROS_data/1B_lidar_with_odometry.py
 ```
 
 This script interpolates odometry position and yaw at each LiDAR timestamp.
-
-Each point cloud is saved as a `.bin` file containing:
-
-```text
-x, y, z, intensity
-```
 
 ---
 
@@ -390,6 +413,12 @@ data/raw_dataset/<bag_name>/steering_pct.txt
 The output file contains:
 
 ```text
+# timestamp value
+```
+
+Each data row is written as:
+
+```text
 timestamp, value
 ```
 
@@ -420,6 +449,12 @@ data/raw_dataset/<bag_name>/steering_predictions.txt
 ```
 
 The output file contains:
+
+```text
+# timestamp steering_target
+```
+
+Each data row is written as:
 
 ```text
 timestamp, steering_target
@@ -461,7 +496,7 @@ python 1_extract_ROS_data/1B_lidar_without_odometry.py
 
 | Script | Main output |
 |---|---|
-| `1UTIL_print_bag_info.py` | Console printout of topics, message counts, and bag time range |
+| `1UTIL_print_bag_info.py` | Console printout of bag topics, message counts, message types, and time range |
 | `1A_camera_without_odometry.py` | `images/frame_XXXXXX.png` |
 | `1A_camera_with_odometry.py` | `images/frame_XXXXXX.png`, `images_positions.txt` |
 | `1B_lidar_without_odometry.py` | `point_clouds/point_cloud_XXXXXX.bin` |
@@ -487,21 +522,27 @@ The exported timestamps are written in seconds.
 ## Notes
 
 - Output folders are created automatically if they do not already exist.
-- If the configured bag file is not found, the scripts print an error message and stop.
-- If a required topic is missing, the corresponding script raises an error or prints a warning.
 - The scripts assume a single ROS bag file configured by `bag_path`.
+- The output folder name is derived from `bag_path.stem`.
 - Make sure the topic names in each script match the topics in your ROS bag.
 - Run `1UTIL_print_bag_info.py` first when working with a new bag.
+- If the configured bag file is not found, the script prints an error message and stops.
+- If a required topic is missing, the corresponding script raises an error.
+- Camera outputs are saved as `.png`.
+- LiDAR outputs are saved as raw float32 `.bin` files containing `x, y, z, intensity`.
 
+</details>
+
+<details>
+<summary><code>2_process_datasets</code></summary>
 
 # 2_process_datasets
 
 This folder contains the second step of the data-processing pipeline.
-The scripts take the data extracted in step 1 and run computer vision and
-3D detection algorithms on it. They produce per-dataset detection files
-and the OSM-derived map data that the simulation in step 3 will need.
 
-Each script is intended to be run from the project root as:
+The scripts take the extracted data from step 1 and run computer vision, 3D detection, map-generation, manual-cleanup, and Gaussian Splatting preparation steps. They produce per-dataset detection files, cleaned object lists, OSM-derived map data, and image/mask splits used by later stages of the pipeline.
+
+Each script is intended to be run from the project root:
 
 ```bash
 python 2_process_datasets/<script_name>.py
@@ -517,16 +558,17 @@ python 2_process_datasets/2A_camera_parked_cars_detection.py
 
 ## Purpose
 
-The goal of this step is to take the raw extracted data from step 1 and produce:
+The goal of this step is to convert the raw extracted dataset into processed assets for detection, mapping, simulation, and Gaussian Splatting.
 
-- 3D bounding boxes of parked vehicles, detected from camera images
-- 3D bounding boxes of parked vehicles, detected from LiDAR point clouds
-- A manually refined LiDAR ground truth, built on top of the LiDAR detections
-- A cleaned set of camera and/or LiDAR centroids, edited interactively
-- An OSM map of the area covered by the trajectory, plus a placeholder
-  `vehicle_data.json` file for the CARLA simulation
-- Cropped images, sky masks, and overlapping splits ready for Gaussian
-  Splatting training
+The scripts can produce:
+
+- 3D bounding boxes of parked vehicles from camera images
+- 3D bounding boxes of parked vehicles from LiDAR point clouds
+- A manually refined LiDAR ground truth
+- Cleaned camera and/or LiDAR centroid files edited interactively
+- OSM map data for the recorded trajectory area
+- A placeholder `vehicle_data.json` file for CARLA simulation
+- Cropped images, sky masks, and overlapping image splits for Gaussian Splatting training
 
 ---
 
@@ -563,46 +605,54 @@ project_root/
 │   │       ├── images_positions.txt
 │   │       ├── lidar_positions.txt
 │   │       ├── odometry.csv
-│   │       └── trajectory.txt
+│   │       └── trajectory.csv
 │   │
-│   └── processed_dataset/
+│   ├── processed_dataset/
+│   │   └── <bag_name>/
+│   │       ├── camera_detections/
+│   │       ├── lidar_detections/
+│   │       ├── lidar_refinement/
+│   │       └── maps/
+│   │
+│   └── data_for_gaussian_splatting/
 │       └── <bag_name>/
-│           ├── camera_detections/
-│           ├── lidar_detections/
-│           ├── lidar_refinement/
-│           ├── maps/
-│           └── (data_for_gaussian_splatting/<bag_name>/ at project root)
 ```
 
-Scripts read input from:
+Scripts generally read input from:
 
 ```text
 data/raw_dataset/<bag_name>/
 ```
 
-and write their output to:
+and write output to:
 
 ```text
 data/processed_dataset/<bag_name>/
 ```
 
-The Gaussian Splatting preparation script writes to a separate folder
-under `data/data_for_gaussian_splatting/<bag_name>/` because the data
-will be used by an external training pipeline.
+The Gaussian Splatting preparation script writes to:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/
+```
+
+because that data is intended for an external training pipeline.
 
 ---
 
 ## Requirements
 
-Use the existing Conda environment named `repl`.
+Use the existing Conda environment named `data_extraction`.
 
 Activate it before running any script in this folder:
 
 ```bash
-conda activate repl
+conda activate data_extraction
 ```
 
-The detection scripts also require pretrained model files placed in:
+The scripts use packages for ROS bag processing, numerical computation, computer vision, 3D detection, map processing, visualization, and Gaussian Splatting preparation.
+
+The camera and LiDAR detection scripts require pretrained model files in:
 
 ```text
 2_process_datasets/utils/
@@ -612,10 +662,46 @@ The detection scripts also require pretrained model files placed in:
 └── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_*.pth
 ```
 
-If any of these files is missing, the corresponding script will fail at
-startup with a clear `FileNotFoundError`.
+If a required model or config file is missing, the corresponding script will fail at startup with a `FileNotFoundError`.
 
-The map and Gaussian Splatting scripts do not need any model files.
+The map scripts and Gaussian Splatting preparation script do not require the FCOS3D or PointPillars model files.
+
+---
+
+## The `utils/` subfolder
+
+The `utils/` folder contains shared helper code, model configuration files, and pretrained model checkpoints used by the processing scripts.
+
+Typical contents include:
+
+```text
+2_process_datasets/utils/
+├── fcos3d_config.py
+├── fcos3d.pth
+├── my_pointpillars_config.py
+├── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_*.pth
+├── coordinates.py
+├── map_data.py
+├── save_data.py
+├── plotting.py
+└── other.py
+```
+
+The files are used as follows:
+
+| File | Purpose |
+|---|---|
+| `fcos3d_config.py` | FCOS3D configuration for camera-based 3D detection |
+| `fcos3d.pth` | FCOS3D pretrained checkpoint |
+| `my_pointpillars_config.py` | PointPillars configuration for LiDAR-based 3D detection |
+| `hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_*.pth` | PointPillars pretrained checkpoint |
+| `coordinates.py` | Coordinate conversion utilities |
+| `map_data.py` | OSM/map processing utilities |
+| `save_data.py` | Helpers for writing map and vehicle data |
+| `plotting.py` | Plotting and visualization helpers |
+| `other.py` | Additional shared helper functions |
+
+Do not move or rename files in `utils/` unless the corresponding import paths and model paths in the scripts are also updated.
 
 ---
 
@@ -623,32 +709,39 @@ The map and Gaussian Splatting scripts do not need any model files.
 
 Each script has a configuration section near the top.
 
-The most important value to set is the dataset name:
+The most important value is the dataset name:
 
 ```python
 DATASET_NAME = "reference_bag"
 ```
 
-This must match the name of the folder produced by step 1 inside
-`data/raw_dataset/`.
+This must match the folder name produced by step 1 inside:
 
-Other values that may be edited from time to time are:
+```text
+data/raw_dataset/
+```
+
+For example:
+
+```text
+data/raw_dataset/reference_bag/
+```
+
+Other commonly edited values include:
 
 ```python
-SKIP_FRAMES = 5            # Process one frame every N
+SKIP_FRAMES = 5            # Process one frame every N frames
 CONFIDENCE_THRESH = 0.50   # Detection score threshold
-DIST = 200                 # OSM extraction radius, meters
-ADDRESS = "..."            # Used only by the manual map script
+DIST = 200                 # OSM extraction radius in meters
+ADDRESS = "..."            # Used by the manual map script
 ```
 
 Before running any script, check that:
 
-1. The folder `data/raw_dataset/<DATASET_NAME>/` exists.
-2. It contains the input files required by that specific script
-   (for example, `images/` and `images_positions.txt` for camera scripts,
-   or `point_clouds/`, `lidar_positions.txt` and `odometry.csv` for
-   LiDAR scripts).
-3. You are running the command from the project root.
+1. `data/raw_dataset/<DATASET_NAME>/` exists.
+2. The required input files for the script exist.
+3. The required files in `2_process_datasets/utils/` exist.
+4. You are running the command from the project root.
 
 ---
 
@@ -656,21 +749,9 @@ Before running any script, check that:
 
 ### 2A_camera_parked_cars_detection.py
 
-Detects parked cars from camera images using FCOS3D, tracks them in world
-coordinates across frames, and clusters duplicate detections into a single
-cluster per car.
+Detects parked cars from camera images using FCOS3D.
 
-The pipeline performs the following steps:
-
-1. Loads the per-frame poses from `images_positions.txt`.
-2. Loads the FCOS3D 3D detector.
-3. Fits a smooth trajectory through the ego positions.
-4. Iterates over the camera frames (one every `SKIP_FRAMES`), runs FCOS3D,
-   transforms each detection from camera coordinates to world coordinates,
-   and feeds it to a world tracker.
-5. Runs a two-stage clustering on the confirmed tracks to merge duplicate
-   detections of the same car.
-6. Saves the cluster positions, sides, and orientations.
+The script tracks detections in world coordinates across frames and clusters duplicate detections into one cluster per parked car.
 
 Default input:
 
@@ -691,21 +772,19 @@ data/processed_dataset/<bag_name>/camera_detections/
     └── ...
 ```
 
-`camera_detections.json` contains the full per-cluster information:
+`camera_detections.json` contains full per-cluster information:
 
 ```text
 id, x, y, z, length, width, height, yaw, count, conf, side, orient
 ```
 
-`unified_clusters.txt` contains a simplified textual version:
+`unified_clusters.txt` contains a simplified text representation:
 
 ```text
 # cluster_id, x, y, z, count, conf, orientation, side
 ```
 
-`unified_bbox_overlays/` contains one PNG per processed frame, with the 3D
-detected bounding boxes drawn in green and the projected centroid drawn as
-a red dot. Use these images to visually validate the detection quality.
+`unified_bbox_overlays/` contains one PNG per processed frame, with 3D detections drawn on the image. Use these overlays to visually check detection quality.
 
 Run:
 
@@ -713,31 +792,15 @@ Run:
 python 2_process_datasets/2A_camera_parked_cars_detection.py
 ```
 
-GPU is used automatically if available. The first frame triggers a CUDA
-warm-up, so it is slower than the others.
+GPU is used automatically if available.
 
 ---
 
 ### 2B_lidar_parked_cars_detection.py
 
-Detects parked cars from LiDAR point clouds using PointPillars, transforms
-the detections into world coordinates, clusters duplicates, and shows the
-result in an interactive Open3D viewer.
+Detects parked cars from LiDAR point clouds using PointPillars.
 
-The pipeline performs the following steps:
-
-1. Loads odometry from `odometry.csv` and the LiDAR index from
-   `lidar_positions.txt`.
-2. Loads the PointPillars 3D detector.
-3. Fits a smooth trajectory through the ego positions.
-4. Iterates over the LiDAR scans (one every `SKIP_FRAMES`), runs the
-   detector, transforms each detected box into world coordinates, and
-   collects the detections.
-5. Clusters detections that are spatially close, computes a confidence-
-   weighted average box per cluster, and assigns side and orientation
-   relative to the trajectory.
-6. Saves the clusters and shows them in a 3D viewer where you can save
-   screenshots.
+The script transforms detections into world coordinates, clusters duplicate detections, saves the resulting parked-car clusters, and opens an interactive Open3D viewer.
 
 Default input:
 
@@ -763,32 +826,22 @@ Run:
 python 2_process_datasets/2B_lidar_parked_cars_detection.py
 ```
 
-In the 3D viewer:
+Viewer controls:
 
-- Press `S` to save a screenshot to the `screenshots/` folder.
-- Press `Q` or close the window to exit.
+| Key | Action |
+|---|---|
+| `S` | Save screenshot to `screenshots/` |
+| `Q` | Exit viewer |
+
+You can also close the viewer window to exit.
 
 ---
 
 ### 2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py
 
-Same LiDAR detection pipeline as `2B_lidar_parked_cars_detection.py`, plus
-an interactive editor used to manually refine the bounding boxes and
-produce a clean ground truth.
+Runs the same LiDAR detection pipeline as `2B_lidar_parked_cars_detection.py`, then opens an interactive editor for manual refinement.
 
-This script is marked `OPTIONAL` because it is only needed when a refined
-LiDAR ground truth is required, for example to evaluate detection quality.
-The CARLA simulation in step 3 does not depend on it.
-
-The pipeline performs the following steps:
-
-1. Runs the full LiDAR detection and clustering, exactly like
-   `2B_lidar_parked_cars_detection.py`.
-2. Saves the raw clusters before any manual editing.
-3. Opens an interactive Open3D editor where each detected box can be
-   moved, rotated, deleted, or replaced. New boxes can also be inserted.
-4. After the editor is confirmed, recomputes side and orientation for
-   every box and saves a refined ground truth.
+This script is optional. Use it when you need a manually refined LiDAR ground truth, for example to evaluate detection quality.
 
 Default input:
 
@@ -819,18 +872,18 @@ Editor controls:
 
 | Key | Action |
 |---|---|
-| `LEFT` / `RIGHT` | Select previous / next box (sorted spatially) |
+| `LEFT` / `RIGHT` | Select previous / next box |
 | `C` | Select the box closest to the camera |
 | `W` / `S` | Move selected box forward / backward |
 | `A` / `D` | Move selected box left / right |
 | `R` / `F` | Move selected box up / down |
 | `Q` / `E` | Rotate selected box |
 | `X` | Delete selected box |
-| `I` | Insert a new box at the current selection |
+| `I` | Insert a new box |
 | `U` | Recompute side and orientation for the selected box |
-| `P` | Save a screenshot |
+| `P` | Save screenshot |
 | `SPACE` | Confirm and save refined boxes |
-| `ESC` | Cancel without saving |
+| `ESC` | Cancel without saving refined boxes |
 
 If the editor is cancelled with `ESC`, only the raw detections are kept.
 
@@ -838,26 +891,14 @@ If the editor is cancelled with `ESC`, only the raw detections are kept.
 
 ### 2C_create_map_from_coordinates_auto.py
 
-Downloads OSM data for the area covered by the recorded trajectory and
-prepares the `maps/` folder used by step 3.
+Downloads OSM data for the area covered by the recorded trajectory and prepares the `maps/` folder used by step 3.
 
-The pipeline performs the following steps:
-
-1. Reads the first pose from `trajectory.txt` and converts the UTM
-   coordinates into latitude / longitude.
-2. Reverse-geocodes the coordinates with Nominatim to obtain a road-level
-   address (street, neighbourhood, city).
-3. Downloads OSM data for that address using `get_street_data`.
-4. Creates the `maps/<bag_name>/` folder structure and saves the OSM data,
-   the processed map geometry, and a placeholder `vehicle_data.json`.
-
-The placeholder `vehicle_data.json` contains a dummy `hero_car` entry.
-The real CARLA hero position is filled in later by the simulation step.
+The script reads the trajectory, converts the first UTM pose to latitude/longitude, reverse-geocodes the location, downloads OSM data, and creates a placeholder `vehicle_data.json`.
 
 Default input:
 
 ```text
-data/raw_dataset/<bag_name>/trajectory.txt
+data/raw_dataset/<bag_name>/trajectory.csv
 ```
 
 Outputs:
@@ -865,7 +906,6 @@ Outputs:
 ```text
 data/processed_dataset/<bag_name>/maps/
 ├── map.osm
-├── map.xodr        (created by step 3, not by this script)
 └── vehicle_data.json
 ```
 
@@ -875,36 +915,28 @@ Run:
 python 2_process_datasets/2C_create_map_from_coordinates_auto.py
 ```
 
-This script does not open a GUI when `MODE = "auto"`. Use it when the
-trajectory uniquely identifies the area and no manual selection is needed.
+The generated `vehicle_data.json` contains a placeholder `hero_car` entry. The real CARLA hero position is filled in later by the simulation step.
 
 ---
 
 ### 2C_create_map_from_coordinates_manual.py
 
-Same map-preparation script as `2C_create_map_from_coordinates_auto.py`,
-but the OSM area is selected from a hardcoded address instead of from the
-trajectory.
+Creates the same map output as the automatic map script, but uses a hardcoded address instead of deriving the area from the trajectory.
 
 Use this script when:
 
-- The trajectory does not yet exist or is unreliable.
-- You want to download a specific area (for example, only one street).
+- The trajectory does not exist yet.
+- The trajectory is unreliable.
+- You want to download a specific area manually.
 - You want to manually click the hero car position on the map.
 
-Set the address near the top of the script:
+Example configuration:
 
 ```python
 ADDRESS = "Guerickestraße, Alte Heide, Munich"
 MAP_NAME = "reference_bag"
 DIST = 200
 ```
-
-The script always opens the GUI:
-
-- In `MODE = "manual"`, click the hero car and the parking areas.
-- In `MODE = "auto"`, click only the hero car. Parking areas will be
-  injected later from cluster files.
 
 Outputs:
 
@@ -920,20 +952,20 @@ Run:
 python 2_process_datasets/2C_create_map_from_coordinates_manual.py
 ```
 
+Depending on the selected mode, the GUI can be used to click the hero car position and, if needed, parking areas.
+
 ---
 
 ### 2D_manual_refinment_parked_cars_camera.py
 
 Interactive cleaner for the camera-based cluster file.
 
-Loads `unified_clusters.txt` from `camera_detections/`, plots all centroids
-on a Web Mercator basemap together with the recorded trajectory, and lets
-the user delete, move, rotate, or insert clusters.
+The script loads camera clusters, plots them together with the recorded trajectory, and lets the user delete, move, rotate, change side, or insert clusters.
 
 Default input:
 
 ```text
-data/raw_dataset/<bag_name>/trajectory.txt
+data/raw_dataset/<bag_name>/trajectory.csv
 data/processed_dataset/<bag_name>/camera_detections/unified_clusters.txt
 ```
 
@@ -951,30 +983,29 @@ python 2_process_datasets/2D_manual_refinment_parked_cars_camera.py
 
 GUI controls:
 
-| Mode | Action |
+| Mode / Button | Action |
 |---|---|
 | `DELETE` | Click a cluster to remove it |
 | `ROTATE` | Click a cluster to toggle parallel / perpendicular |
-| `SIDE`   | Click a cluster to toggle left / right |
-| `MOVE`   | Click and drag a cluster to a new position |
-| `INSERT` | Click on the map to add a new cluster (defaults to right / parallel) |
-| `Save Filtered` | Write the cleaned file to disk |
+| `SIDE` | Click a cluster to toggle left / right |
+| `MOVE` | Click and drag a cluster to a new position |
+| `INSERT` | Click on the map to add a new cluster |
+| `Save Filtered` | Save the cleaned cluster file |
 
-An optional ground-truth file can be overlaid for visual reference by
-setting `GROUND_TRUTH_FILE` near the top of the script.
+An optional ground-truth file can be overlaid for visual reference by setting `GROUND_TRUTH_FILE` near the top of the script.
 
 ---
 
 ### 2D_manual_refinment_parked_cars_lidar.py
 
-Same interactive cleaner as `2D_manual_refinment_parked_cars_camera.py`,
-but loads the LiDAR cluster file produced by
-`2B_lidar_parked_cars_detection.py`.
+Interactive cleaner for the LiDAR-based cluster file.
+
+This script works like `2D_manual_refinment_parked_cars_camera.py`, but it loads the LiDAR clusters produced by `2B_lidar_parked_cars_detection.py`.
 
 Default input:
 
 ```text
-data/raw_dataset/<bag_name>/trajectory.txt
+data/raw_dataset/<bag_name>/trajectory.csv
 data/processed_dataset/<bag_name>/lidar_detections/unified_clusters.txt
 ```
 
@@ -990,29 +1021,15 @@ Run:
 python 2_process_datasets/2D_manual_refinment_parked_cars_lidar.py
 ```
 
-The GUI controls are identical to those of
-`2D_manual_refinment_parked_cars_camera.py`.
+The GUI controls are the same as in the camera refinement script.
 
 ---
 
 ### 2E_prepare_dataset_for_gaussian_splatting.py
 
-Prepares images, sky masks, and overlapping splits for Gaussian Splatting
-training.
+Prepares images, sky masks, and overlapping splits for Gaussian Splatting training.
 
-The pipeline performs the following steps:
-
-1. Selects one image every `FRAME_SKIP` frames from the original
-   `images_positions.txt`.
-2. Crops `CROP_BOTTOM` pixels from the bottom of each image (used to
-   remove the visible part of the ego vehicle).
-3. Generates a sky mask for each cropped image using a SegFormer model
-   pretrained on Cityscapes. Sky pixels are set to 0, all other pixels
-   are set to 255.
-4. Splits the resulting frames into `NUM_SPLITS` overlapping chunks, with
-   `OVERLAP_FRAMES` original frames of overlap between consecutive splits.
-5. For each split, writes a folder of images, a folder of sky masks, and a
-   filtered position file.
+The script selects frames, crops the bottom of each image, generates sky masks, and creates overlapping image/mask/pose splits.
 
 Default input:
 
@@ -1041,8 +1058,7 @@ Run:
 python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py
 ```
 
-The first run downloads the SegFormer weights from the Hugging Face Hub
-and caches them locally. Subsequent runs reuse the cached weights.
+The first run may download SegFormer weights from the Hugging Face Hub and cache them locally. Later runs reuse the cached weights.
 
 ---
 
@@ -1050,10 +1066,9 @@ and caches them locally. Subsequent runs reuse the cached weights.
 
 Placeholder script for semantic-map extraction.
 
-This script is marked `TODO` and is not part of the current replication
-package. It will be filled in in a future revision.
+This script is marked `TODO` and is not part of the current standard pipeline.
 
-Do not run this script as part of the standard pipeline.
+Do not run this script unless it has been implemented.
 
 ---
 
@@ -1066,10 +1081,10 @@ A typical workflow is:
 python 2_process_datasets/2A_camera_parked_cars_detection.py
 python 2_process_datasets/2B_lidar_parked_cars_detection.py
 
-# Optional manual refinement of LiDAR ground truth
+# Optional LiDAR ground-truth refinement
 python 2_process_datasets/2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py
 
-# OSM map preparation (pick one of the two)
+# OSM map preparation: choose one
 python 2_process_datasets/2C_create_map_from_coordinates_auto.py
 # or
 python 2_process_datasets/2C_create_map_from_coordinates_manual.py
@@ -1082,10 +1097,9 @@ python 2_process_datasets/2D_manual_refinment_parked_cars_lidar.py
 python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py
 ```
 
-If you only need camera-based detections, you can skip the `2B*` and
-`2D_manual_refinment_parked_cars_lidar.py` steps. If you only need
-LiDAR-based detections, you can skip `2A` and
-`2D_manual_refinment_parked_cars_camera.py`.
+If you only need camera-based detections, you can skip the `2B*` scripts and `2D_manual_refinment_parked_cars_lidar.py`.
+
+If you only need LiDAR-based detections, you can skip `2A_camera_parked_cars_detection.py` and `2D_manual_refinment_parked_cars_camera.py`.
 
 ---
 
@@ -1093,36 +1107,26 @@ LiDAR-based detections, you can skip `2A` and
 
 | Script | Main output |
 |---|---|
-| `2A_camera_parked_cars_detection.py` | `camera_detections/camera_detections.json`, `unified_clusters.txt`, `unified_bbox_overlays/` |
-| `2B_lidar_parked_cars_detection.py` | `lidar_detections/lidar_detections.json`, `unified_clusters.txt`, `lidar_bboxes.txt`, `screenshots/` |
-| `2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py` | `lidar_refinement/detections_raw.json`, `ground_truth_refined.json`, `final_clusters.txt`, `ground_truth_bboxes.txt`, `screenshots/` |
-| `2C_create_map_from_coordinates_auto.py` | `maps/<bag_name>/map.osm`, `vehicle_data.json` |
-| `2C_create_map_from_coordinates_manual.py` | `maps/<map_name>/map.osm`, `vehicle_data.json` |
+| `2A_camera_parked_cars_detection.py` | `camera_detections/camera_detections.json`, `camera_detections/unified_clusters.txt`, `camera_detections/unified_bbox_overlays/` |
+| `2B_lidar_parked_cars_detection.py` | `lidar_detections/lidar_detections.json`, `lidar_detections/unified_clusters.txt`, `lidar_detections/lidar_bboxes.txt`, `lidar_detections/screenshots/` |
+| `2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py` | `lidar_refinement/detections_raw.json`, `lidar_refinement/ground_truth_refined.json`, `lidar_refinement/final_clusters.txt`, `lidar_refinement/ground_truth_bboxes.txt` |
+| `2C_create_map_from_coordinates_auto.py` | `maps/map.osm`, `maps/vehicle_data.json` |
+| `2C_create_map_from_coordinates_manual.py` | `maps/map.osm`, `maps/vehicle_data.json` |
 | `2D_manual_refinment_parked_cars_camera.py` | `camera_detections/unified_clusters_filtered.txt` |
 | `2D_manual_refinment_parked_cars_lidar.py` | `lidar_detections/unified_clusters_filtered.txt` |
-| `2E_prepare_dataset_for_gaussian_splatting.py` | `data/data_for_gaussian_splatting/<bag_name>/` (cropped images, sky masks, splits, position files) |
-| `2F_TODO_extract_semantic_maps.py` | (not implemented yet) |
+| `2E_prepare_dataset_for_gaussian_splatting.py` | `data/data_for_gaussian_splatting/<bag_name>/` |
+| `2F_TODO_extract_semantic_maps.py` | Not implemented |
 
 ---
 
 ## Notes
 
-- Output folders for the detection scripts are wiped and recreated at
-  the start of every run. Move or rename them if you want to keep
-  results from previous runs.
-- `SKIP_FRAMES` controls how dense the detection pass is: with
-  `SKIP_FRAMES = 5` one frame out of five is processed. Lower values
-  give more detections but slower runtime.
-- The position-correction constants in `2A`
-  (`DEPTH_SCALE`, `DEPTH_OFFSET`, `X_SCALE`, `X_OFFSET`, `Y_OFFSET`)
-  compensate for the fact that the pretrained FCOS3D weights come from
-  KITTI, while the camera used in this project has different intrinsics
-  and a different mounting position. They are tuned empirically on the
-  reference dataset.
-- The map scripts can optionally check that CARLA is reachable.
-  Set `NO_CARLA = True` near the top of each map script to skip that
-  check while CARLA is not running.
-- The Gaussian Splatting script uses hard links when possible to avoid
-  duplicating image files between the `_tmp_*` folders and the per-split
-  folders. On filesystems that do not support hard links, regular file
-  copies are used instead.
+- Output folders for detection scripts are deleted and recreated at the start of each run. Move or rename old results before rerunning if you want to keep them.
+- `SKIP_FRAMES` controls detection density. Lower values process more frames but increase runtime.
+- The camera detection script uses empirical correction constants because the FCOS3D weights were trained on KITTI, while this project uses a different camera setup.
+- The map scripts can optionally check whether CARLA is reachable. Set `NO_CARLA = True` near the top of the map scripts to skip this check when CARLA is not running.
+- The Gaussian Splatting script uses hard links when possible to avoid duplicating image files. If hard links are not supported, it falls back to regular file copies.
+- Do not edit generated files manually unless you are intentionally refining outputs. Prefer rerunning the relevant script from the project root.
+
+</details>
+
