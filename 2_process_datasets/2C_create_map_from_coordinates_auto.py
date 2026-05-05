@@ -98,7 +98,7 @@ TRAJECTORY_FILE = project_path(
     "data",
     "raw_dataset",
     DATASET_NAME,
-    "trajectory.txt",
+    "trajectory.csv",
 )
 
 # UTM coordinate reference system.
@@ -155,25 +155,51 @@ ADDRESS_OVERRIDE = None
 
 def load_first_trajectory_pose(trajectory_file):
     """
-    Load the first pose from trajectory.txt.
+    Load the first pose from trajectory file.
 
-    Expected format:
-    # timestamp x y z yaw
-    timestamp, x, y, z, yaw
+    Supports both:
+
+    New CSV format:
+      timestamp,x,y,z,yaw
+      1771259998.585840702,692933.421271,5339067.195751,550.456116,1.065336
+
+    Old headerless format:
+      timestamp, x, y, z, yaw
     """
     if not os.path.exists(trajectory_file):
         raise FileNotFoundError(f"Trajectory file not found: {trajectory_file}")
 
+    required_columns = ["timestamp", "x", "y", "z", "yaw"]
+
+    # First try normal CSV with header.
     df = pd.read_csv(
         trajectory_file,
         comment="#",
-        header=None,
-        names=["timestamp", "x", "y", "z", "yaw"],
         skipinitialspace=True,
     )
 
+    df.columns = [str(col).strip().lower() for col in df.columns]
+
+    # If the CSV did not contain the expected header, fall back to old format.
+    if not all(col in df.columns for col in required_columns):
+        df = pd.read_csv(
+            trajectory_file,
+            comment="#",
+            header=None,
+            names=required_columns,
+            skipinitialspace=True,
+        )
+
+    # Remove accidental header rows if a header was parsed as data.
+    for col in required_columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=required_columns)
+
     if df.empty:
-        raise RuntimeError(f"Trajectory file is empty: {trajectory_file}")
+        raise RuntimeError(
+            f"Trajectory file has no valid trajectory rows: {trajectory_file}"
+        )
 
     first_pose = df.iloc[0]
 
@@ -184,7 +210,6 @@ def load_first_trajectory_pose(trajectory_file):
         "z": float(first_pose["z"]),
         "yaw": float(first_pose["yaw"]),
     }
-
 
 def utm_to_latlon(easting, northing, utm_epsg):
     """

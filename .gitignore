@@ -4,6 +4,10 @@ datasets/*
 datasets_old/*
 *.pth
 *.pyc
+data/extracted_ros_data/reference_bag
+data/extracted_ros_data/reference_bag/images/*
+data/extracted_ros_data/reference_bag/point_clouds/*
+data/generated_data_from_extracted_data/
 data/raw_ros_data/reference_bag.bag
 data/raw_dataset/reference_bag/*
 data/processed_dataset/reference_bag/*

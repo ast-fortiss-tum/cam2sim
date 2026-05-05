@@ -62,7 +62,7 @@ MAP_ROOT = os.path.join("data", "processed_dataset", MAP_NAME, "maps")
 TRAJECTORY_PATH = os.path.join(
     EXTRACTED_ROOT,
     DATASET_NAME,
-    "trajectory.txt",
+    "trajectory.csv",
 )
 
 CENTROID_FILE = os.path.join(
@@ -151,19 +151,83 @@ def load_trajectory_from_txt(path):
     """
     Load trajectory file.
 
-    Expected format:
-    # timestamp x y z yaw
-    timestamp, x, y, z, yaw
+    Supports both:
+
+    New CSV format:
+        timestamp,x,y,z,yaw
+        1771259998.585840702,692933.421271,5339067.195751,550.456116,1.065336
+
+    Old format:
+        timestamp, x, y, z, yaw
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"Trajectory file not found: {path}")
 
-    data = np.loadtxt(path, delimiter=",", comments="#", usecols=(1, 2))
+    # Detect whether the first non-comment row is a header.
+    first_data_line = None
 
-    if data.ndim == 1:
-        data = data.reshape(1, -1)
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
 
-    return data[:, 0], data[:, 1]
+            if not line or line.startswith("#"):
+                continue
+
+            first_data_line = line
+            break
+
+    if first_data_line is None:
+        raise RuntimeError(f"Trajectory file is empty: {path}")
+
+    first_token = first_data_line.split(",")[0].strip()
+
+    try:
+        float(first_token)
+        has_header = False
+    except ValueError:
+        has_header = True
+
+    if has_header:
+        raw = np.genfromtxt(
+            path,
+            delimiter=",",
+            comments="#",
+            names=True,
+            dtype=None,
+            encoding="utf-8",
+        )
+
+        if raw.ndim == 0:
+            raw = np.array([raw])
+
+        name_map = {
+            name.strip().lower(): name
+            for name in raw.dtype.names
+        }
+
+        if "x" not in name_map or "y" not in name_map:
+            raise KeyError(
+                f"Trajectory CSV must contain x and y columns. Found: {raw.dtype.names}"
+            )
+
+        x = np.asarray(raw[name_map["x"]], dtype=float)
+        y = np.asarray(raw[name_map["y"]], dtype=float)
+
+    else:
+        data = np.loadtxt(
+            path,
+            delimiter=",",
+            comments="#",
+            usecols=(1, 2),
+        )
+
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+
+        x = data[:, 0]
+        y = data[:, 1]
+
+    return x, y
 
 
 def load_calibration(path):
