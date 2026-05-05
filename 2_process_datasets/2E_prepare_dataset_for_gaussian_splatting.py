@@ -16,36 +16,42 @@ Writes all Gaussian Splatting data to:
 Outputs include:
 
     _tmp_images_gs_1_of_<FRAME_SKIP>/
-    _tmp_sky_masks_gs_1_of_<FRAME_SKIP>/
+    # _tmp_sky_masks_gs_1_of_<FRAME_SKIP>/   (disabled)
 
     images_gs_split_1_1_of_<FRAME_SKIP>/
-    sky_masks_gs_split_1_1_of_<FRAME_SKIP>/
+    # sky_masks_gs_split_1_1_of_<FRAME_SKIP>/   (disabled)
     frame_positions_split_1_1_of_<FRAME_SKIP>.txt
 
     images_gs_split_2_1_of_<FRAME_SKIP>/
-    sky_masks_gs_split_2_1_of_<FRAME_SKIP>/
+    # sky_masks_gs_split_2_1_of_<FRAME_SKIP>/   (disabled)
     frame_positions_split_2_1_of_<FRAME_SKIP>.txt
+
+    colmap/split_1/sparse/0/   (empty, for the COLMAP reconstruction)
+    colmap/split_2/sparse/0/   (empty, for the COLMAP reconstruction)
+    colmap/split_3/sparse/0/   (empty, for the COLMAP reconstruction)
 
 This script:
   - Uses hardcoded BAG_NAME, no command-line parameters
   - Imports local utils from the same folder as this script
   - Crops image bottoms
-  - Generates sky masks using SegFormer
+  # - Generates sky masks using SegFormer   (disabled, see commented blocks below)
   - Creates overlapping splits for Gaussian Splatting
+  - Creates one empty COLMAP folder per split, ready to receive the
+    sparse reconstruction exported from the COLMAP GUI
 """
 
 import os
 import sys
 import shutil
 
-import torch
-import numpy as np
+# import torch
+# import numpy as np
 from PIL import Image
 from tqdm import tqdm
-from transformers import (
-    SegformerImageProcessor,
-    SegformerForSemanticSegmentation,
-)
+# from transformers import (
+#     SegformerImageProcessor,
+#     SegformerForSemanticSegmentation,
+# )
 
 
 # =======================
@@ -113,8 +119,8 @@ FRAME_SKIP = 3
 OVERLAP_FRAMES = 100
 NUM_SPLITS = 3
 
-# Sky mask model.
-MODEL_NAME = "nvidia/segformer-b1-finetuned-cityscapes-1024-1024"
+# Sky mask model. (disabled)
+# MODEL_NAME = "nvidia/segformer-b1-finetuned-cityscapes-1024-1024"
 
 # If True, replace existing processed files.
 OVERWRITE_EXISTING = True
@@ -223,98 +229,104 @@ def write_split_positions_file(path, header_lines, split_frames, data_lines):
         for original_index, _filename in split_frames:
             f.write(data_lines[original_index] + "\n")
 
+
 def create_empty_colmap_split_folders():
     """
-    Create empty COLMAP sparse folders for each split.
+    Create one COLMAP folder per split, each with its own sparse/0 sub-folder.
 
-    Example with NUM_SPLITS=3:
-      OUTPUT_ROOT/colmap/sparse/0
-      OUTPUT_ROOT/colmap/sparse/1
-      OUTPUT_ROOT/colmap/sparse/2
+    Layout produced (with NUM_SPLITS=3):
+      OUTPUT_ROOT/colmap/split_1/sparse/0
+      OUTPUT_ROOT/colmap/split_2/sparse/0
+      OUTPUT_ROOT/colmap/split_3/sparse/0
+
+    Each split is an independent dataset for nerfstudio. The COLMAP GUI,
+    when exporting a sparse model, will write cameras.bin / images.bin /
+    points3D.bin directly into the chosen export folder; pointing it at
+    `colmap/split_N/sparse/0` therefore produces the expected layout for
+    nerfstudio without manual renames.
     """
-    colmap_sparse_root = os.path.join(
-        OUTPUT_ROOT,
-        "colmap",
-        "sparse",
-    )
+    colmap_root = os.path.join(OUTPUT_ROOT, "colmap")
 
-    for split_id in range(NUM_SPLITS):
+    for split_index in range(1, NUM_SPLITS + 1):
         split_sparse_dir = os.path.join(
-            colmap_sparse_root,
-            str(split_id),
+            colmap_root,
+            f"split_{split_index}",
+            "sparse",
+            "0",
         )
-
         os.makedirs(split_sparse_dir, exist_ok=True)
 
-    print(f"[INFO] Empty COLMAP sparse folders created in: {colmap_sparse_root}")
+    print(f"[INFO] Empty COLMAP split folders created in: {colmap_root}")
+
+
 # =======================
-# SKY MASK MODEL
+# SKY MASK MODEL  (disabled)
 # =======================
 
-def load_sky_model():
-    """
-    Load SegFormer model for sky segmentation.
-    """
-    print(f"[INFO] Loading SegFormer model: {MODEL_NAME}")
+# def load_sky_model():
+#     """
+#     Load SegFormer model for sky segmentation.
+#     """
+#     print(f"[INFO] Loading SegFormer model: {MODEL_NAME}")
+#
+#     processor = SegformerImageProcessor.from_pretrained(MODEL_NAME)
+#     model = SegformerForSemanticSegmentation.from_pretrained(MODEL_NAME)
+#
+#     device = "cuda" if torch.cuda.is_available() else "cpu"
+#
+#     model.to(device)
+#     model.eval()
+#
+#     print(f"[INFO] Model loaded on: {device}")
+#
+#     id2label = model.config.id2label
+#
+#     sky_id = None
+#
+#     for class_id, label in id2label.items():
+#         if label.lower() == "sky":
+#             sky_id = int(class_id)
+#             break
+#
+#     if sky_id is None:
+#         raise RuntimeError("Could not find 'sky' class in model labels.")
+#
+#     print(f"[INFO] Sky class ID: {sky_id}")
+#
+#     return processor, model, device, sky_id
 
-    processor = SegformerImageProcessor.from_pretrained(MODEL_NAME)
-    model = SegformerForSemanticSegmentation.from_pretrained(MODEL_NAME)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    model.to(device)
-    model.eval()
-
-    print(f"[INFO] Model loaded on: {device}")
-
-    id2label = model.config.id2label
-
-    sky_id = None
-
-    for class_id, label in id2label.items():
-        if label.lower() == "sky":
-            sky_id = int(class_id)
-            break
-
-    if sky_id is None:
-        raise RuntimeError("Could not find 'sky' class in model labels.")
-
-    print(f"[INFO] Sky class ID: {sky_id}")
-
-    return processor, model, device, sky_id
-
-
-def generate_sky_mask(image, processor, model, device, sky_id):
-    """
-    Generate a binary sky mask for a single PIL image.
-
-    Nerfstudio convention:
-      255 white = valid data, train on this
-      0 black   = masked out, ignore this / sky
-    """
-    inputs = processor(
-        images=image,
-        return_tensors="pt",
-    ).to(device)
-
-    with torch.no_grad():
-        outputs = model(**inputs)
-
-    logits = outputs.logits
-
-    upsampled_logits = torch.nn.functional.interpolate(
-        logits,
-        size=image.size[::-1],
-        mode="bilinear",
-        align_corners=False,
-    )
-
-    pred_seg = upsampled_logits.argmax(dim=1)[0]
-
-    mask = torch.ones_like(pred_seg, dtype=torch.uint8) * 255
-    mask[pred_seg == sky_id] = 0
-
-    return Image.fromarray(mask.cpu().numpy())
+# def generate_sky_mask(image, processor, model, device, sky_id):
+#     """
+#     Generate a binary sky mask for a single PIL image.
+#
+#     Nerfstudio convention:
+#       255 white = valid data, train on this
+#       0 black   = masked out, ignore this / sky
+#     """
+#     inputs = processor(
+#         images=image,
+#         return_tensors="pt",
+#     ).to(device)
+#
+#     with torch.no_grad():
+#         outputs = model(**inputs)
+#
+#     logits = outputs.logits
+#
+#     upsampled_logits = torch.nn.functional.interpolate(
+#         logits,
+#         size=image.size[::-1],
+#         mode="bilinear",
+#         align_corners=False,
+#     )
+#
+#     pred_seg = upsampled_logits.argmax(dim=1)[0]
+#
+#     mask = torch.ones_like(pred_seg, dtype=torch.uint8) * 255
+#     mask[pred_seg == sky_id] = 0
+#
+#     return Image.fromarray(mask.cpu().numpy())
 
 
 # =======================
@@ -329,13 +341,13 @@ def process_frames():
         f"_tmp_images_gs_{skip_label}",
     )
 
-    tmp_mask_folder = os.path.join(
-        OUTPUT_ROOT,
-        f"_tmp_sky_masks_gs_{skip_label}",
-    )
+    # tmp_mask_folder = os.path.join(
+    #     OUTPUT_ROOT,
+    #     f"_tmp_sky_masks_gs_{skip_label}",
+    # )
 
     os.makedirs(tmp_image_folder, exist_ok=True)
-    os.makedirs(tmp_mask_folder, exist_ok=True)
+    # os.makedirs(tmp_mask_folder, exist_ok=True)
 
     header_lines, data_lines = load_position_lines(SOURCE_POSITIONS_FILE)
 
@@ -361,11 +373,11 @@ def process_frames():
     print(f"[INFO] Subsampled frame count:  {len(indices)}")
     print("=" * 80)
 
-    processor, model, device, sky_id = load_sky_model()
+    # processor, model, device, sky_id = load_sky_model()
 
     filenames_by_index = {}
 
-    print("\n[INFO] Processing frames: crop images and generate sky masks")
+    print("\n[INFO] Processing frames: crop images")
 
     for original_index in tqdm(indices, desc="Processing"):
         line = data_lines[original_index]
@@ -373,7 +385,7 @@ def process_frames():
 
         input_path = os.path.join(SOURCE_IMAGES_FOLDER, filename)
         output_path = os.path.join(tmp_image_folder, filename)
-        mask_path = os.path.join(tmp_mask_folder, filename)
+        # mask_path = os.path.join(tmp_mask_folder, filename)
 
         if not os.path.exists(input_path):
             print(f"[WARN] Image not found: {input_path}")
@@ -382,7 +394,7 @@ def process_frames():
         if (
             not OVERWRITE_EXISTING
             and os.path.exists(output_path)
-            and os.path.exists(mask_path)
+            # and os.path.exists(mask_path)
         ):
             filenames_by_index[original_index] = filename
             continue
@@ -407,15 +419,15 @@ def process_frames():
             cropped_img = img.crop(crop_box)
             cropped_img.save(output_path)
 
-            mask_img = generate_sky_mask(
-                cropped_img.convert("RGB"),
-                processor,
-                model,
-                device,
-                sky_id,
-            )
-
-            mask_img.save(mask_path)
+            # mask_img = generate_sky_mask(
+            #     cropped_img.convert("RGB"),
+            #     processor,
+            #     model,
+            #     device,
+            #     sky_id,
+            # )
+            #
+            # mask_img.save(mask_path)
 
         filenames_by_index[original_index] = filename
 
@@ -424,7 +436,7 @@ def process_frames():
 
     print(f"\n[INFO] Processed frames: {num_processed}")
     print(f"[INFO] Temporary cropped images: {tmp_image_folder}")
-    print(f"[INFO] Temporary sky masks:      {tmp_mask_folder}")
+    # print(f"[INFO] Temporary sky masks:      {tmp_mask_folder}")
 
     if num_processed == 0:
         raise RuntimeError("No frames were processed. Check image paths and position file.")
@@ -468,10 +480,10 @@ def process_frames():
             f"images_gs_split_{split_index}_{skip_label}",
         )
 
-        split_mask_dir = os.path.join(
-            OUTPUT_ROOT,
-            f"sky_masks_gs_split_{split_index}_{skip_label}",
-        )
+        # split_mask_dir = os.path.join(
+        #     OUTPUT_ROOT,
+        #     f"sky_masks_gs_split_{split_index}_{skip_label}",
+        # )
 
         split_positions_path = os.path.join(
             OUTPUT_ROOT,
@@ -479,17 +491,17 @@ def process_frames():
         )
 
         os.makedirs(split_image_dir, exist_ok=True)
-        os.makedirs(split_mask_dir, exist_ok=True)
+        # os.makedirs(split_mask_dir, exist_ok=True)
 
         for original_index, filename in split_frames:
             src_img = os.path.join(tmp_image_folder, filename)
             dst_img = os.path.join(split_image_dir, filename)
 
-            src_mask = os.path.join(tmp_mask_folder, filename)
-            dst_mask = os.path.join(split_mask_dir, filename)
+            # src_mask = os.path.join(tmp_mask_folder, filename)
+            # dst_mask = os.path.join(split_mask_dir, filename)
 
             link_or_copy(src_img, dst_img)
-            link_or_copy(src_mask, dst_mask)
+            # link_or_copy(src_mask, dst_mask)
 
         write_split_positions_file(
             split_positions_path,
@@ -506,7 +518,7 @@ def process_frames():
         print(f"       Subsampled range:      [{start}, {end})")
         print(f"       Original index range:  [{orig_start}, {orig_end}]")
         print(f"       Images:                {split_image_dir}")
-        print(f"       Sky masks:             {split_mask_dir}")
+        # print(f"       Sky masks:             {split_mask_dir}")
         print(f"       Positions:             {split_positions_path}")
 
     for split_index in range(NUM_SPLITS - 1):
