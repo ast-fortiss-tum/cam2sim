@@ -24,7 +24,7 @@ Reads trajectory start from:
   data/data_for_carla/<BAG_NAME>/trajectory_positions_rear_odom_yaw.json
 
 Saves output to:
-  data/generated_data_from_extracted_data/<BAG_NAME>/dave2_runs/only_carla_run<RUN_NUMBER>
+  data/processed_dataset/<BAG_NAME>/dave2_runs/only_carla_run<RUN_NUMBER>
 """
 
 import os
@@ -113,7 +113,7 @@ TRAJECTORY_PATH = os.path.join(
 OUTPUT_ROOT = os.path.join(
     PROJECT_ROOT,
     "data",
-    "generated_data_from_extracted_data",
+    "processed_dataset",
     BAG_NAME,
     "dave2_runs",
 )

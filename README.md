@@ -82,7 +82,7 @@ project_root/
 │   ├── raw_ros_data/
 │   │   └── reference_bag.bag
 │   │
-│   └── extracted_ros_data/
+│   └── raw_dataset/
 │       └── <bag_name>/
 │           ├── images/
 │           ├── point_clouds/
@@ -97,7 +97,7 @@ project_root/
 Scripts write their output to:
 
 ```text
-data/extracted_ros_data/<bag_name>/
+data/raw_dataset/<bag_name>/
 ```
 
 where `<bag_name>` is automatically taken from the ROS bag filename.
@@ -182,8 +182,8 @@ Default camera topic:
 Output:
 
 ```text
-data/extracted_ros_data/<bag_name>/images/frame_000000.png
-data/extracted_ros_data/<bag_name>/images/frame_000001.png
+data/raw_dataset/<bag_name>/images/frame_000000.png
+data/raw_dataset/<bag_name>/images/frame_000001.png
 ...
 ```
 
@@ -218,8 +218,8 @@ Default topics:
 Outputs:
 
 ```text
-data/extracted_ros_data/<bag_name>/images/
-data/extracted_ros_data/<bag_name>/images_positions.txt
+data/raw_dataset/<bag_name>/images/
+data/raw_dataset/<bag_name>/images_positions.txt
 ```
 
 Image files are saved as:
@@ -263,8 +263,8 @@ Default LiDAR topic:
 Output:
 
 ```text
-data/extracted_ros_data/<bag_name>/point_clouds/point_cloud_000000.bin
-data/extracted_ros_data/<bag_name>/point_clouds/point_cloud_000001.bin
+data/raw_dataset/<bag_name>/point_clouds/point_cloud_000000.bin
+data/raw_dataset/<bag_name>/point_clouds/point_cloud_000001.bin
 ...
 ```
 
@@ -298,8 +298,8 @@ Default topics:
 Outputs:
 
 ```text
-data/extracted_ros_data/<bag_name>/point_clouds/
-data/extracted_ros_data/<bag_name>/lidar_positions.txt
+data/raw_dataset/<bag_name>/point_clouds/
+data/raw_dataset/<bag_name>/lidar_positions.txt
 ```
 
 Point clouds are saved as:
@@ -345,8 +345,8 @@ Default odometry topic:
 Outputs:
 
 ```text
-data/extracted_ros_data/<bag_name>/odometry.csv
-data/extracted_ros_data/<bag_name>/trajectory.csv
+data/raw_dataset/<bag_name>/odometry.csv
+data/raw_dataset/<bag_name>/trajectory.csv
 ```
 
 `odometry.csv` contains:
@@ -384,7 +384,7 @@ Default topic:
 Output:
 
 ```text
-data/extracted_ros_data/<bag_name>/steering_pct.txt
+data/raw_dataset/<bag_name>/steering_pct.txt
 ```
 
 The output file contains:
@@ -416,7 +416,7 @@ Default topic:
 Output:
 
 ```text
-data/extracted_ros_data/<bag_name>/steering_predictions.txt
+data/raw_dataset/<bag_name>/steering_predictions.txt
 ```
 
 The output file contains:
@@ -556,7 +556,7 @@ project_root/
 │       └── other.py
 │
 ├── data/
-│   ├── extracted_ros_data/
+│   ├── raw_dataset/
 │   │   └── <bag_name>/
 │   │       ├── images/
 │   │       ├── point_clouds/
@@ -565,7 +565,7 @@ project_root/
 │   │       ├── odometry.csv
 │   │       └── trajectory.txt
 │   │
-│   └── generated_data_from_extracted_data/
+│   └── processed_dataset/
 │       └── <bag_name>/
 │           ├── camera_detections/
 │           ├── lidar_detections/
@@ -577,13 +577,13 @@ project_root/
 Scripts read input from:
 
 ```text
-data/extracted_ros_data/<bag_name>/
+data/raw_dataset/<bag_name>/
 ```
 
 and write their output to:
 
 ```text
-data/generated_data_from_extracted_data/<bag_name>/
+data/processed_dataset/<bag_name>/
 ```
 
 The Gaussian Splatting preparation script writes to a separate folder
@@ -630,7 +630,7 @@ DATASET_NAME = "reference_bag"
 ```
 
 This must match the name of the folder produced by step 1 inside
-`data/extracted_ros_data/`.
+`data/raw_dataset/`.
 
 Other values that may be edited from time to time are:
 
@@ -643,7 +643,7 @@ ADDRESS = "..."            # Used only by the manual map script
 
 Before running any script, check that:
 
-1. The folder `data/extracted_ros_data/<DATASET_NAME>/` exists.
+1. The folder `data/raw_dataset/<DATASET_NAME>/` exists.
 2. It contains the input files required by that specific script
    (for example, `images/` and `images_positions.txt` for camera scripts,
    or `point_clouds/`, `lidar_positions.txt` and `odometry.csv` for
@@ -675,14 +675,14 @@ The pipeline performs the following steps:
 Default input:
 
 ```text
-data/extracted_ros_data/<bag_name>/images/
-data/extracted_ros_data/<bag_name>/images_positions.txt
+data/raw_dataset/<bag_name>/images/
+data/raw_dataset/<bag_name>/images_positions.txt
 ```
 
 Outputs:
 
 ```text
-data/generated_data_from_extracted_data/<bag_name>/camera_detections/
+data/processed_dataset/<bag_name>/camera_detections/
 ├── camera_detections.json
 ├── unified_clusters.txt
 └── unified_bbox_overlays/
@@ -742,15 +742,15 @@ The pipeline performs the following steps:
 Default input:
 
 ```text
-data/extracted_ros_data/<bag_name>/odometry.csv
-data/extracted_ros_data/<bag_name>/lidar_positions.txt
-data/extracted_ros_data/<bag_name>/point_clouds/*.bin
+data/raw_dataset/<bag_name>/odometry.csv
+data/raw_dataset/<bag_name>/lidar_positions.txt
+data/raw_dataset/<bag_name>/point_clouds/*.bin
 ```
 
 Outputs:
 
 ```text
-data/generated_data_from_extracted_data/<bag_name>/lidar_detections/
+data/processed_dataset/<bag_name>/lidar_detections/
 ├── lidar_detections.json
 ├── unified_clusters.txt
 ├── lidar_bboxes.txt
@@ -793,15 +793,15 @@ The pipeline performs the following steps:
 Default input:
 
 ```text
-data/extracted_ros_data/<bag_name>/odometry.csv
-data/extracted_ros_data/<bag_name>/lidar_positions.txt
-data/extracted_ros_data/<bag_name>/point_clouds/*.bin
+data/raw_dataset/<bag_name>/odometry.csv
+data/raw_dataset/<bag_name>/lidar_positions.txt
+data/raw_dataset/<bag_name>/point_clouds/*.bin
 ```
 
 Outputs:
 
 ```text
-data/generated_data_from_extracted_data/<bag_name>/lidar_refinement/
+data/processed_dataset/<bag_name>/lidar_refinement/
 ├── detections_raw.json
 ├── ground_truth_refined.json
 ├── final_clusters.txt
@@ -857,13 +857,13 @@ The real CARLA hero position is filled in later by the simulation step.
 Default input:
 
 ```text
-data/extracted_ros_data/<bag_name>/trajectory.txt
+data/raw_dataset/<bag_name>/trajectory.txt
 ```
 
 Outputs:
 
 ```text
-data/generated_data_from_extracted_data/<bag_name>/maps/
+data/processed_dataset/<bag_name>/maps/
 ├── map.osm
 ├── map.xodr        (created by step 3, not by this script)
 └── vehicle_data.json
@@ -909,7 +909,7 @@ The script always opens the GUI:
 Outputs:
 
 ```text
-data/generated_data_from_extracted_data/<map_name>/maps/
+data/processed_dataset/<map_name>/maps/
 ├── map.osm
 └── vehicle_data.json
 ```
@@ -933,14 +933,14 @@ the user delete, move, rotate, or insert clusters.
 Default input:
 
 ```text
-data/extracted_ros_data/<bag_name>/trajectory.txt
-data/generated_data_from_extracted_data/<bag_name>/camera_detections/unified_clusters.txt
+data/raw_dataset/<bag_name>/trajectory.txt
+data/processed_dataset/<bag_name>/camera_detections/unified_clusters.txt
 ```
 
 Output:
 
 ```text
-data/generated_data_from_extracted_data/<bag_name>/camera_detections/unified_clusters_filtered.txt
+data/processed_dataset/<bag_name>/camera_detections/unified_clusters_filtered.txt
 ```
 
 Run:
@@ -974,14 +974,14 @@ but loads the LiDAR cluster file produced by
 Default input:
 
 ```text
-data/extracted_ros_data/<bag_name>/trajectory.txt
-data/generated_data_from_extracted_data/<bag_name>/lidar_detections/unified_clusters.txt
+data/raw_dataset/<bag_name>/trajectory.txt
+data/processed_dataset/<bag_name>/lidar_detections/unified_clusters.txt
 ```
 
 Output:
 
 ```text
-data/generated_data_from_extracted_data/<bag_name>/lidar_detections/unified_clusters_filtered.txt
+data/processed_dataset/<bag_name>/lidar_detections/unified_clusters_filtered.txt
 ```
 
 Run:
@@ -1017,8 +1017,8 @@ The pipeline performs the following steps:
 Default input:
 
 ```text
-data/extracted_ros_data/<bag_name>/images/
-data/extracted_ros_data/<bag_name>/images_positions.txt
+data/raw_dataset/<bag_name>/images/
+data/raw_dataset/<bag_name>/images_positions.txt
 ```
 
 Outputs:

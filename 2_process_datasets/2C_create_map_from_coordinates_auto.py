@@ -96,7 +96,7 @@ DATASET_NAME = "reference_bag"
 # Input trajectory file.
 TRAJECTORY_FILE = project_path(
     "data",
-    "extracted_ros_data",
+    "raw_dataset",
     DATASET_NAME,
     "trajectory.txt",
 )
@@ -108,10 +108,10 @@ UTM_EPSG = 32632
 
 # Output folder.
 # Everything for this bag is saved under:
-# data/generated_data_from_extracted_data/<DATASET_NAME>/maps/
+# data/processed_dataset/<DATASET_NAME>/maps/
 MAP_OUTPUT_ROOT = project_path(
     "data",
-    "generated_data_from_extracted_data",
+    "processed_dataset",
     DATASET_NAME,
     "maps",
 )

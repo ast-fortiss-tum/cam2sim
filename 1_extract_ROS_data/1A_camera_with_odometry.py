@@ -12,7 +12,7 @@ cam_topic  = "/gmsl_camera/front_narrow/image_raw"
 
 bag_name = bag_path.stem 
 
-dataset_dir = os.path.join(os.getcwd(), "data", "extracted_ros_data", bag_name)
+dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
 images_dir  = os.path.join(dataset_dir, "images")
 
 os.makedirs(images_dir, exist_ok=True)

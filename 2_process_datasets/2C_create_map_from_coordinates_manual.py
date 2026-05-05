@@ -90,10 +90,10 @@ MAP_NAME = "reference_bag"
 
 # Output folder.
 # Everything for this bag is saved under:
-# data/generated_data_from_extracted_data/<MAP_NAME>/maps/
+# data/processed_dataset/<MAP_NAME>/maps/
 MAP_OUTPUT_ROOT = project_path(
     "data",
-    "generated_data_from_extracted_data",
+    "processed_dataset",
     MAP_NAME,
     "maps",
 )

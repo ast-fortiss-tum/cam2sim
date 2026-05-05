@@ -6,8 +6,8 @@ Prepare images, sky masks, and overlapping splits for Gaussian Splatting.
 
 Reads source data from:
 
-    data/extracted_ros_data/<BAG_NAME>/images
-    data/extracted_ros_data/<BAG_NAME>/images_positions.txt
+    data/raw_dataset/<BAG_NAME>/images
+    data/raw_dataset/<BAG_NAME>/images_positions.txt
 
 Writes all Gaussian Splatting data to:
 
@@ -81,7 +81,7 @@ BAG_NAME = "reference_bag"
 SOURCE_IMAGES_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
-    "extracted_ros_data",
+    "raw_dataset",
     BAG_NAME,
     "images",
 )
@@ -90,7 +90,7 @@ SOURCE_IMAGES_FOLDER = os.path.join(
 SOURCE_POSITIONS_FILE = os.path.join(
     PROJECT_ROOT,
     "data",
-    "extracted_ros_data",
+    "raw_dataset",
     BAG_NAME,
     "images_positions.txt",
 )

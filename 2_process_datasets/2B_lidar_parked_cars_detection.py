@@ -16,11 +16,11 @@ from mmdet3d.apis import init_model, inference_detector
 # 1. CONFIGURATION
 # ==========================================
 
-# Dataset name must match the folder name inside data/extracted_ros_data/
+# Dataset name must match the folder name inside data/raw_dataset/
 DATASET_NAME = "reference_bag"
 
 # Input folder from step 1: ROS extraction
-EXTRACTED_ROOT = "data/extracted_ros_data"
+EXTRACTED_ROOT = "data/raw_dataset"
 DATASET_DIR = os.path.join(EXTRACTED_ROOT, DATASET_NAME)
 
 ODOMETRY_FILE = os.path.join(DATASET_DIR, "odometry.csv")
@@ -28,7 +28,7 @@ LIDAR_POSITIONS_FILE = os.path.join(DATASET_DIR, "lidar_positions.txt")
 POINT_CLOUD_DIR = os.path.join(DATASET_DIR, "point_clouds")
 
 # Output folder for step 2: processed datasets
-PROCESSED_ROOT = "data/generated_data_from_extracted_data"
+PROCESSED_ROOT = "data/processed_dataset"
 OUTPUT_DATASET_DIR = os.path.join(PROCESSED_ROOT, DATASET_NAME)
 OUTPUT_DIR = os.path.join(OUTPUT_DATASET_DIR, "lidar_detections")
 

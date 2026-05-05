@@ -18,7 +18,7 @@ Reads trajectory from:
   data/data_for_carla/<BAG_NAME>/trajectory_positions_rear_odom_yaw.json
 
 Saves output to:
-  data/generated_data_from_extracted_data/<BAG_NAME>/carla_replay_dataset
+  data/processed_dataset/<BAG_NAME>/carla_replay_dataset
 
 The utils folder is expected next to this script.
 """
@@ -102,7 +102,7 @@ TRAJECTORY_PATH = os.path.join(
 OUTPUT_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
-    "generated_data_from_extracted_data",
+    "processed_dataset",
     BAG_NAME,
     "carla_replay_dataset",
 )

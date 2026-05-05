@@ -14,9 +14,9 @@ This version:
   - Imports utils from the same folder where this script is located:
       3_generate_simulation_data/utils/
   - Reads the map from:
-      data/generated_data_from_extracted_data/<BAG_NAME>/maps
+      data/processed_dataset/<BAG_NAME>/maps
   - Reads trajectory positions from:
-      data/extracted_ros_data/<BAG_NAME>/images_positions.txt
+      data/raw_dataset/<BAG_NAME>/images_positions.txt
   - Saves EVERYTHING for CARLA to:
       data/data_for_carla/<BAG_NAME>
 
@@ -68,7 +68,7 @@ BAG_NAME = "reference_bag"
 POSITIONS_FILE = os.path.join(
     PROJECT_ROOT,
     "data",
-    "extracted_ros_data",
+    "raw_dataset",
     BAG_NAME,
     "images_positions.txt",
 )
@@ -77,7 +77,7 @@ POSITIONS_FILE = os.path.join(
 MAP_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
-    "generated_data_from_extracted_data",
+    "processed_dataset",
     BAG_NAME,
     "maps",
 )

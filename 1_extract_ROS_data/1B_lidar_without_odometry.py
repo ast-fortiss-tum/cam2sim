@@ -9,7 +9,7 @@ lidar_topic = '/velodyne_points'
 
 bag_name = bag_path.stem
 
-dataset_dir = os.path.join(os.getcwd(), "data", "extracted_ros_data", bag_name)
+dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
 pc_dir = os.path.join(dataset_dir, "point_clouds")
 
 

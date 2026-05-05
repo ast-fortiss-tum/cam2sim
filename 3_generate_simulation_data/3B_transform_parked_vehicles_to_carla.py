@@ -6,11 +6,11 @@ Create / overwrite spawn_positions in final CARLA vehicle_data.json.
 
 Reads map data from:
 
-    data/generated_data_from_extracted_data/<BAG_NAME>/maps
+    data/processed_dataset/<BAG_NAME>/maps
 
 Reads centroid input from:
 
-    data/generated_data_from_extracted_data/<BAG_NAME>/lidar_detections/unified_clusters.txt
+    data/processed_dataset/<BAG_NAME>/lidar_detections/unified_clusters.txt
 
 Writes final vehicle data to:
 
@@ -82,7 +82,7 @@ BAG_NAME = "reference_bag"
 MAP_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
-    "generated_data_from_extracted_data",
+    "processed_dataset",
     BAG_NAME,
     "maps",
 )
@@ -91,7 +91,7 @@ MAP_FOLDER = os.path.join(
 CENTROIDS_FILE = os.path.join(
     PROJECT_ROOT,
     "data",
-    "generated_data_from_extracted_data",
+    "processed_dataset",
     BAG_NAME,
     "lidar_detections",
     "unified_clusters.txt",

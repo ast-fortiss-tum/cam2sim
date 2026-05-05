@@ -11,16 +11,16 @@ Features:
 - Saves REFINED ground truth after editing
 
 Input:
-- data/extracted_ros_data/<dataset_name>/odometry.csv
-- data/extracted_ros_data/<dataset_name>/lidar_positions.txt
-- data/extracted_ros_data/<dataset_name>/point_clouds/*.bin
+- data/raw_dataset/<dataset_name>/odometry.csv
+- data/raw_dataset/<dataset_name>/lidar_positions.txt
+- data/raw_dataset/<dataset_name>/point_clouds/*.bin
 
 Output:
-- data/generated_data_from_extracted_data/<dataset_name>/lidar_refinement/detections_raw.json
-- data/generated_data_from_extracted_data/<dataset_name>/lidar_refinement/ground_truth_refined.json
-- data/generated_data_from_extracted_data/<dataset_name>/lidar_refinement/final_clusters.txt
-- data/generated_data_from_extracted_data/<dataset_name>/lidar_refinement/ground_truth_bboxes.txt
-- data/generated_data_from_extracted_data/<dataset_name>/lidar_refinement/screenshots/
+- data/processed_dataset/<dataset_name>/lidar_refinement/detections_raw.json
+- data/processed_dataset/<dataset_name>/lidar_refinement/ground_truth_refined.json
+- data/processed_dataset/<dataset_name>/lidar_refinement/final_clusters.txt
+- data/processed_dataset/<dataset_name>/lidar_refinement/ground_truth_bboxes.txt
+- data/processed_dataset/<dataset_name>/lidar_refinement/screenshots/
 
 Controls in refinement mode:
 - LEFT/RIGHT: Select nearest box spatially in that direction
@@ -59,7 +59,7 @@ from mmdet3d.apis import init_model, inference_detector
 DATASET_NAME = "reference_bag"
 
 # Input folder from step 1
-EXTRACTED_ROOT = "data/extracted_ros_data"
+EXTRACTED_ROOT = "data/raw_dataset"
 DATASET_DIR = os.path.join(EXTRACTED_ROOT, DATASET_NAME)
 
 ODOMETRY_FILE = os.path.join(DATASET_DIR, "odometry.csv")
@@ -67,7 +67,7 @@ LIDAR_POSITIONS_FILE = os.path.join(DATASET_DIR, "lidar_positions.txt")
 POINT_CLOUD_DIR = os.path.join(DATASET_DIR, "point_clouds")
 
 # Output folder
-GENERATED_ROOT = "data/generated_data_from_extracted_data"
+GENERATED_ROOT = "data/processed_dataset"
 OUTPUT_DATASET_DIR = os.path.join(GENERATED_ROOT, DATASET_NAME)
 OUTPUT_DIR = os.path.join(OUTPUT_DATASET_DIR, "lidar_refinement")
 

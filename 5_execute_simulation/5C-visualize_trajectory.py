@@ -6,7 +6,7 @@ Visualize hero trajectory as static ghost cars in CARLA.
 
 Reads map from:
 
-    data/generated_data_from_extracted_data/<BAG_NAME>/maps/map.xodr
+    data/processed_dataset/<BAG_NAME>/maps/map.xodr
 
 Reads trajectory from:
 
@@ -59,7 +59,7 @@ BAG_NAME = "reference_bag"
 MAP_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
-    "generated_data_from_extracted_data",
+    "processed_dataset",
     BAG_NAME,
     "maps",
 )

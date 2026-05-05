@@ -10,8 +10,8 @@ Combines:
 - 3D bounding box visualization overlays
 
 Input:
-- data/extracted_ros_data/<dataset_name>/images/
-- data/extracted_ros_data/<dataset_name>/images_positions.txt
+- data/raw_dataset/<dataset_name>/images/
+- data/raw_dataset/<dataset_name>/images_positions.txt
 """
 
 import os
@@ -39,18 +39,18 @@ from mmdet3d.structures import CameraInstance3DBoxes
 # CONFIGURATION
 # ==========================================
 
-# Dataset name must match the folder name inside data/extracted_ros_data/
+# Dataset name must match the folder name inside data/raw_dataset/
 DATASET_NAME = "reference_bag"
 
 # Input folder from step 1: ROS extraction
-EXTRACTED_ROOT = "data/extracted_ros_data"
+EXTRACTED_ROOT = "data/raw_dataset"
 DATASET_DIR = os.path.join(EXTRACTED_ROOT, DATASET_NAME)
 
 DATA_DIR = DATASET_DIR
 POSES_FILE = os.path.join(DATASET_DIR, "images_positions.txt")
 
 # Output folder for step 2: processed datasets
-PROCESSED_ROOT = "data/generated_data_from_extracted_data"
+PROCESSED_ROOT = "data/processed_dataset"
 OUTPUT_DATASET_DIR = os.path.join(PROCESSED_ROOT, DATASET_NAME)
 
 # All camera detection outputs are saved here

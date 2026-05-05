@@ -46,16 +46,16 @@ from utils.coordinates import (
 # CONFIGURATION
 # =======================
 
-# Dataset name must match the folder in data/extracted_ros_data/
+# Dataset name must match the folder in data/raw_dataset/
 DATASET_NAME = "reference_bag"
 
 # Map name must match the folder created by the map-download script.
 MAP_NAME = DATASET_NAME
 
 # Input/output roots.
-EXTRACTED_ROOT = os.path.join("data", "extracted_ros_data")
-GENERATED_ROOT = os.path.join("data", "generated_data_from_extracted_data")
-MAP_ROOT = os.path.join("data", "generated_data_from_extracted_data", MAP_NAME, "maps")
+EXTRACTED_ROOT = os.path.join("data", "raw_dataset")
+GENERATED_ROOT = os.path.join("data", "processed_dataset")
+MAP_ROOT = os.path.join("data", "processed_dataset", MAP_NAME, "maps")
 
 
 # Input files.

@@ -14,7 +14,7 @@ bag_path = Path('data/raw_ros_data/reference_bag.bag')
 topic = '/cmd/steering_target'
 
 bag_name = bag_path.stem
-dataset_dir = os.path.join(os.getcwd(), "data", "extracted_ros_data", bag_name)
+dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
 os.makedirs(dataset_dir, exist_ok=True)
 
 output_path = os.path.join(dataset_dir, "steering_predictions.txt")
