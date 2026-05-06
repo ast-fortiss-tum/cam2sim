@@ -42,7 +42,7 @@ TEMP_BIN_FILE = os.path.join(OUTPUT_DIR, "_temp_calc.bin")
 CONFIG_FILE = "2_process_datasets/utils/my_pointpillars_config.py"
 CHECKPOINT_FILE = (
     "2_process_datasets/utils/"
-    "hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth"
+    "hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class.pth"
 )
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
