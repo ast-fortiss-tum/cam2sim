@@ -7,12 +7,12 @@
 conda create -n repl python=3.10 
 conda activate repl  
 
-pip install -r requirements.txt
-
 pip install -U openmim
 mim install mmcv==2.1.0
 mim install mmdet==3.2.0
 mim install mmdet3d==1.4.0
+
+pip install -r requirements.txt
 ```
 
 ### dave2
