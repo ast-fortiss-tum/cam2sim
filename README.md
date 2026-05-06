@@ -185,6 +185,39 @@ sudo apt install colmap
 <details>
 <summary><code>1_extract_ROS_data</code></summary>
 
+---
+
+## Example ROS bag (optional)
+
+To run this pipeline without recording your own data, an example ROS bag(~6 GB) is provided on Google Drive. It corresponds to the dataset referenced as `reference_bag` throughout the pipeline.
+
+Make sure the `data_extraction` environment is active, then run:
+
+```bash
+conda activate data_extraction
+
+gdown 1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9 -O data/raw_ros_data/reference_bag.bag
+```
+
+Alternatively, download the file manually from this link and place it in `data/raw_ros_data/`:
+
+- Example bag: <https://drive.google.com/file/d/1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9/view?usp=sharing>
+
+After downloading, the folder should look like:
+
+```text
+data/raw_ros_data/
+└── reference_bag.bag
+```
+
+Verify the file:
+
+```bash
+ls -lh data/raw_ros_data/reference_bag.bag
+```
+
+If you use your own bag instead of the example one, update the `bag_path` value at the top of each script to point to it.
+
 # 1_extract_ROS_data
 
 This folder contains the first step of the data-processing pipeline.
