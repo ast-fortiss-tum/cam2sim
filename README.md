@@ -3,6 +3,7 @@
 ## Create conda env
 
 ### repl
+```bash
 conda create -n repl python=3.10 
 conda activate repl  
 
@@ -12,13 +13,35 @@ pip install -U openmim
 mim install mmcv==2.1.0
 mim install mmdet==3.2.0
 mim install mmdet3d==1.4.0
-### dave2
+```
 
+### dave2
+```bash
 conda create -n dave_2 python=3.8 
 conda activate dave_2 
 pip install tensorflow==2.13.1
 pip install pillow
 pip install opencv-python
+```
+
+### nerfstudio
+
+Used for COLMAP-based Gaussian Splatting training.
+
+```bash
+
+conda create -n nerfstudio python=3.10
+
+conda activate nerfstudio
+
+pip install -U pip setuptools wheel
+
+pip install nerfstudio
+
+sudo apt install colmap
+```
+
+# Detailed description and usage of each script
 
 <details>
 <summary><code>1_extract_ROS_data</code></summary>
@@ -1634,6 +1657,548 @@ python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py
 - The visualization scripts spawn temporary actors and clean them up when interrupted.
 - `3F_generate_carla_scenario.py` is designed to leave the prepared actors alive in CARLA and then exit.
 - If positions look slightly shifted in CARLA, check the offset constants in `utils/config.py` and the manual offset constants near the top of the visualization scripts.
+
+</details>
+
+<details>
+<summary><code>4_gaussian_splatting_preparation</code></summary>
+
+# 4_gaussian_splatting_preparation
+
+This folder contains the fourth step of the data-processing pipeline.
+
+The files in this folder prepare and train Gaussian Splatting models from the image splits created in step 2. The trained models are later used during simulation to render camera views that resemble the original real-world recording.
+
+This step uses the data produced by:
+
+```bash
+python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py
+```
+
+That script creates image splits, sky-mask splits, and filtered pose files under:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/
+```
+
+---
+
+## Purpose
+
+The goal of this step is to train one Gaussian Splatting model per route segment and compute the coordinate alignment needed to query the trained models from simulation.
+
+This step can produce:
+
+- COLMAP sparse reconstructions for each image split
+- One Nerfstudio / Gaussian Splatting model per split
+- A transform from dataset coordinates to Nerfstudio coordinates
+- Model outputs used later for GS-rendered simulation views
+
+---
+
+## Expected project structure
+
+```text
+project_root/
+├── 4_gaussian_splatting_preparation/
+│   ├── 4A_colmap_guide.md
+│   ├── 4B_train_gaussian_splatting.sh
+│   └── 4C_utm_yaw_to_nerfstudio.py
+│
+├── data/
+│   └── data_for_gaussian_splatting/
+│       └── <bag_name>/
+│           ├── images_gs_split_1_1_of_<FRAME_SKIP>/
+│           ├── sky_masks_gs_split_1_1_of_<FRAME_SKIP>/
+│           ├── frame_positions_split_1_1_of_<FRAME_SKIP>.txt
+│           ├── images_gs_split_2_1_of_<FRAME_SKIP>/
+│           ├── sky_masks_gs_split_2_1_of_<FRAME_SKIP>/
+│           ├── frame_positions_split_2_1_of_<FRAME_SKIP>.txt
+│           ├── images_gs_split_3_1_of_<FRAME_SKIP>/
+│           ├── sky_masks_gs_split_3_1_of_<FRAME_SKIP>/
+│           ├── frame_positions_split_3_1_of_<FRAME_SKIP>.txt
+│           ├── colmap/
+│           │   ├── database_split_1.db
+│           │   ├── database_split_2.db
+│           │   ├── database_split_3.db
+│           │   ├── split_1/
+│           │   │   └── sparse/
+│           │   │       └── 0/
+│           │   │           ├── cameras.bin
+│           │   │           ├── images.bin
+│           │   │           └── points3D.bin
+│           │   ├── split_2/
+│           │   │   └── sparse/
+│           │   │       └── 0/
+│           │   │           ├── cameras.bin
+│           │   │           ├── images.bin
+│           │   │           └── points3D.bin
+│           │   └── split_3/
+│           │       └── sparse/
+│           │           └── 0/
+│           │               ├── cameras.bin
+│           │               ├── images.bin
+│           │               └── points3D.bin
+│           └── outputs/
+│               ├── split_1/
+│               ├── split_2/
+│               └── split_3/
+```
+
+The number of splits depends on the configuration used in step 2.
+
+---
+
+## Requirements
+
+Use the existing Conda environment named `nerfstudio`.
+
+Activate it before running the training or alignment scripts:
+
+```bash
+conda activate nerfstudio
+```
+
+This step requires:
+
+- `nerfstudio`
+- `torch`
+- `numpy`
+- `COLMAP`
+- A CUDA-capable GPU for practical training
+
+Check that Nerfstudio is available with:
+
+```bash
+ns-train --help
+```
+
+Check that COLMAP is available with:
+
+```bash
+colmap -h
+```
+
+To open the COLMAP graphical interface, run:
+
+```bash
+colmap gui
+```
+
+---
+
+## Input from step 2
+
+Before running this step, make sure step 2 has produced the Gaussian Splatting input data:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/
+├── images_gs_split_1_1_of_<FRAME_SKIP>/
+├── sky_masks_gs_split_1_1_of_<FRAME_SKIP>/
+├── frame_positions_split_1_1_of_<FRAME_SKIP>.txt
+├── images_gs_split_2_1_of_<FRAME_SKIP>/
+├── sky_masks_gs_split_2_1_of_<FRAME_SKIP>/
+├── frame_positions_split_2_1_of_<FRAME_SKIP>.txt
+├── images_gs_split_3_1_of_<FRAME_SKIP>/
+├── sky_masks_gs_split_3_1_of_<FRAME_SKIP>/
+└── frame_positions_split_3_1_of_<FRAME_SKIP>.txt
+```
+
+If these folders do not exist, run:
+
+```bash
+python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py
+```
+
+---
+
+## Configuration
+
+The training script has a configuration section near the top:
+
+```bash
+BAG_NAME="reference_bag"
+NUM_SPLITS=3
+FRAME_SKIP=3
+METHOD="splatfacto"
+CONDA_ENV="nerfstudio"
+```
+
+Set `BAG_NAME` to the dataset name under:
+
+```text
+data/data_for_gaussian_splatting/
+```
+
+Set `NUM_SPLITS` and `FRAME_SKIP` to match the values used in step 2.
+
+For Gaussian Splatting, use:
+
+```bash
+METHOD="splatfacto"
+```
+
+or, for a larger model:
+
+```bash
+METHOD="splatfacto-big"
+```
+
+---
+
+## Files
+
+### 4A_colmap_guide.md
+
+Guide for manually running COLMAP reconstruction for each image split.
+
+COLMAP must be run once for each split produced by step 2. For example, if step 2 was configured with:
+
+```bash
+NUM_SPLITS=3
+FRAME_SKIP=3
+```
+
+then the Gaussian Splatting data folder contains:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/
+├── images_gs_split_1_1_of_3/
+├── sky_masks_gs_split_1_1_of_3/
+├── images_gs_split_2_1_of_3/
+├── sky_masks_gs_split_2_1_of_3/
+├── images_gs_split_3_1_of_3/
+└── sky_masks_gs_split_3_1_of_3/
+```
+
+For each split, follow the procedure below.
+
+#### Step 1: Open COLMAP
+
+Run:
+
+```bash
+colmap gui
+```
+
+#### Step 2: Create a new COLMAP project
+
+In the COLMAP GUI:
+
+```text
+File -> New Project
+```
+
+Create a new database for the current split.
+
+Example for split 1:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/colmap/database_split_1.db
+```
+
+Then select the image folder of the current split.
+
+Example for split 1:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/images_gs_split_1_1_of_3
+```
+
+Use the same naming pattern for the other splits:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/colmap/database_split_2.db
+data/data_for_gaussian_splatting/reference_bag/images_gs_split_2_1_of_3
+
+data/data_for_gaussian_splatting/reference_bag/colmap/database_split_3.db
+data/data_for_gaussian_splatting/reference_bag/images_gs_split_3_1_of_3
+```
+
+#### Step 3: Run feature extraction
+
+In the COLMAP GUI, go to:
+
+```text
+Processing -> Feature Extraction
+```
+
+Use the camera model:
+
+```text
+OPENCV
+```
+
+Enable:
+
+```text
+Single camera
+```
+
+Set the camera parameters according to the dataset calibration.
+
+The COLMAP `OPENCV` camera parameter order is:
+
+```text
+fx, fy, cx, cy, k1, k2, p1, p2
+```
+
+For the front narrow camera, use:
+
+```text
+785.34926249, 784.07587341, 406.50794975, 249.45341029, -0.42020115, 0.64296938, -0.00531934, -0.00215015
+```
+
+Optional but recommended: select the sky-mask folder for the same split.
+
+Example for split 1:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/sky_masks_gs_split_1_1_of_3
+```
+
+Then run feature extraction.
+
+#### Step 4: Run feature matching
+
+In the COLMAP GUI, go to:
+
+```text
+Processing -> Feature Matching
+```
+
+Select:
+
+```text
+Sequential matching
+```
+
+Set:
+
+```text
+Sequential overlap: 10
+```
+
+Then run matching.
+
+#### Step 5: Configure reconstruction options
+
+In the COLMAP GUI, go to:
+
+```text
+Reconstruction -> Reconstruction Options
+```
+
+Open the `Bundle Adjustment` options.
+
+To keep the calibrated camera parameters fixed, disable intrinsic refinement options such as:
+
+```text
+Refine focal length
+Refine principal point
+Refine extra parameters
+```
+
+Then start reconstruction:
+
+```text
+Reconstruction -> Start Reconstruction
+```
+
+Wait until COLMAP finishes.
+
+#### Step 6: Export the sparse model
+
+After reconstruction finishes, export the sparse model for the current split into the matching split folder.
+
+Use this export layout:
+
+```text
+Split 1 -> data/data_for_gaussian_splatting/reference_bag/colmap/split_1/sparse/0
+Split 2 -> data/data_for_gaussian_splatting/reference_bag/colmap/split_2/sparse/0
+Split 3 -> data/data_for_gaussian_splatting/reference_bag/colmap/split_3/sparse/0
+```
+
+Each exported sparse model folder must contain:
+
+```text
+cameras.bin
+images.bin
+points3D.bin
+```
+
+Example for split 1:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/colmap/split_1/sparse/0/
+├── cameras.bin
+├── images.bin
+└── points3D.bin
+```
+
+#### Step 7: Repeat for every split
+
+Repeat the full COLMAP procedure for each split.
+
+At the end, the expected folder structure is:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/
+├── images_gs_split_1_1_of_3/
+├── images_gs_split_2_1_of_3/
+├── images_gs_split_3_1_of_3/
+├── frame_positions_split_1_1_of_3.txt
+├── frame_positions_split_2_1_of_3.txt
+├── frame_positions_split_3_1_of_3.txt
+└── colmap/
+    ├── split_1/
+    │   └── sparse/
+    │       └── 0/
+    │           ├── cameras.bin
+    │           ├── images.bin
+    │           └── points3D.bin
+    ├── split_2/
+    │   └── sparse/
+    │       └── 0/
+    │           ├── cameras.bin
+    │           ├── images.bin
+    │           └── points3D.bin
+    └── split_3/
+        └── sparse/
+            └── 0/
+                ├── cameras.bin
+                ├── images.bin
+                └── points3D.bin
+```
+
+---
+
+### 4B_train_gaussian_splatting.sh
+
+Trains one Nerfstudio model per split.
+
+Run:
+
+```bash
+bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
+```
+
+For each split, the script checks that the COLMAP reconstruction exists:
+
+```text
+colmap/split_<N>/sparse/0/cameras.bin
+colmap/split_<N>/sparse/0/images.bin
+colmap/split_<N>/sparse/0/points3D.bin
+```
+
+It then runs `ns-train` using:
+
+- the split image folder
+- the split sky-mask folder, if available
+- the split COLMAP reconstruction
+
+Outputs are written to:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/outputs/
+```
+
+Example output folders:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/outputs/split_1/
+data/data_for_gaussian_splatting/<bag_name>/outputs/split_2/
+data/data_for_gaussian_splatting/<bag_name>/outputs/split_3/
+```
+
+If one split is missing a reconstruction, the script skips it and continues with the remaining splits.
+
+---
+
+### 4C_utm_yaw_to_nerfstudio.py
+
+Computes the alignment between the dataset coordinate system and the trained Nerfstudio model coordinate system.
+
+This is needed because Nerfstudio applies internal transformations to the COLMAP reconstruction, including centering, scaling, and axis changes. Therefore, raw dataset coordinates cannot be used directly to query the trained GS model.
+
+The script:
+
+1. Loads a trained Nerfstudio model from its `config.yml`.
+2. Extracts the camera poses used internally by Nerfstudio.
+3. Matches those camera poses with the original frame-position file.
+4. Computes a 2D similarity transform from dataset coordinates to Nerfstudio coordinates.
+5. Computes the yaw mapping between dataset yaw and Nerfstudio yaw.
+6. Saves the transform as a JSON file for later inference.
+
+Example run:
+
+```bash
+python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
+  --gs_config data/data_for_gaussian_splatting/reference_bag/outputs/split_1/<run_name>/config.yml \
+  --utm_file data/data_for_gaussian_splatting/reference_bag/frame_positions_split_1_1_of_3.txt \
+  --data_root data/data_for_gaussian_splatting/reference_bag \
+  --output data/data_for_gaussian_splatting/reference_bag/outputs/split_1/utm_to_nerfstudio_transform.json
+```
+
+The output JSON contains:
+
+- scale
+- rotation
+- translation
+- yaw sign and yaw offset
+- camera pitch and roll estimates
+- matching and alignment error statistics
+
+This file is used later to convert simulation poses into the coordinate system expected by the GS renderer.
+
+---
+
+## Suggested execution order
+
+A typical workflow is:
+
+```bash
+# 1. Prepare GS image splits in step 2
+python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py
+
+# 2. Run COLMAP once for each split
+# Follow the COLMAP instructions above.
+
+# 3. Train one GS model per split
+bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
+
+# 4. Compute dataset-to-Nerfstudio alignment for each trained split
+python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
+  --gs_config <path_to_split_config.yml> \
+  --utm_file <path_to_frame_positions_split.txt> \
+  --data_root data/data_for_gaussian_splatting/<bag_name> \
+  --output <path_to_output_transform.json>
+```
+
+---
+
+## Output files summary
+
+| File / script | Main output |
+|---|---|
+| `4A_colmap_guide.md` | COLMAP sparse reconstructions under `colmap/split_<N>/sparse/0/` |
+| `4B_train_gaussian_splatting.sh` | Trained Nerfstudio / GS models under `outputs/` |
+| `4C_utm_yaw_to_nerfstudio.py` | `utm_to_nerfstudio_transform.json` alignment files |
+
+---
+
+## Notes
+
+- COLMAP must be run once per split before training.
+- The COLMAP export folder for each split must contain `cameras.bin`, `images.bin`, and `points3D.bin`.
+- The values of `BAG_NAME`, `NUM_SPLITS`, and `FRAME_SKIP` in `4B_train_gaussian_splatting.sh` must match the output produced by step 2.
+- Use `METHOD="splatfacto"` or `METHOD="splatfacto-big"` for Gaussian Splatting.
+- Sky masks are optional, but recommended because they prevent sky regions from influencing the reconstruction.
+- The front narrow camera parameters shown above are dataset-specific. Replace them if using another camera.
+- Keep COLMAP intrinsic refinement disabled if you want to preserve the calibrated camera parameters.
+- The alignment script should be run after training, because it loads the final Nerfstudio model coordinate system.
+- One alignment file should be generated for each trained split.
+- The trained GS models and alignment files are used by the simulation step to render camera observations from simulated poses.
 
 </details>
 
