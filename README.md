@@ -5,6 +5,8 @@ To run this pipeline you need:
 1. **Conda** (Miniconda or Anaconda) — used to manage the Python environments.
 2. **CARLA 0.9.15** — used by stages 3 and 5.
 3. **NVIDIA GPU** with a driver supporting CUDA 11.8 or higher.
+4. **Nerfstudio** — used by stages 4 and 5 (Gaussian Splatting training and rendering). Installing Nerfstudio also creates the `nerfstudio` Conda environment used by this pipeline.
+5. **COLMAP** — used by stage 4 (sparse reconstruction before Gaussian Splatting training).
 
 ## Install Conda
 
@@ -36,6 +38,45 @@ and edit:
 CARLA_INSTALLATION_PATH = "/absolute/path/to/CARLA_0.9.15"
 ```
 
+## Install Nerfstudio
+
+Stages 4 and 5 of this pipeline use Nerfstudio to train Gaussian Splatting models and to render views from them at simulation time. Follow the official installation guide:
+
+- Nerfstudio installation: <https://docs.nerf.studio/quickstart/installation.html>
+
+The guide walks you through creating a dedicated Conda environment (named `nerfstudio` by default) with the correct CUDA toolkit, PyTorch, `tinycudann`, `gsplat`, and Nerfstudio itself. Use the default environment name so the rest of this pipeline can find it.
+
+After installation, verify the environment exists and works:
+
+```bash
+conda activate nerfstudio
+ns-train --help
+```
+
+If `ns-train --help` prints the usage banner, the environment is ready.
+
+> Splatfacto (the Gaussian Splatting model used in this pipeline) requires a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer). Older GPUs are not supported by `gsplat`.
+
+## Install COLMAP
+
+Stage 4 uses COLMAP to compute a sparse reconstruction of the recorded images before Gaussian Splatting training.
+
+Install COLMAP following the official guide:
+
+- COLMAP installation: <https://colmap.github.io/install.html>
+
+On Ubuntu, COLMAP is also available from the package manager:
+
+```bash
+sudo apt install colmap
+```
+
+After installation, verify:
+
+```bash
+colmap -h
+```
+
 ## Clone the repository
 
 ```bash
@@ -49,7 +90,7 @@ All commands below assume the project root is the current directory.
 
 ## Conda environments
 
-This pipeline uses two separate Conda environments. Each one isolates dependencies that would otherwise conflict.
+This pipeline uses three separate Conda environments. Each one isolates dependencies that would otherwise conflict.
 
 ### `data_extraction` (main environment)
 
@@ -107,14 +148,17 @@ pip install pillow
 pip install opencv-python
 ```
 
-### `nerfstudio` (Gaussian Splatting / Nerfstudio training)
+### `nerfstudio` (Gaussian Splatting / Nerfstudio training and rendering)
 
-Used by stage 4.
+Used by stage 4 (training Gaussian Splatting models) and by the GS-based scripts in stage 5 (`5C_trajectory_replay.py` and `5D_dave2.py`), which load the trained models and render new views with `gsplat`.
 
-Setup instructions for this environment are provided in section 4.
+This environment is **already created** by the Nerfstudio installation step above. There is no separate `conda create` command for it. As long as you followed the official Nerfstudio installation guide and kept the default environment name, you can use it directly:
+
+```bash
+conda activate nerfstudio
+```
 
 ---
-
 ## Download pretrained model checkpoints
 
 Stage 2 uses two pretrained 3D detection models that are too large to ship inside the Git repository:
