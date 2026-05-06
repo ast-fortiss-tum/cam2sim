@@ -142,46 +142,6 @@ Verify that both files exist:
 ls -lh 2_process_datasets/utils/fcos3d.pth \
        2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
 ```
-## Create conda env
-
-### repl
-```bash
-conda create -n repl python=3.10 
-conda activate repl  
-
-pip install -r requirements.txt
-
-pip install -U openmim
-mim install mmcv==2.1.0
-mim install mmdet==3.2.0
-mim install mmdet3d==1.4.0
-```
-
-### dave2
-```bash
-conda create -n dave_2 python=3.8 
-conda activate dave_2 
-pip install tensorflow==2.13.1
-pip install pillow
-pip install opencv-python
-```
-
-### nerfstudio
-
-Used for COLMAP-based Gaussian Splatting training.
-
-```bash
-
-conda create -n nerfstudio python=3.10
-
-conda activate nerfstudio
-
-pip install -U pip setuptools wheel
-
-pip install nerfstudio
-
-sudo apt install colmap
-```
 
 # Detailed description and usage of each script
 
