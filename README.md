@@ -2542,3 +2542,496 @@ python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
 
 </details>
 
+<details>
+<summary><code>5_execute_simulation</code></summary>
+
+# 5_execute_simulation
+
+This folder contains the fifth and final step of the data-processing pipeline.
+
+The scripts in this folder execute different kinds of simulation runs inside CARLA, using the data prepared in steps 1–4. Each script is **independent** and corresponds to a different experiment:
+
+- Replay the recorded trajectory in CARLA (no model)
+- Run the DAVE-2 self-driving model with raw CARLA images
+- Replay the recorded trajectory in CARLA + Gaussian Splatting side by side
+- Run the DAVE-2 self-driving model on Gaussian-Splatted views
+
+The scripts are not alternatives to each other — they answer different questions, and you may run any subset depending on what you want to evaluate.
+
+Each script is intended to be run from the project root:
+
+```bash
+python 5_execute_simulation/<script_name>.py
+```
+
+For example:
+
+```bash
+python 5_execute_simulation/5A_trajectory_only_carla.py
+```
+
+---
+
+## Purpose
+
+The goal of this step is to execute the prepared CARLA scenario in different configurations and to record the resulting sensor data, vehicle trajectories, and steering predictions.
+
+The scripts can produce or use:
+
+- A frame-by-frame replay of the recorded ego-vehicle trajectory inside CARLA
+- A closed-loop DAVE-2 driving run on raw CARLA RGB images
+- A frame-by-frame replay with side-by-side CARLA and Gaussian Splatting renders
+- A closed-loop DAVE-2 driving run on Gaussian-Splatted views
+
+---
+
+## Expected project structure
+
+```text
+project_root/
+├── 5_execute_simulation/
+│   ├── 5A_trajectory_only_carla.py
+│   ├── 5B_dave2_only_carla.py
+│   ├── 5C_trajectory_replay.py
+│   ├── 5D_dave2.py
+│   └── utils/
+│       ├── carla_simulator.py
+│       ├── config.py
+│       ├── dave2_connection.py
+│       └── other helper files
+│
+├── system_under_test/
+│   ├── communicator.py
+│   ├── dave2.py
+│   ├── final.h5            (DAVE-2 model weights, see below)
+│   └── OPTIONAL.txt
+│
+├── data/
+│   ├── data_for_carla/
+│   │   └── <bag_name>/
+│   │       ├── camera.json
+│   │       ├── trajectory_positions_rear_odom_yaw.json
+│   │       ├── vehicle_data.json
+│   │       └── drive_results/      (created by 5D)
+│   │
+│   ├── data_for_gaussian_splatting/
+│   │   └── <bag_name>/
+│   │       └── outputs/
+│   │           └── splatfacto_split_<N>/splatfacto/<timestamp>/
+│   │               ├── config.yml
+│   │               └── utm_to_nerfstudio_transform.json
+│   │
+│   └── processed_dataset/
+│       └── <bag_name>/
+│           ├── carla_replay_dataset/   (created by 5A)
+│           ├── dave2_runs/             (created by 5B)
+│           └── maps/
+│               └── map.xodr
+```
+
+---
+
+## Requirements
+
+The Conda environment to use depends on the script:
+
+| Script | Conda environment | Why |
+|---|---|---|
+| `5A_trajectory_only_carla.py` | `data_extraction` | CARLA only, no GS rendering |
+| `5B_dave2_only_carla.py` | `data_extraction` | CARLA only, talks to a separate DAVE-2 server |
+| `5C_trajectory_replay.py` | `nerfstudio` | Renders Gaussian Splatting models with `gsplat` |
+| `5D_dave2.py` | `nerfstudio` | Renders Gaussian Splatting models with `gsplat`, talks to DAVE-2 server |
+| DAVE-2 server (`system_under_test/communicator.py`) | `dave_2` | Loads TensorFlow 2.13 + DAVE-2 model |
+
+> The `nerfstudio` environment is required for any script that loads a `splatfacto` model, because Gaussian Splatting rasterization depends on `gsplat`, which is a CUDA extension installed in that environment. Splatfacto models also require a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer).
+
+Always activate the correct environment before running a script:
+
+```bash
+conda activate <environment>
+```
+
+---
+
+## Common prerequisites for all scripts
+
+Before running any script in this folder, you need:
+
+1. **CARLA server running**, listening on the IP/port set in `5_execute_simulation/utils/config.py` (defaults: `127.0.0.1:2000`).
+
+2. **The CARLA scenario already prepared** by step 3, that is, you must have run:
+
+```bash
+   python 3_generate_simulation_data/3F_generate_carla_scenario.py
+```
+
+   This script loads the OpenDRIVE map, spawns the parked vehicles and the hero vehicle, and leaves them alive in the CARLA world. All scripts in step 5 reuse the existing hero vehicle and do not load the map themselves.
+
+3. **The data files referenced by the scripts**:
+   - `data/processed_dataset/<bag_name>/maps/map.xodr`
+   - `data/data_for_carla/<bag_name>/camera.json`
+   - `data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json`
+   - `data/data_for_carla/<bag_name>/vehicle_data.json`
+
+4. For Gaussian-Splatting scripts (`5C`, `5D`) only, you also need:
+   - One trained `splatfacto_split_<N>/splatfacto/<timestamp>/config.yml` per split
+   - One `utm_to_nerfstudio_transform.json` next to each `config.yml`
+   - One `frame_positions_split_<N>_1_of_<FRAME_SKIP>.txt` in `data/data_for_gaussian_splatting/<bag_name>/`
+
+   These are produced by step 4.
+
+5. For DAVE-2 scripts (`5B`, `5D`) only, you also need the **DAVE-2 server running** (see "Starting the DAVE-2 server" below).
+
+---
+
+## Configuration
+
+Each script has a configuration section near the top.
+
+The most important value is the bag name:
+
+```python
+BAG_NAME = "reference_bag"
+```
+
+This must match the dataset folder used by the previous steps. Other typical values include the camera resolution, the drive speed, the maximum number of frames, and termination thresholds.
+
+`5_execute_simulation/utils/config.py` contains shared settings such as:
+
+```python
+CARLA_IP = "127.0.0.1"
+CARLA_PORT = 2000
+HERO_VEHICLE_TYPE = "vehicle.tesla.model3"
+ROTATION_DEGREES
+```
+
+---
+
+## Starting the DAVE-2 server
+
+Scripts `5B_dave2_only_carla.py` and `5D_dave2.py` rely on a separate **DAVE-2 inference server** that listens on a TCP socket. The server runs in its own Conda environment (`dave_2`), because TensorFlow 2.13 requires Python 3.8 and conflicts with the `data_extraction` and `nerfstudio` environments.
+
+The server lives in:
+
+```text
+project_root/
+└── system_under_test/
+    ├── communicator.py
+    ├── dave2.py
+    └── final.h5            (model weights, must be downloaded)
+```
+
+### Step 1: download the DAVE-2 model
+
+The model weights file `final.h5` is not shipped in this repository (~50 MB).
+
+Make sure the `data_extraction` environment is active (so `gdown` is available), then run:
+
+```bash
+conda activate data_extraction
+pip install -U gdown   # only if not already installed
+
+cd system_under_test
+
+gdown 1_pJHuvU4386FOYrF_B0ETIZGmShObhIF -O final.h5
+
+cd ..
+```
+
+Alternatively, download the file manually from this link and place it in `system_under_test/`:
+
+- DAVE-2 weights: <https://drive.google.com/file/d/1_pJHuvU4386FOYrF_B0ETIZGmShObhIF/view?usp=sharing>
+
+Verify:
+
+```bash
+ls -lh system_under_test/final.h5
+```
+
+### Step 2: start the server
+
+In a **separate terminal**, activate the `dave_2` environment (TensorFlow 2.13 + Python 3.8, defined in the install guide):
+
+```bash
+conda activate dave_2
+cd system_under_test
+python communicator.py
+```
+
+When the server is ready, it prints:
+
+```text
+🚗 Dave2 server listening on localhost:5090
+```
+
+Leave this terminal open during the entire `5B` or `5D` run. The CARLA-side scripts in step 5 connect automatically to `localhost:5090` using `utils/dave2_connection.py`.
+
+To stop the server, press `Ctrl+C` in its terminal.
+
+---
+
+## Scripts
+
+### 5A_trajectory_only_carla.py
+
+Replays the recorded ego-vehicle trajectory inside CARLA, frame by frame, and saves CARLA RGB, semantic, and instance segmentation images.
+
+The script does **not** load the map and does **not** drive the car: it teleports the hero vehicle along the recorded trajectory, ticks the world, and records sensor outputs.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/maps/map.xodr      (loaded by 3F)
+data/data_for_carla/<bag_name>/camera.json
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+```
+
+Output:
+
+```text
+data/processed_dataset/<bag_name>/carla_replay_dataset/
+├── rgb/
+├── semantic/
+├── instance/
+└── data/
+    └── all_frame_data.json
+```
+
+Run:
+
+```bash
+conda activate data_extraction
+python 5_execute_simulation/5A_trajectory_only_carla.py
+```
+
+This script is the simplest one and is useful as a sanity check that the prepared CARLA scenario, the camera configuration, and the trajectory are all consistent.
+
+---
+
+### 5B_dave2_only_carla.py
+
+Runs a closed-loop DAVE-2 driving session inside CARLA using **raw CARLA RGB images** as the input to DAVE-2 (no Gaussian Splatting).
+
+The script teleports the hero vehicle to the start of the recorded trajectory, applies a stabilization sequence and a launch warmup to the vehicle physics, and then enters a closed-loop control loop where every camera frame is sent to the DAVE-2 server, the predicted steering is applied to the vehicle, and the vehicle keeps moving forward at a constant speed (`DRIVE_SPEED_KMH = 10.0` by default).
+
+Termination conditions:
+
+- Maximum frame count reached (`MAX_FRAMES`)
+- Vehicle falls below `MIN_Z_THRESHOLD`
+- Vehicle moves less than `STUCK_THRESHOLD` for `STUCK_FRAME_LIMIT` consecutive frames
+- User presses `Q` or closes the pygame window
+
+Default input:
+
+```text
+data/data_for_carla/<bag_name>/camera.json
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+```
+
+Output:
+
+```text
+data/processed_dataset/<bag_name>/dave2_runs/only_carla_run<RUN_NUMBER>/
+├── rgb/
+├── semantic/
+├── instance/
+├── depth/
+└── data/
+    └── trajectory.json
+```
+
+Run, in **two separate terminals**:
+
+Terminal 1 (DAVE-2 server):
+
+```bash
+conda activate dave_2
+cd system_under_test
+python communicator.py
+```
+
+Terminal 2 (driving script):
+
+```bash
+conda activate data_extraction
+python 5_execute_simulation/5B_dave2_only_carla.py
+```
+
+This script is useful as the **baseline DAVE-2 closed-loop run** without any neural rendering between the simulator and the model.
+
+---
+
+### 5C_trajectory_replay.py
+
+Replays the recorded ego-vehicle trajectory inside CARLA and, in parallel, renders the same poses through one or more trained Gaussian Splatting models. The result is a side-by-side video of CARLA versus GS for every frame of the trajectory.
+
+This script does **not** drive the car and does **not** use DAVE-2: it teleports the hero vehicle along the recorded trajectory and samples both CARLA and the GS renderer at every step.
+
+Two phases:
+
+- **Phase 1 — calibration GUI** (4 panels: CARLA, GS free camera, original training image, GS rendered from the same training pose). Sliders allow per-split position and orientation offsets to be applied. Skip with `--skip_calibration`.
+- **Phase 2 — replay**: the script teleports along the trajectory and saves CARLA frames, GS frames, and side-by-side combined frames.
+
+Splits and trained models are auto-detected from:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/outputs/splatfacto_split_<N>/splatfacto/<timestamp>/config.yml
+```
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/maps/map.xodr
+data/data_for_carla/<bag_name>/camera.json
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+data/data_for_gaussian_splatting/<bag_name>/outputs/splatfacto_split_<N>/splatfacto/<timestamp>/config.yml
+data/data_for_gaussian_splatting/<bag_name>/outputs/splatfacto_split_<N>/splatfacto/<timestamp>/utm_to_nerfstudio_transform.json
+data/data_for_gaussian_splatting/<bag_name>/frame_positions_split_<N>_1_of_<FRAME_SKIP>.txt
+```
+
+Output:
+
+```text
+data/data_for_carla/<bag_name>/replay_results/<bag_name>_replay/
+├── carla/
+├── gs/
+└── combined/
+```
+
+Run:
+
+```bash
+conda activate nerfstudio
+python 5_execute_simulation/5C_trajectory_replay.py
+```
+
+Useful CLI arguments:
+
+| Argument | Effect |
+|---|---|
+| `--only_split N` | Load only split `N` (useful with limited VRAM) |
+| `--skip_calibration` | Skip Phase 1 and use auto-computed offsets |
+| `--max_frames N` | Stop after `N` frames |
+| `--no_save` | Disable frame saving |
+| `--only_carla` | Run without GS (CARLA-only replay) |
+
+This script is the right choice to **compare CARLA against GS visually**, frame by frame, on the recorded trajectory.
+
+---
+
+### 5D_dave2.py
+
+Runs a closed-loop DAVE-2 driving session inside CARLA, but DAVE-2 receives **Gaussian-Splatted views** instead of raw CARLA frames.
+
+Two phases:
+
+- **Phase 1 — calibration GUI**: the same 4-panel calibration used by `5C` is run once per split, so that the GS coordinate frames are correctly aligned with CARLA before driving starts. Skip with `--skip_calibration`.
+- **Phase 2 — closed-loop drive**: the hero vehicle is teleported to the first training camera, then stabilized (physics off → on with 10-tick settle) and given a 100-tick warmup launch (`LAUNCH_SPEED_KMH = 12.0`) to overcome ackermann startup inertia. After warmup, every CARLA pose is rendered through the active GS split, the rendered image is sent to the DAVE-2 server, and the predicted steering is applied to the vehicle.
+
+When several splits are loaded, the script automatically switches to the split whose training cameras' centroid is closest in nerfstudio space, with a `SWITCH_DELAY` of 50 frames to avoid rapid flicker between splits.
+
+Termination conditions:
+
+- Maximum frame count reached (`--max_frames`)
+- Vehicle falls below `MIN_Z_THRESHOLD`
+- Vehicle moves less than `STUCK_THRESHOLD` for `STUCK_FRAME_LIMIT` consecutive frames
+- Vehicle out of training coverage for `COVERAGE_FRAME_LIMIT` consecutive frames
+- User presses `Q` or closes the pygame window
+
+Default input: same as `5C`, plus a running DAVE-2 server.
+
+Output:
+
+```text
+data/data_for_carla/<bag_name>/drive_results/<bag_name>_drive_<timestamp>/
+├── rgb_gt/
+├── generated_gs/
+└── trajectory.json
+```
+
+Run, in **two separate terminals**:
+
+Terminal 1 (DAVE-2 server):
+
+```bash
+conda activate dave_2
+cd system_under_test
+python communicator.py
+```
+
+Terminal 2 (driving script):
+
+```bash
+conda activate nerfstudio
+python 5_execute_simulation/5D_dave2.py
+```
+
+Useful CLI arguments:
+
+| Argument | Effect |
+|---|---|
+| `--only_split N` | Load only split `N` (useful with limited VRAM) |
+| `--skip_calibration` | Skip Phase 1 and use auto-computed offsets |
+| `--max_frames N` | Stop after `N` frames |
+| `--no_save` | Disable frame saving |
+| `--only_carla` | Fall back to raw CARLA images (equivalent to `5B`) |
+
+This script is the **main experiment** of the pipeline: it answers whether a self-driving model trained on real images can drive in a CARLA scenario when the input is reconstructed from the same real images via Gaussian Splatting.
+
+---
+
+## Suggested execution order
+
+The four scripts are **independent** and serve different purposes. Run any subset depending on what you want to measure.
+
+If you want to run all of them in turn (each preceded by a fresh `3F` to reset the world):
+
+```bash
+# Common prerequisite: CARLA running + scenario prepared
+python 3_generate_simulation_data/3F_generate_carla_scenario.py
+
+# Trajectory replay in CARLA only
+conda activate data_extraction
+python 5_execute_simulation/5A_trajectory_only_carla.py
+
+# DAVE-2 closed-loop on raw CARLA images
+# (DAVE-2 server must be running in another terminal)
+python 5_execute_simulation/5B_dave2_only_carla.py
+
+# Trajectory replay with CARLA + GS side by side
+conda activate nerfstudio
+python 5_execute_simulation/5C_trajectory_replay.py
+
+# DAVE-2 closed-loop on GS-rendered views
+# (DAVE-2 server must be running in another terminal)
+python 5_execute_simulation/5D_dave2.py
+```
+
+If a previous run left the world in a strange state (vehicles destroyed, sensors leaked, etc.), re-run `3F_generate_carla_scenario.py` to restore a clean scenario before launching the next script.
+
+---
+
+## Output files summary
+
+| Script | Main output |
+|---|---|
+| `5A_trajectory_only_carla.py` | `data/processed_dataset/<bag_name>/carla_replay_dataset/{rgb,semantic,instance}/`, `data/all_frame_data.json` |
+| `5B_dave2_only_carla.py` | `data/processed_dataset/<bag_name>/dave2_runs/only_carla_run<RUN_NUMBER>/{rgb,semantic,instance,depth}/`, `data/trajectory.json` |
+| `5C_trajectory_replay.py` | `data/data_for_carla/<bag_name>/replay_results/<bag_name>_replay/{carla,gs,combined}/` |
+| `5D_dave2.py` | `data/data_for_carla/<bag_name>/drive_results/<bag_name>_drive_<timestamp>/{rgb_gt,generated_gs}/`, `trajectory.json` |
+
+---
+
+## Notes
+
+- All four scripts are **independent**. They are not alternatives to each other and you can run any subset.
+- All four scripts require CARLA running and the scenario prepared by `3F_generate_carla_scenario.py`. They reuse the existing hero vehicle and do not load the map themselves.
+- Scripts that use Gaussian Splatting (`5C`, `5D`) must be run from the `nerfstudio` environment because `gsplat` is only installed there.
+- Scripts that use DAVE-2 (`5B`, `5D`) require the DAVE-2 server (`system_under_test/communicator.py`) to be running in a separate terminal, in the `dave_2` environment, with `final.h5` present.
+- The `final.h5` model weights file must be obtained separately and placed inside `system_under_test/`. The DAVE-2 server will fail to start otherwise.
+- `5B` and `5D` use a stabilization sequence and a 100-tick launch warmup before the closed-loop drive starts. This is required to overcome the ackermann controller's startup inertia after teleporting the hero vehicle. Without the warmup, the stuck-detector trips around frame 50 and the run ends prematurely.
+- `5D` spawns the hero vehicle using the road waypoint z (`waypoint.z + 0.10`) instead of the raw trajectory z, because the trajectory's z is the LiDAR/base_link altitude and tends to be a few centimeters below the CARLA road mesh. Spawning at the raw z makes physics expel the car upward, which prevents it from driving forward.
+- All four scripts honor `--max_frames` (or `MAX_FRAMES` in the configuration section) to limit how long they run, which is useful for quick smoke tests.
+- After running `3F_generate_carla_scenario.py`, the parked vehicles and hero remain alive in CARLA between step-5 scripts, so you can launch them back-to-back without re-running `3F` every time.
+
+</details>
