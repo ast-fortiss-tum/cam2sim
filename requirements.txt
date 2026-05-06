@@ -1,0 +1,44 @@
+pip
+setuptools
+wheel
+
+# torch (CUDA 11.8)
+torch==2.1.0+cu118
+torchvision==0.16.0+cu118
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+# scientific stack
+numpy==1.26.4
+scipy==1.15.3
+pandas==2.3.3
+
+# vision
+opencv-python==4.11.0.86
+
+# robotics / bags
+rosbags==0.11.1
+
+# openmim (per mmcv & co)
+openmim==0.3.9
+
+# openmmlab stack (installati via mim, ma li fissiamo per coerenza)
+mmengine==0.10.7
+mmcv==2.1.0
+mmdet==3.2.0
+mmdet3d==1.4.0
+
+# geo / maps
+osmnx==2.0.7
+contextily==1.7.0
+
+# rendering
+pyrender==0.1.45
+
+# simulator
+carla==0.9.15
+
+# transformers
+transformers==4.36.2
+
+# misc
+pygame==2.6.1
