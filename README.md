@@ -4,6 +4,7 @@ To run this pipeline you need:
 
 1. **Conda** (Miniconda or Anaconda) — used to manage the Python environments.
 2. **CARLA 0.9.15** — used by stages 3 and 5.
+3. **NVIDIA GPU** with a driver supporting CUDA 11.8 or higher.
 
 ## Install Conda
 
@@ -142,7 +143,6 @@ Verify that both files exist:
 ls -lh 2_process_datasets/utils/fcos3d.pth \
        2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
 ```
-
 # Detailed description and usage of each script
 
 <details>
@@ -1479,6 +1479,82 @@ Before running the scripts, check that:
 5. If parked cars are needed, `data/processed_dataset/<BAG_NAME>/lidar_detections/unified_clusters.txt` exists.
 6. `3_generate_simulation_data/utils/config.py` contains the correct CARLA paths and connection settings.
 7. You are running the command from the project root.
+
+---
+
+---
+
+## Camera configuration file
+
+The scripts in this folder rely on a per-bag camera configuration file:
+
+```text
+data/data_for_carla/<bag_name>/camera.json
+```
+
+For the example dataset (`reference_bag`), this file is committed in the repository, so no action is required if you only intend to run the pipeline on the example bag.
+
+If you record your own ROS bag, you must create a new `camera.json` for it before running the scripts in this folder. Copy the existing file from the reference bag as a starting point:
+
+```bash
+mkdir -p data/data_for_carla/<your_bag_name>
+cp data/data_for_carla/reference_bag/camera.json \
+   data/data_for_carla/<your_bag_name>/camera.json
+```
+
+Then edit the new file to match your own camera setup.
+
+The structure of `camera.json` is:
+
+```json
+{
+  "image_size": {
+    "x": 512,
+    "y": 512
+  },
+  "camera": {
+    "fov": 54.7,
+    "fps": 30,
+    "original_size": {
+      "x": 800,
+      "y": 503
+    },
+    "position": {
+      "x": 0.762,
+      "y": -0.015,
+      "z": 1.21
+    },
+    "pitch": 0.6,
+    "calibration": {
+      "K": [
+        [772.906855, 0.0, 424.980372],
+        [0.0, 777.596896, 258.452509],
+        [0.0, 0.0, 1.0]
+      ],
+      "distortion": [-0.274231, 0.034838, 0.00226, -0.000972, 0.0],
+      "checkerboard_size": [10, 7],
+      "square_size": 24.0
+    }
+  }
+}
+```
+
+The fields are:
+
+| Field | Meaning |
+|---|---|
+| `image_size.x`, `image_size.y` | Final image size (after crop / resize) used by the simulation step |
+| `camera.fov` | Camera horizontal field of view in degrees |
+| `camera.fps` | Frame rate of the camera topic in the ROS bag |
+| `camera.original_size.x`, `camera.original_size.y` | Original image size produced by the camera, before any crop or resize |
+| `camera.position.x`, `camera.position.y`, `camera.position.z` | Camera mounting position relative to the vehicle base, in meters (CARLA frame: x forward, y left, z up) |
+| `camera.pitch` | Camera mounting pitch in degrees |
+| `camera.calibration.K` | 3×3 intrinsic matrix `[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]` |
+| `camera.calibration.distortion` | Lens distortion coefficients `[k1, k2, p1, p2, k3]` |
+| `camera.calibration.checkerboard_size` | Checkerboard size used during calibration (informational) |
+| `camera.calibration.square_size` | Checkerboard square size in millimeters used during calibration (informational) |
+
+If the file is missing or any required field is invalid, the affected scripts will fail at startup.
 
 ---
 
