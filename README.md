@@ -2156,7 +2156,22 @@ In the COLMAP GUI, go to:
 Processing -> Feature Extraction
 ```
 
-Use the camera model:
+> ⚠️ **The camera model and parameters below are valid only for the example `reference_bag`** (front narrow camera used during the original recording). If you are running this pipeline on your own ROS bag, you need to:
+>
+> 1. **Choose the COLMAP camera model that matches your camera lens.** The most common choices are:
+>    - `SIMPLE_PINHOLE` — ideal pinhole, no distortion (`f, cx, cy`)
+>    - `PINHOLE` — pinhole with separate fx/fy, no distortion (`fx, fy, cx, cy`)
+>    - `OPENCV` — pinhole + radial-tangential distortion (`fx, fy, cx, cy, k1, k2, p1, p2`) — used for `reference_bag`
+>    - `OPENCV_FISHEYE` — fisheye lens (`fx, fy, cx, cy, k1, k2, k3, k4`)
+>    - `FULL_OPENCV` — pinhole + extended distortion (`fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6`)
+>
+>    The full list and parameter order is documented in the COLMAP source: <https://github.com/colmap/colmap/blob/main/src/colmap/sensor/models.h>
+>
+> 2. **Provide the calibration values for your camera.** You can typically read them from the `K` matrix and `distortion` array in your `data/data_for_carla/<your_bag>/camera.json` file (see Section 3 of this README), where:
+>    - `fx, fy, cx, cy` come from the intrinsic matrix `K`
+>    - `k1, k2, p1, p2` are the first four entries of the `distortion` array (only if your model includes them)
+
+For `reference_bag`, use the camera model:
 
 ```text
 OPENCV
@@ -2168,15 +2183,13 @@ Enable:
 Single camera
 ```
 
-Set the camera parameters according to the dataset calibration.
-
 The COLMAP `OPENCV` camera parameter order is:
 
 ```text
 fx, fy, cx, cy, k1, k2, p1, p2
 ```
 
-For the front narrow camera, use:
+For the front narrow camera of `reference_bag`, use:
 
 ```text
 785.34926249, 784.07587341, 406.50794975, 249.45341029, -0.42020115, 0.64296938, -0.00531934, -0.00215015
