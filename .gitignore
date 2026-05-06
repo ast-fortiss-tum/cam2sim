@@ -15,8 +15,8 @@ data/data_for_gaussian_splatting/reference_bag/*
 system_under_test/dave2_input_images/*
 cache
 *.json
-*.h5
 data/data_for_carla/*
+*.h5
 !data/data_for_carla/reference_bag/
 data/data_for_carla/reference_bag/*
 !data/data_for_carla/reference_bag/camera.json
