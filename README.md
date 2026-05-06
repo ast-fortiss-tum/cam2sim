@@ -1,5 +1,144 @@
-# Install
+# Setup
 
+To run this pipeline you need:
+
+1. **Conda** (Miniconda or Anaconda) — used to manage the Python environments.
+2. **CARLA 0.9.15** — used by stages 3 and 5.
+
+## Install Conda
+
+Follow the official installation guide:
+
+- Miniconda (recommended, lightweight): <https://www.anaconda.com/docs/getting-started/miniconda/install/overview>
+
+After installation, restart the terminal and verify:
+
+```bash
+conda --version
+```
+
+## Install CARLA
+
+Download and extract CARLA 0.9.15 following the official guide:
+
+- CARLA 0.9.15 quick start: <https://carla.readthedocs.io/en/0.9.15/start_quickstart/>
+
+After extracting, set the CARLA installation path inside the project. Open:
+
+```text
+3_generate_simulation_data/utils/config.py
+```
+
+and edit:
+
+```python
+CARLA_INSTALLATION_PATH = "/absolute/path/to/CARLA_0.9.15"
+```
+
+## Clone the repository
+
+```bash
+git clone <repo-url> cam2sim
+cd cam2sim
+```
+
+All commands below assume the project root is the current directory.
+
+---
+
+## Conda environments
+
+This pipeline uses two separate Conda environments. Each one isolates dependencies that would otherwise conflict.
+
+### `data_extraction` (main environment)
+
+Used by stages 1, 2, 3, and 5.
+
+Create the environment with Python 3.10 and activate it:
+
+```bash
+conda create -n data_extraction python=3.10 -y
+conda activate data_extraction
+```
+
+Install the Python packages listed in `data_extraction_requirements.txt`:
+
+```bash
+pip install -U pip setuptools wheel
+pip install -r data_extraction_requirements.txt
+```
+
+Install the OpenMMLab packages with `mim` (this installs them inside the active environment):
+
+```bash
+pip install -U openmim
+mim install mmengine
+mim install mmcv==2.1.0
+mim install mmdet==3.2.0
+mim install mmdet3d==1.4.0
+```
+
+Verify the installation:
+
+```bash
+python -c "import torch, mmcv, mmdet, mmdet3d; print('OK')"
+```
+
+### `nerfstudio` (Gaussian Splatting / Nerfstudio training)
+
+Used by stage 4.
+
+Setup instructions for this environment are provided in section 4.
+
+---
+
+## Download pretrained model checkpoints
+
+Stage 2 uses two pretrained 3D detection models that are too large to ship inside the Git repository:
+
+- **FCOS3D** (camera-based 3D detection)
+- **PointPillars** (LiDAR-based 3D detection)
+
+Both must be placed inside `2_process_datasets/utils/` with their original filenames.
+
+Make sure the `data_extraction` environment is active (so `gdown` is available), then run:
+
+```bash
+conda activate data_extraction
+
+# Make sure gdown is available
+pip install -U gdown
+
+cd 2_process_datasets/utils
+
+# FCOS3D
+gdown "https://drive.google.com/uc?id=1JIKRFQQI9CmQARk21Q619TPkdS49Voel" -O fcos3d.pth
+gdown "https://drive.google.com/uc?id=1AGOR8C0tDUsWSSWTEc0fA7kysIE9-iol" -O hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class.pth
+cd ../..
+```
+
+Alternatively, download the files manually from these links and put them in `2_process_datasets/utils/`:
+
+- FCOS3D: <https://drive.google.com/file/d/1JIKRFQQI9CmQARk21Q619TPkdS49Voel/view?usp=sharing>
+- PointPillars: <https://drive.google.com/file/d/1AGOR8C0tDUsWSSWTEc0fA7kysIE9-iol/view?usp=sharing>
+
+After downloading, the folder should look like:
+
+```text
+2_process_datasets/utils/
+├── fcos3d_config.py
+├── fcos3d.pth
+├── my_pointpillars_config.py
+├── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class.pth
+└── ...
+```
+
+Verify that both files exist:
+
+```bash
+ls -lh 2_process_datasets/utils/fcos3d.pth \
+       2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class.pth
+```
 ## Create conda env
 
 ### repl
