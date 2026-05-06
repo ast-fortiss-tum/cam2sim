@@ -26,6 +26,10 @@ Phases:
   PHASE 1: 4-panel calibration GUI (CARLA, GS free cam, original training image,
            GS rendered from training pose). Per split.
   PHASE 2: DAVE-2 closed-loop drive. GS render -> DAVE-2 -> steer -> ackermann.
+           Hero is teleported to first training camera with the proper
+           road-waypoint z + back-offset, then stabilized and given a
+           100-tick warmup launch (mirrors the only_carla script that
+           works) before the drive loop starts.
            Termination: fall, stuck, out-of-coverage, or max_frames.
 
 Coordinate chain (per split):
@@ -115,6 +119,12 @@ IM_HEIGHT = 503
 # Drive control
 DRIVE_SPEED_KMH = 10.0          # constant forward speed for ackermann
 PREDICT_EVERY = 3               # call DAVE-2 every N frames
+
+# Hero startup (mirrors the only_carla script that works)
+LAUNCH_SPEED_KMH = 12.0           # speed for warmup launch (kick-starts ackermann)
+WARMUP_TICKS = 100                # ticks to apply launch control
+REAR_TO_CENTER_OFFSET_METERS = 0.13   # rear axle -> car center back-offset
+HERO_SPAWN_Z_OFFSET = 0.10        # +z above road waypoint (avoid clipping)
 
 # Termination thresholds
 STUCK_THRESHOLD = 0.02          # meters / frame -> below = not moving
@@ -456,6 +466,146 @@ def render_gs(pipeline, c2w, width, height, fov):
         outputs = pipeline.model.get_outputs_for_camera(camera)
     rgb = outputs["rgb"].cpu().numpy()
     return Image.fromarray((rgb * 255).astype(np.uint8))
+
+
+# =============================================================================
+#  HERO STARTUP HELPERS (mirrors the only_carla script that works)
+# =============================================================================
+
+def stop_vehicle_motion(vehicle):
+    """Zero out velocity/angular_velocity so the car doesn't drift after teleport."""
+    try:
+        vehicle.set_target_velocity(carla.Vector3D(0.0, 0.0, 0.0))
+    except Exception:
+        pass
+    try:
+        vehicle.set_target_angular_velocity(carla.Vector3D(0.0, 0.0, 0.0))
+    except Exception:
+        pass
+
+
+def make_drive_start_transform(world, traj_pt):
+    """
+    Build a clean spawn transform from a trajectory point.
+
+    KEY FIX: the trajectory's z is the LiDAR/base_link altitude, which is
+    typically a few cm below the CARLA road mesh. Spawning there makes
+    physics expel the car upward.
+
+    We instead query the road waypoint and use waypoint.z + 0.10 m, plus
+    apply the rear->center back-offset (0.13 m) used by the only_carla
+    script that works.
+    """
+    loc = traj_pt["transform"]["location"]
+    rot = traj_pt["transform"]["rotation"]
+
+    start_x = float(loc["x"])
+    start_y = float(loc["y"])
+    start_z = float(loc["z"])
+    start_yaw = float(rot.get("yaw", 0.0))
+
+    yaw_rad = math.radians(start_yaw)
+    offset_x = -REAR_TO_CENTER_OFFSET_METERS * math.cos(yaw_rad)
+    offset_y = -REAR_TO_CENTER_OFFSET_METERS * math.sin(yaw_rad)
+
+    target_loc = carla.Location(
+        x=start_x + offset_x,
+        y=start_y + offset_y,
+        z=start_z,
+    )
+
+    waypoint = world.get_map().get_waypoint(
+        target_loc,
+        project_to_road=True,
+        lane_type=carla.LaneType.Driving,
+    )
+
+    if waypoint is not None:
+        spawn_z = waypoint.transform.location.z + HERO_SPAWN_Z_OFFSET
+        print("[INFO] Hero spawn z from road waypoint:")
+        print(f"       trajectory z: {start_z:.3f}")
+        print(f"       waypoint z:   {waypoint.transform.location.z:.3f}")
+        print(f"       spawn z:      {spawn_z:.3f}  (+{HERO_SPAWN_Z_OFFSET})")
+    else:
+        spawn_z = start_z + HERO_SPAWN_Z_OFFSET
+        print(f"[WARN] No waypoint found at ({start_x:.2f}, {start_y:.2f}). "
+              f"Using trajectory.z + offset = {spawn_z:.3f}")
+
+    return carla.Transform(
+        carla.Location(
+            x=start_x + offset_x,
+            y=start_y + offset_y,
+            z=spawn_z,
+        ),
+        carla.Rotation(
+            pitch=0.0,
+            yaw=start_yaw,
+            roll=0.0,
+        ),
+    )
+
+
+def stabilize_and_warmup(world, hero_vehicle, rgb_queue,
+                         drive_start_transform, ticks=WARMUP_TICKS):
+    """
+    Mirrors prepare_hero_for_driving() + warmup launch from the only_carla
+    script that works.
+
+    1. physics OFF, motion stopped, transform forced for 10 ticks
+    2. physics ON, gravity ON, settle for 10 ticks
+    3. apply ackermann (12 km/h, steer=0) for 100 ticks to overcome
+       startup inertia (without this, ackermann won't move the car after
+       a teleport, and the stuck-detector trips at frame ~50)
+    """
+    print("[INFO] Stabilizing hero before driving...")
+
+    # Stage 1: physics off + force position
+    hero_vehicle.set_simulate_physics(False)
+    stop_vehicle_motion(hero_vehicle)
+    hero_vehicle.set_transform(drive_start_transform)
+    for _ in range(10):
+        world.tick()
+        hero_vehicle.set_transform(drive_start_transform)
+        stop_vehicle_motion(hero_vehicle)
+
+    # Stage 2: physics on, gravity on, settle
+    try:
+        hero_vehicle.set_enable_gravity(True)
+    except Exception:
+        pass
+    hero_vehicle.set_simulate_physics(True)
+    hero_vehicle.set_autopilot(False)
+    stop_vehicle_motion(hero_vehicle)
+    for _ in range(10):
+        world.tick()
+
+    # Drain old sensor frames
+    while not rgb_queue.empty():
+        try:
+            rgb_queue.get_nowait()
+        except Empty:
+            break
+
+    # Stage 3: launch warmup
+    print(f"[INFO] Warmup launch: {ticks} ticks at {LAUNCH_SPEED_KMH} km/h")
+    launch_ctl = carla.VehicleAckermannControl(
+        speed=float(LAUNCH_SPEED_KMH / 3.6),
+        steer=0.0,
+    )
+    for _ in range(ticks):
+        hero_vehicle.apply_ackermann_control(launch_ctl)
+        world.tick()
+        # keep camera queue from filling up
+        while not rgb_queue.empty():
+            try:
+                rgb_queue.get_nowait()
+            except Empty:
+                break
+
+    actual = hero_vehicle.get_transform()
+    print(f"[INFO] Stabilization complete. "
+          f"Actual: x={actual.location.x:.2f} y={actual.location.y:.2f} "
+          f"z={actual.location.z:.3f} yaw={actual.rotation.yaw:.1f}")
 
 
 # =============================================================================
@@ -1129,19 +1279,13 @@ def main():
     else:
         run_folder = None
 
-    # ---- Teleport to first training camera position ----
+    # ---- Build drive-start transform (waypoint.z + back-offset) ----
     if split_models:
         sm_first = split_models[0]
         first_fid = sm_first.get_first_training_frame_id()
         tp = trajectory_by_frame.get(first_fid)
         if tp:
-            drive_start_pt = tp["transform"]
-            drive_start_transform = carla.Transform(
-                carla.Location(x=drive_start_pt["location"]["x"],
-                               y=drive_start_pt["location"]["y"],
-                               z=drive_start_pt["location"]["z"]),
-                carla.Rotation(pitch=0, yaw=drive_start_pt["rotation"]["yaw"], roll=0),
-            )
+            drive_start_transform = make_drive_start_transform(world, tp)
             print(f"[INFO] Starting at first training camera (frame {first_fid})")
         else:
             drive_start_transform = start_transform
@@ -1149,14 +1293,8 @@ def main():
     else:
         drive_start_transform = start_transform
 
-    hero_vehicle.set_transform(drive_start_transform)
-    hero_vehicle.set_simulate_physics(True)
-    world.tick()
-    while not rgb_queue.empty():
-        try:
-            rgb_queue.get_nowait()
-        except Empty:
-            break
+    # ---- Stabilize physics + warmup launch (kicks ackermann) ----
+    stabilize_and_warmup(world, hero_vehicle, rgb_queue, drive_start_transform)
 
     # ---- Drive loop state ----
     current_split_idx = 0

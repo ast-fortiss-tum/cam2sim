@@ -2308,15 +2308,9 @@ data/data_for_gaussian_splatting/reference_bag/
 
 ### 4B_train_gaussian_splatting.sh
 
-Trains one Nerfstudio model per split.
+Trains one Gaussian Splatting model per split using Nerfstudio.
 
-Run:
-
-```bash
-bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
-```
-
-For each split, the script checks that the COLMAP reconstruction exists:
+For each split listed in the configuration, the script checks that the COLMAP sparse reconstruction exists:
 
 ```text
 colmap/split_<N>/sparse/0/cameras.bin
@@ -2324,29 +2318,70 @@ colmap/split_<N>/sparse/0/images.bin
 colmap/split_<N>/sparse/0/points3D.bin
 ```
 
-It then runs `ns-train` using:
+and that the corresponding image folder is present:
 
-- the split image folder
-- the split sky-mask folder, if available
-- the split COLMAP reconstruction
+```text
+images_gs_split_<N>_1_of_<FRAME_SKIP>/
+```
 
-Outputs are written to:
+If either check fails for a given split, that split is skipped and the script continues with the remaining ones.
+
+When all required files are present, the script runs `ns-train` with the `colmap` dataparser and the following inputs:
+
+- the split image folder (`images_gs_split_<N>_1_of_<FRAME_SKIP>`)
+- the split sky-mask folder (`sky_masks_gs_split_<N>_1_of_<FRAME_SKIP>`), if it exists
+- the split COLMAP reconstruction (`colmap/split_<N>/sparse/0`)
+
+The script uses `--viewer.quit-on-train-completion True` so the Nerfstudio viewer closes automatically when training ends, and the loop moves on to the next split without manual intervention.
+
+Configuration values at the top of the script:
+
+```bash
+BAG_NAME="reference_bag"
+NUM_SPLITS=3
+FRAME_SKIP=3
+METHOD="splatfacto"
+CONDA_ENV="nerfstudio"
+```
+
+`BAG_NAME` must match the dataset folder under `data/data_for_gaussian_splatting/`. `NUM_SPLITS` and `FRAME_SKIP` must match the values used in step 2 when generating the image splits. `METHOD` selects the Nerfstudio model (`splatfacto` or `splatfacto-big`). `CONDA_ENV` is the Conda environment with Nerfstudio installed.
+
+Default input:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/
+├── images_gs_split_<N>_1_of_<FRAME_SKIP>/
+├── sky_masks_gs_split_<N>_1_of_<FRAME_SKIP>/    (optional)
+└── colmap/split_<N>/sparse/0/
+    ├── cameras.bin
+    ├── images.bin
+    └── points3D.bin
+```
+
+Output:
 
 ```text
 data/data_for_gaussian_splatting/<bag_name>/outputs/
+├── splatfacto_split_1/splatfacto/<timestamp>/
+│   ├── config.yml
+│   └── nerfstudio_models/step-000029999.ckpt
+├── splatfacto_split_2/splatfacto/<timestamp>/
+│   └── ...
+└── splatfacto_split_3/splatfacto/<timestamp>/
+    └── ...
 ```
 
-Example output folders:
+Each trained run contains the full Nerfstudio output folder, including the final checkpoint and the `config.yml` file required by step 5.
 
-```text
-data/data_for_gaussian_splatting/<bag_name>/outputs/split_1/
-data/data_for_gaussian_splatting/<bag_name>/outputs/split_2/
-data/data_for_gaussian_splatting/<bag_name>/outputs/split_3/
+Run:
+
+```bash
+bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
 ```
 
-If one split is missing a reconstruction, the script skips it and continues with the remaining splits.
+The script activates the configured Conda environment automatically, so it does not require the environment to be active before launching it.
 
----
+If a split fails during training, the error is reported but the loop continues. Use the console output to identify which splits completed successfully.
 
 ### 4C_utm_yaw_to_nerfstudio.py
 
@@ -2363,26 +2398,84 @@ The script:
 5. Computes the yaw mapping between dataset yaw and Nerfstudio yaw.
 6. Saves the transform as a JSON file for later inference.
 
-Example run:
+This script must be run **once per split**, after step 4B has finished training.
+
+Default input (per split):
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/
+├── outputs/splatfacto_split_<N>/splatfacto/<timestamp>/config.yml
+└── frame_positions_split_<N>_1_of_<FRAME_SKIP>.txt
+```
+
+Default output (per split), saved next to the model `config.yml`:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/outputs/splatfacto_split_<N>/splatfacto/<timestamp>/
+└── utm_to_nerfstudio_transform.json
+```
+
+The alignment file is saved next to `config.yml` because that is where step 5 looks for it. Do not move it.
+
+CLI arguments:
+
+| Argument | Required | Default |
+|---|---|---|
+| `--gs_config` | Yes | — |
+| `--utm_file` | Yes | — |
+| `--data_root` | No | `"."` |
+| `--output` | No | `<config.yml folder>/utm_to_nerfstudio_transform.json` |
+
+The `--output` argument is rarely needed. Keep the default so step 5 can find the file automatically.
+
+The `<timestamp>` value changes at every training run. List the trained model folders for each split with:
 
 ```bash
+ls data/data_for_gaussian_splatting/reference_bag/outputs/splatfacto_split_1/splatfacto/
+ls data/data_for_gaussian_splatting/reference_bag/outputs/splatfacto_split_2/splatfacto/
+ls data/data_for_gaussian_splatting/reference_bag/outputs/splatfacto_split_3/splatfacto/
+```
+
+Each folder contains one `<timestamp>` subfolder with the trained model.
+
+Run, once per split (replace `<TIMESTAMP_N>` with the actual timestamp from the listing above):
+
+```bash
+# Split 1
 python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
-  --gs_config data/data_for_gaussian_splatting/reference_bag/outputs/split_1/<run_name>/config.yml \
-  --utm_file data/data_for_gaussian_splatting/reference_bag/frame_positions_split_1_1_of_3.txt \
-  --data_root data/data_for_gaussian_splatting/reference_bag \
-  --output data/data_for_gaussian_splatting/reference_bag/outputs/split_1/utm_to_nerfstudio_transform.json
+  --gs_config data/data_for_gaussian_splatting/reference_bag/outputs/splatfacto_split_1/splatfacto/<TIMESTAMP_1>/config.yml \
+  --utm_file  data/data_for_gaussian_splatting/reference_bag/frame_positions_split_1_1_of_3.txt \
+  --data_root data/data_for_gaussian_splatting/reference_bag
+
+# Split 2
+python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
+  --gs_config data/data_for_gaussian_splatting/reference_bag/outputs/splatfacto_split_2/splatfacto/<TIMESTAMP_2>/config.yml \
+  --utm_file  data/data_for_gaussian_splatting/reference_bag/frame_positions_split_2_1_of_3.txt \
+  --data_root data/data_for_gaussian_splatting/reference_bag
+
+# Split 3
+python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
+  --gs_config data/data_for_gaussian_splatting/reference_bag/outputs/splatfacto_split_3/splatfacto/<TIMESTAMP_3>/config.yml \
+  --utm_file  data/data_for_gaussian_splatting/reference_bag/frame_positions_split_3_1_of_3.txt \
+  --data_root data/data_for_gaussian_splatting/reference_bag
 ```
 
 The output JSON contains:
 
-- scale
-- rotation
-- translation
-- yaw sign and yaw offset
-- camera pitch and roll estimates
+- scale, rotation, translation (2D similarity transform)
+- yaw sign and yaw offset (orientation alignment)
+- camera pitch and roll estimates (median over training cameras)
 - matching and alignment error statistics
 
-This file is used later to convert simulation poses into the coordinate system expected by the GS renderer.
+After running the script for every split, verify that all alignment files exist:
+
+```bash
+find data/data_for_gaussian_splatting/reference_bag/outputs -name "utm_to_nerfstudio_transform.json"
+```
+
+You should see one file per split (three for `reference_bag`).
+
+The alignment files are used later by step 5 to convert simulation poses into the coordinate system expected by the GS renderer.
 
 ---
 
@@ -2391,21 +2484,20 @@ This file is used later to convert simulation poses into the coordinate system e
 A typical workflow is:
 
 ```bash
-# 1. Prepare GS image splits in step 2
+# 1. Prepare GS image splits in step 2 (already done in step 2)
 python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py
 
 # 2. Run COLMAP once for each split
-# Follow the COLMAP instructions above.
+# Follow the COLMAP instructions in 4A_colmap_guide.md.
 
 # 3. Train one GS model per split
 bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
 
-# 4. Compute dataset-to-Nerfstudio alignment for each trained split
+# 4. Compute dataset-to-Nerfstudio alignment, once per trained split
 python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
-  --gs_config <path_to_split_config.yml> \
-  --utm_file <path_to_frame_positions_split.txt> \
-  --data_root data/data_for_gaussian_splatting/<bag_name> \
-  --output <path_to_output_transform.json>
+  --gs_config <path_to_split_N_config.yml> \
+  --utm_file  <path_to_frame_positions_split_N.txt> \
+  --data_root data/data_for_gaussian_splatting/<bag_name>
 ```
 
 ---
@@ -2415,8 +2507,8 @@ python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
 | File / script | Main output |
 |---|---|
 | `4A_colmap_guide.md` | COLMAP sparse reconstructions under `colmap/split_<N>/sparse/0/` |
-| `4B_train_gaussian_splatting.sh` | Trained Nerfstudio / GS models under `outputs/` |
-| `4C_utm_yaw_to_nerfstudio.py` | `utm_to_nerfstudio_transform.json` alignment files |
+| `4B_train_gaussian_splatting.sh` | Trained Gaussian Splatting models under `outputs/splatfacto_split_<N>/splatfacto/<timestamp>/` |
+| `4C_utm_yaw_to_nerfstudio.py` | One `utm_to_nerfstudio_transform.json` per split, saved next to each `config.yml` |
 
 ---
 
@@ -2425,13 +2517,15 @@ python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
 - COLMAP must be run once per split before training.
 - The COLMAP export folder for each split must contain `cameras.bin`, `images.bin`, and `points3D.bin`.
 - The values of `BAG_NAME`, `NUM_SPLITS`, and `FRAME_SKIP` in `4B_train_gaussian_splatting.sh` must match the output produced by step 2.
-- Use `METHOD="splatfacto"` or `METHOD="splatfacto-big"` for Gaussian Splatting.
+- Use `METHOD="splatfacto"` or `METHOD="splatfacto-big"` for Gaussian Splatting. Splatfacto requires a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series and newer); older GPUs are not supported by `gsplat`.
 - Sky masks are optional, but recommended because they prevent sky regions from influencing the reconstruction.
 - The front narrow camera parameters shown above are dataset-specific. Replace them if using another camera.
 - Keep COLMAP intrinsic refinement disabled if you want to preserve the calibrated camera parameters.
-- The alignment script should be run after training, because it loads the final Nerfstudio model coordinate system.
-- One alignment file should be generated for each trained split.
-- The trained GS models and alignment files are used by the simulation step to render camera observations from simulated poses.
+- The alignment script (`4C`) must be run **after** training, because it loads the final Nerfstudio model coordinate system.
+- One alignment file must be generated for each trained split. If any is missing, step 5 will warn and skip that split.
+- By default, `4C` saves the alignment file next to the model `config.yml`, which is where step 5 expects it. Avoid passing `--output` unless you need to override that location.
+- The `<timestamp>` value changes at every training run, so the path to `config.yml` changes too. There is no way to hardcode it in advance; list the trained folder before running `4C`.
+- The trained GS models and alignment files are used by step 5 to render camera observations from simulated poses.
 
 </details>
 
