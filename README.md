@@ -96,8 +96,8 @@ Setup instructions for this environment are provided in section 4.
 
 Stage 2 uses two pretrained 3D detection models that are too large to ship inside the Git repository:
 
-- **FCOS3D** (camera-based 3D detection)
-- **PointPillars** (LiDAR-based 3D detection)
+- **FCOS3D** (camera-based 3D detection, ~1 GB)
+- **PointPillars** (LiDAR-based 3D detection, ~20 MB)
 
 Both must be placed inside `2_process_datasets/utils/` with their original filenames.
 
@@ -112,8 +112,11 @@ pip install -U gdown
 cd 2_process_datasets/utils
 
 # FCOS3D
-gdown "https://drive.google.com/uc?id=1JIKRFQQI9CmQARk21Q619TPkdS49Voel" -O fcos3d.pth
-gdown "https://drive.google.com/uc?id=1AGOR8C0tDUsWSSWTEc0fA7kysIE9-iol" -O hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class.pth
+gdown 1JIKRFQQI9CmQARk21Q619TPkdS49Voel -O fcos3d.pth
+
+# PointPillars
+gdown 1AGOR8C0tDUsWSSWTEc0fA7kysIE9-iol -O hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
+
 cd ../..
 ```
 
@@ -129,7 +132,7 @@ After downloading, the folder should look like:
 ├── fcos3d_config.py
 ├── fcos3d.pth
 ├── my_pointpillars_config.py
-├── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class.pth
+├── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
 └── ...
 ```
 
@@ -137,7 +140,7 @@ Verify that both files exist:
 
 ```bash
 ls -lh 2_process_datasets/utils/fcos3d.pth \
-       2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class.pth
+       2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
 ```
 ## Create conda env
 
