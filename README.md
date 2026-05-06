@@ -85,6 +85,28 @@ Verify the installation:
 python -c "import torch, mmcv, mmdet, mmdet3d; print('OK')"
 ```
 
+### `dave_2` (autonomous driving model)
+
+Used by stage 5 to run the DAVE-2 steering model as a standalone TCP server.
+This environment is independent from `data_extraction` because TensorFlow 2.13
+requires Python 3.8.
+
+Create the environment with Python 3.8 and activate it:
+
+```bash
+conda create -n dave_2 python=3.8 -y
+conda activate dave_2
+```
+
+Install the required packages:
+
+```bash
+pip install -U pip setuptools wheel
+pip install tensorflow==2.13.1
+pip install pillow
+pip install opencv-python
+```
+
 ### `nerfstudio` (Gaussian Splatting / Nerfstudio training)
 
 Used by stage 4.

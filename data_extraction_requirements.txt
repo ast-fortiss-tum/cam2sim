@@ -24,3 +24,4 @@ carla==0.9.15
 contextily==1.7.0
 transformers==4.36.2
 pygame==2.6.1
+nerfstudio==1.1.5

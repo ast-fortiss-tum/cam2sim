@@ -2,7 +2,7 @@
 # GENERAL SETTINGS
 # -------------------
 DEBUG_PRINT = True
-CARLA_INSTALLATION_PATH = "/media/cam2sim/New Volume/CARLA_0.9.15"
+CARLA_INSTALLATION_PATH = "/media/davidejannussi/ssd space/davide/CARLA_0.9.15"
 #CARLA_INSTALLATION_PATH = "/media/davide/New Volume/CARLA_0.9.15"
 CARLA_GLASS_PATH = "/media/davidejannussi/ssd space/davide/CARLA_0.9.15/CarlaUE4/Content/Carla/Static/Car/GeneralMaterials/Glass.uasset"
 #CARLA_GLASS_PATH = "/media/davide/New Volume/CARLA_0.9.15/CarlaUE4/Content/Carla/Static/Car/GeneralMaterials/Glass.uasset"

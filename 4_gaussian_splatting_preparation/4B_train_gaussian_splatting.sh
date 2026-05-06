@@ -1,28 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Train one model per split. Uses --viewer.quit-on-train-completion so the
-# viewer auto-closes when training ends and the script moves to the next
-# split without needing a manual Ctrl+C.
+# Train one Gaussian Splatting model per split with nerfstudio.
+# Uses --viewer.quit-on-train-completion so the viewer auto-closes when
+# training ends and the script moves to the next split without manual Ctrl+C.
 # =============================================================================
 
 set +e   # do NOT exit on error: keep going if one split fails
 
 BAG_NAME="reference_bag"
-NUM_SPLITS=3
+NUM_SPLITS=1
 FRAME_SKIP=3
 
-# Use splatfacto for Gaussian Splatting.
-# Change to "splatfacto-big" if that is what you want.
-METHOD="nerfacto"
-
-DISABLE_TORCH_COMPILE=1
+METHOD="splatfacto"
 CONDA_ENV="nerfstudio"
-
-# Quick-debug mode: stop each split after the first checkpoint is saved.
-# Useful only to validate the rest of the pipeline; quality will be poor.
-QUICK_DEBUG=1
-QUICK_STEPS_PER_SAVE=500
-QUICK_MAX_ITERS=501
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
@@ -40,19 +30,6 @@ conda activate "${CONDA_ENV}"
 if ! command -v ns-train &>/dev/null; then
     echo "[ERROR] ns-train not found. Is the '${CONDA_ENV}' env correct?"
     exit 1
-fi
-
-if [[ "${DISABLE_TORCH_COMPILE}" == "1" ]]; then
-    export TORCH_COMPILE_DISABLE=1
-fi
-
-# Build the extra-args array for quick debug mode
-EXTRA_TRAIN_ARGS=()
-if [[ "${QUICK_DEBUG}" == "1" ]]; then
-    EXTRA_TRAIN_ARGS+=(--steps-per-save "${QUICK_STEPS_PER_SAVE}")
-    EXTRA_TRAIN_ARGS+=(--max-num-iterations "${QUICK_MAX_ITERS}")
-    echo "[INFO] QUICK_DEBUG=1: stop each split after ${QUICK_MAX_ITERS} iterations"
-    echo "[INFO]                checkpoint saved every ${QUICK_STEPS_PER_SAVE} steps"
 fi
 
 for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
@@ -96,7 +73,6 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
             --output-dir "${OUTPUT_ROOT}" \
             --experiment-name "${EXP_NAME}" \
             --viewer.quit-on-train-completion True \
-            "${EXTRA_TRAIN_ARGS[@]}" \
             colmap \
             --colmap-path "${COLMAP_PATH}" \
             --images-path "${IMAGES_PATH}" \
@@ -107,7 +83,6 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
             --output-dir "${OUTPUT_ROOT}" \
             --experiment-name "${EXP_NAME}" \
             --viewer.quit-on-train-completion True \
-            "${EXTRA_TRAIN_ARGS[@]}" \
             colmap \
             --colmap-path "${COLMAP_PATH}" \
             --images-path "${IMAGES_PATH}"

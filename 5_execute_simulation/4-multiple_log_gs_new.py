@@ -443,57 +443,57 @@ def render_gs(pipeline, c2w, width, height, fov):
 
 def auto_detect_splits():
     """
-    Look for nerfacto splits in:
-        data/data_for_gaussian_splatting/<BAG>/outputs/nerfacto_split_<N>/nerfacto/<TS>/config.yml
-
+    Look for splatfacto splits in:
+        data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_<N>/splatfacto/<TS>/config.yml
+ 
     For each split also resolves:
         - utm_to_nerfstudio_transform.json  (next to config.yml)
         - frame_positions_split_<N>_*.txt   (in GS_DATA_ROOT)
     """
     splits = []
-
+ 
     if not os.path.isdir(GS_OUTPUTS_DIR):
         print(f"[WARN] Outputs folder not found: {GS_OUTPUTS_DIR}")
         return splits
-
+ 
     split_dirs = sorted([
         d for d in os.listdir(GS_OUTPUTS_DIR)
         if os.path.isdir(os.path.join(GS_OUTPUTS_DIR, d))
-        and d.startswith("nerfacto_split_")
+        and d.startswith("splatfacto_split_")
     ])
-
+ 
     for split_dir in split_dirs:
-        match = re.match(r"nerfacto_split_(\d+)", split_dir)
+        match = re.match(r"splatfacto_split_(\d+)", split_dir)
         if not match:
             continue
         split_num = int(match.group(1))
-
-        nerfacto_dir = os.path.join(GS_OUTPUTS_DIR, split_dir, "nerfacto")
-        if not os.path.isdir(nerfacto_dir):
-            print(f"[WARN] Missing 'nerfacto' subfolder in {split_dir}")
+ 
+        splatfacto_dir = os.path.join(GS_OUTPUTS_DIR, split_dir, "splatfacto")
+        if not os.path.isdir(splatfacto_dir):
+            print(f"[WARN] Missing 'splatfacto' subfolder in {split_dir}")
             continue
-
+ 
         runs = sorted([
-            d for d in os.listdir(nerfacto_dir)
-            if os.path.isdir(os.path.join(nerfacto_dir, d))
+            d for d in os.listdir(splatfacto_dir)
+            if os.path.isdir(os.path.join(splatfacto_dir, d))
         ])
         if not runs:
-            print(f"[WARN] No runs found in {nerfacto_dir}")
+            print(f"[WARN] No runs found in {splatfacto_dir}")
             continue
-
+ 
         run_name = runs[-1]
-        run_dir = os.path.join(nerfacto_dir, run_name)
+        run_dir = os.path.join(splatfacto_dir, run_name)
         config_path = os.path.join(run_dir, "config.yml")
         utm_transform_path = os.path.join(run_dir, "utm_to_nerfstudio_transform.json")
-
+ 
         if not os.path.exists(config_path):
             print(f"[WARN] No config.yml in {run_dir}")
             continue
         if not os.path.exists(utm_transform_path):
             print(f"[WARN] No utm_to_nerfstudio_transform.json in {run_dir}")
-            print(f"       Run 4-utm_yaw_to_nerfstudio.py for split {split_num} first.")
+            print(f"       Run 4C_utm_yaw_to_nerfstudio.py for split {split_num} first.")
             continue
-
+ 
         # Find frame_positions_split_<N>_*.txt
         frame_positions = None
         for fname in os.listdir(GS_DATA_ROOT):
@@ -501,11 +501,11 @@ def auto_detect_splits():
                     and fname.endswith(".txt")):
                 frame_positions = os.path.join(GS_DATA_ROOT, fname)
                 break
-
+ 
         if frame_positions is None:
             print(f"[WARN] No frame_positions_split_{split_num}_*.txt found "
                   f"in {GS_DATA_ROOT}")
-
+ 
         splits.append({
             "name": f"split_{split_num}",
             "split_num": split_num,
@@ -516,10 +516,10 @@ def auto_detect_splits():
             "run_name": run_name,
         })
         print(f"[INFO] Found split_{split_num} (run={run_name})")
-
+ 
     splits.sort(key=lambda s: s["split_num"])
     return splits
-
+ 
 
 def find_best_split(frame_id, splits, last_split_idx=0):
     current_split = splits[last_split_idx]
