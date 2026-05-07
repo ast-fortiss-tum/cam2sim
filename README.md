@@ -150,6 +150,13 @@ pip install opencv-python
 
 ### `nerfstudio` (Gaussian Splatting / Nerfstudio training and rendering)
 
+Run the Commands
+```bash
+export CC=/usr/bin/gcc-11
+export CXX=/usr/bin/g++-11
+export CUDA_HOST_COMPILER=/usr/bin/g++-11
+```
+
 Used by stage 4 (training Gaussian Splatting models) and by the GS-based scripts in stage 5 (`5C_trajectory_replay.py` and `5D_dave2.py`), which load the trained models and render new views with `gsplat`.
 
 This environment is **already created** by the Nerfstudio installation step above. There is no separate `conda create` command for it. As long as you followed the official Nerfstudio installation guide and kept the default environment name, you can use it directly:
