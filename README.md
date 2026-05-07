@@ -272,6 +272,12 @@ For example:
 python 1_extract_ROS_data/1A_camera_with_odometry.py
 ```
 
+Alternatively the script step1.sh runs all scripts in order
+```bash
+bash 1_extract_ROS_data/step1.sh
+```
+
+
 ---
 
 ## Purpose
@@ -775,6 +781,11 @@ For example:
 
 ```bash
 python 2_process_datasets/2A_camera_parked_cars_detection.py
+```
+
+Alternatively the script step2.sh runs all scripts in order
+```bash
+bash 2_process_datasets/step2.sh
 ```
 
 ---
@@ -1372,6 +1383,12 @@ For example:
 
 ```bash
 python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
+```
+
+
+Alternatively the script step3.sh runs all scripts in order
+```bash
+bash 3_generate_simulation_data/step3.sh
 ```
 
 ---
