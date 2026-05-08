@@ -150,6 +150,13 @@ pip install opencv-python
 
 ### `nerfstudio` (Gaussian Splatting / Nerfstudio training and rendering)
 
+Run the Commands
+```bash
+export CC=/usr/bin/gcc-11
+export CXX=/usr/bin/g++-11
+export CUDA_HOST_COMPILER=/usr/bin/g++-11
+```
+
 Used by stage 4 (training Gaussian Splatting models) and by the GS-based scripts in stage 5 (`5C_trajectory_replay.py` and `5D_dave2.py`), which load the trained models and render new views with `gsplat`.
 
 This environment is **already created** by the Nerfstudio installation step above. There is no separate `conda create` command for it. As long as you followed the official Nerfstudio installation guide and kept the default environment name, you can use it directly:
@@ -209,6 +216,11 @@ Verify that both files exist:
 ls -lh 2_process_datasets/utils/fcos3d.pth \
        2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
 ```
+
+# Quick use guide
+TODO USING SH SCRIPTS
+
+
 # Detailed description and usage of each script
 
 <details>
@@ -264,6 +276,12 @@ For example:
 ```bash
 python 1_extract_ROS_data/1A_camera_with_odometry.py
 ```
+
+Alternatively the script step1.sh runs all scripts in order
+```bash
+bash 1_extract_ROS_data/step1.sh
+```
+
 
 ---
 
@@ -768,6 +786,11 @@ For example:
 
 ```bash
 python 2_process_datasets/2A_camera_parked_cars_detection.py
+```
+
+Alternatively the script step2.sh runs all scripts in order
+```bash
+bash 2_process_datasets/step2.sh
 ```
 
 ---
@@ -1365,6 +1388,12 @@ For example:
 
 ```bash
 python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
+```
+
+
+Alternatively the script step3.sh runs all scripts in order
+```bash
+bash 3_generate_simulation_data/step3.sh
 ```
 
 ---
