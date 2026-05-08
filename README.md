@@ -216,6 +216,11 @@ Verify that both files exist:
 ls -lh 2_process_datasets/utils/fcos3d.pth \
        2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
 ```
+
+# Quick use guide
+TODO USING SH SCRIPTS
+
+
 # Detailed description and usage of each script
 
 <details>
