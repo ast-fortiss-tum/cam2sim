@@ -15,7 +15,7 @@ DATASET_NAME = "reference_bag"
 
 INPUT_DIR = f"data/raw_dataset/{DATASET_NAME}/images"
 
-OUTPUT_ROOT = f"/home/cam2sim/Documents/cam2sim/data/processed_dataset/{DATASET_NAME}"
+OUTPUT_ROOT = f"/home/davidejannussi/Documents/cam2sim/data/processed_dataset/{DATASET_NAME}"
 OUTPUT_DIR = os.path.join(OUTPUT_ROOT, "semantic_maps")
 
 SEGFORMER_MODEL = "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"
