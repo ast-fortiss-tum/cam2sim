@@ -92,8 +92,19 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
         echo "!!! Split ${SPLIT} returned non-zero exit code, continuing..."
     fi
 
-    echo ""
-    echo "[INFO] Split ${SPLIT} done."
+    # Find the newest timestamp folder inside ${OUTPUT_ROOT}/${EXP_NAME}/splatfacto/
+    TIMESTAMP_DIR=$(ls -td "${OUTPUT_ROOT}/${EXP_NAME}/splatfacto/"*/ 2>/dev/null | head -n 1)
+    TIMESTAMP_DIR=$(basename "$TIMESTAMP_DIR")
+
+    if [[ -z "$TIMESTAMP_DIR" ]]; then
+        echo "[ERROR] No timestamp folder found for ${EXP_NAME} in ${OUTPUT_ROOT}/${EXP_NAME}/splatfacto/"
+        continue
+    fi
+
+    python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
+        --gs_config "${OUTPUT_ROOT}/${EXP_NAME}/${METHOD}/${TIMESTAMP_DIR}/config.yml" \
+        --utm_file "${DATA_ROOT}/frame_positions_split_${SPLIT}_1_of_${FRAME_SKIP}.txt" \
+        --data_root "${DATA_ROOT}"
 done
 
 echo ""

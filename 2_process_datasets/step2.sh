@@ -29,5 +29,8 @@ for SCRIPT in "${SCRIPTS[@]}"; do
     fi
 done
 
+chmod +x 2_process_datasets/2G_OPT_fix_sidewalk.sh
+bash 2_process_datasets/2G_OPT_fix_sidewalk.sh
+
 echo ""
 echo "All Scripts for Step 2 completed successfully"
