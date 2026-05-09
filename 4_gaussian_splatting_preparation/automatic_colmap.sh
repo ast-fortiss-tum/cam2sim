@@ -1,3 +1,7 @@
+## TODO: Doesent work completely yet.
+## Do not use
+
+
 for NUM in $(seq 1 3); do
   echo "Opening Colmap for Split $NUM"
   DATABASE_PATH="data/data_for_gaussian_splatting/reference_bag/colmap/database_split_${NUM}.db"
