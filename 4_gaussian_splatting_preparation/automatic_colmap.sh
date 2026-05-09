@@ -2,7 +2,7 @@ for NUM in $(seq 1 3); do
   echo "Opening Colmap for Split $NUM"
   DATABASE_PATH="data/data_for_gaussian_splatting/reference_bag/colmap/database_split_${NUM}.db"
   IMAGE_PATH="data/data_for_gaussian_splatting/reference_bag/images_gs_split_${NUM}_1_of_3"
-  OUTPUT_PATH="data/data_for_gaussian_splatting/reference_bag/colmap/split_${NUM}/sparse/0"
+  OUTPUT_PATH="data/data_for_gaussian_splatting/reference_bag/colmap/split_${NUM}/sparse"
   #colmap gui --database_path="$DATABASE_PATH" --image_path="$IMAGE_PATH"
 
   LD_PRELOAD=/lib/x86_64-linux-gnu/libpthread.so.0 colmap feature_extractor \
