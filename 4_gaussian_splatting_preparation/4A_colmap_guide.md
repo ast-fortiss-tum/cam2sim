@@ -1,3 +1,11 @@
+# Automatic COLMAP Reconstruction
+
+Run
+```bash
+bash 4_gaussian_splatting_preparation/automatic_colmap.sh
+```
+
+
 # Manual COLMAP Reconstruction for Gaussian Splatting
 
 After running:
