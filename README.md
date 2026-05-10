@@ -3113,3 +3113,242 @@ If a previous run left the world in a strange state (vehicles destroyed, sensors
 - After running `3F_generate_carla_scenario.py`, the parked vehicles and hero remain alive in CARLA between step-5 scripts, so you can launch them back-to-back without re-running `3F` every time.
 
 </details>
+
+<details>
+<summary><code>6_validation</code></summary>
+
+# 6_validation
+
+This folder contains the sixth step of the data-processing pipeline.
+
+The scripts in this folder compare the output of the simulation step against ground-truth produced from the real recording, and quantify how close the simulated views are to the real ones.
+
+The first validation script compares semantic segmentation maps frame by frame, computing per-class Intersection-over-Union (IoU) and mean IoU between:
+
+- the **real** semantic maps, produced upstream by running SegFormer on the recorded RGB frames, and
+- the **simulated** semantic maps, produced by the CARLA trajectory replay in step 5A.
+
+More validation scripts (e.g. trajectory error, steering jitter, completion rate) can be added in the same folder.
+
+Each script is intended to be run from the project root:
+
+```bash
+python 6_validation/<script_name>.py
+```
+
+For example:
+
+```bash
+python 6_validation/6-semantic_map_comparision.py
+```
+
+---
+
+## Purpose
+
+The goal of this step is to evaluate the simulation against the real recording with reproducible metrics.
+
+This step can produce:
+
+- Per-frame IoU (Background, Car, Road) between real and simulated semantic maps
+- Per-frame mean IoU
+- Per-frame visual diagnostics (GT | Diff | Pred panel)
+- An aggregated summary across all processed frames
+
+---
+
+## Expected project structure
+
+```text
+project_root/
+├── 6_validation/
+│   └── 6-semantic_map_comparision.py
+│
+├── data/
+│   └── processed_dataset/
+│       └── <bag_name>/
+│           ├── semantic_maps/                       (input: GT from SegFormer)
+│           ├── carla_replay_dataset/
+│           │   └── semantic/                        (input: simulated semantic from 5A)
+│           └── iou_results_semantic/                (output of this step)
+│               ├── <frame>_iou.json
+│               └── <frame>_vis.png
+```
+
+Inputs are read from:
+
+```text
+data/processed_dataset/<bag_name>/semantic_maps/
+data/processed_dataset/<bag_name>/carla_replay_dataset/semantic/
+```
+
+Output is written to:
+
+```text
+data/processed_dataset/<bag_name>/iou_results_semantic/
+```
+
+---
+
+## Requirements
+
+Use the existing Conda environment named `data_extraction`.
+
+Activate it before running any script in this folder:
+
+```bash
+conda activate data_extraction
+```
+
+The scripts in this folder use only `numpy`, `Pillow`, and `matplotlib`. They do not need CARLA, Nerfstudio, or the DAVE-2 server to be running.
+
+---
+
+## Inputs from previous steps
+
+Before running this step, the two input directories must already exist for the same `<bag_name>`.
+
+1. **Real semantic maps** (ground truth), produced by running SegFormer on the raw recorded images:
+
+```text
+data/processed_dataset/<bag_name>/semantic_maps/
+```
+
+   Each PNG uses only three RGB colors:
+
+   - Background: `(0, 0, 0)`
+   - Car:        `(0, 0, 142)`
+   - Road:       `(128, 64, 128)`
+
+   These files are produced upstream by the SegFormer-based semantic map generator (see the corresponding script in step 2 or its dedicated helper).
+
+2. **Simulated semantic maps**, produced by the CARLA trajectory replay in step 5A:
+
+```text
+data/processed_dataset/<bag_name>/carla_replay_dataset/semantic/
+```
+
+   These are saved by `5_execute_simulation/5A_trajectory_only_carla.py`. They are already 512x512, use the CityScapes palette after cleanup, and are named `{frame_id:06d}.png`.
+
+If either directory is missing, the validation script prints an error and exits.
+
+---
+
+## Configuration
+
+The script does not take any command-line arguments. All paths are hardcoded and derived from a single configuration value at the top of the file:
+
+```python
+BAG_NAME = "reference_bag"
+```
+
+This must match the dataset folder used by the previous steps. Other values that can be edited at the top of the script:
+
+```python
+TARGET_SIZE = (512, 512)   # (W, H) used for both GT and Pred
+NUM_CLASSES = 3            # Background, Car, Road
+COLOR_TOLERANCE = 15       # RGB tolerance to absorb resize / compression noise
+```
+
+The fixed color-to-class mapping is also defined at the top of the script:
+
+```python
+COLOR_TO_CLASS = {
+    (0, 0, 0):       0,   # Background
+    (0, 0, 142):     1,   # Car
+    (128, 64, 128):  2,   # Road
+}
+```
+
+---
+
+## Scripts
+
+### 6-semantic_map_comparision.py
+
+Compares the real semantic maps against the simulated semantic maps frame by frame and computes per-class IoU.
+
+What the script does:
+
+1. Lists every PNG in `semantic_maps/` (the ground truth).
+2. For each GT file, extracts the integer frame id from the filename (the script strips optional `seg_` or `frame_` prefixes), then looks for the matching `{frame_id:06d}.png` in `carla_replay_dataset/semantic/`.
+3. Resizes the GT to 512x512 with NEAREST interpolation so the two grids match. Aspect ratio is intentionally not preserved.
+4. Maps both RGB images to class IDs via the fixed `COLOR_TO_CLASS` lookup with a tolerance of `COLOR_TOLERANCE` to absorb resize and compression artifacts.
+5. Computes the 3x3 confusion matrix and per-class IoU (Background, Car, Road), plus the mean IoU over the classes that actually appear in the GT.
+6. Skips any frame that already has a result file in the output directory, so the script is resumable.
+7. After processing, re-reads every `*_iou.json` in the output directory and prints an aggregated summary (mean IoU per class across all frames).
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/semantic_maps/
+data/processed_dataset/<bag_name>/carla_replay_dataset/semantic/
+```
+
+Output:
+
+```text
+data/processed_dataset/<bag_name>/iou_results_semantic/
+├── <frame>_iou.json
+└── <frame>_vis.png
+```
+
+Per frame, the script writes:
+
+- `<frame>_iou.json` with fields:
+
+```text
+gt_file, sim_file, iou_background, iou_car, iou_road, mean_iou
+```
+
+- `<frame>_vis.png`, a three-panel figure: GT | Diff | Pred.
+
+Run:
+
+```bash
+conda activate data_extraction
+python 6_validation/6-semantic_map_comparision.py
+```
+
+The script does not take any arguments.
+
+---
+
+## Suggested execution order
+
+This step is meant to be run **after** step 5A has produced the CARLA replay semantic maps, and after the SegFormer-based real semantic maps have been generated for the same bag.
+
+A typical workflow is:
+
+```bash
+# 1. Generate real semantic maps (SegFormer on raw recorded images)
+#    (upstream script; not part of this folder)
+
+# 2. Generate simulated semantic maps via CARLA replay
+conda activate data_extraction
+python 5_execute_simulation/5A_trajectory_only_carla.py
+
+# 3. Compare real vs simulated semantic maps
+python 6_validation/6-semantic_map_comparision.py
+```
+
+---
+
+## Output files summary
+
+| Script | Main output |
+|---|---|
+| `6-semantic_map_comparision.py` | `data/processed_dataset/<bag_name>/iou_results_semantic/<frame>_iou.json`, `data/processed_dataset/<bag_name>/iou_results_semantic/<frame>_vis.png` |
+
+---
+
+## Notes
+
+- The script does not take any CLI argument. To run on a different bag, edit `BAG_NAME` at the top of the file.
+- The script is resumable: any frame that already has a `<frame>_iou.json` in the output directory is skipped on subsequent runs. Delete the output directory to recompute from scratch.
+- The GT is resized to 512x512 with NEAREST interpolation. If the real semantic maps were generated at a different aspect ratio, this resize intentionally distorts them so that the GT and the simulated maps share the same pixel grid.
+- The color tolerance of 15 absorbs small RGB differences introduced by image saving and resizing. If the GT and the simulated maps use different palettes, edit `COLOR_TO_CLASS` and `COLOR_TOLERANCE` accordingly.
+- The aggregated summary printed at the end of the run is computed by re-reading every `*_iou.json` in the output directory, so it always reflects the full set of processed frames, not only the ones produced in the latest run.
+- This is the first validation script. Additional validation scripts (trajectory error, steering jitter, completion rate, etc.) belong in the same `6_validation/` folder and follow the same conventions.
+
+</details>
