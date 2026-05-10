@@ -329,17 +329,112 @@ def box_to_world(box_cam, T):
 # ==========================================
 
 def fit_trajectory(positions, smoothing=50.0):
-    """Fit smooth spline through ego positions."""
+    """
+    Fit smooth spline through ego positions.
+
+    Robust against:
+      - NaN / inf positions
+      - duplicate or stationary positions
+      - too few unique points for cubic splprep
+    """
+    positions = np.asarray(positions, dtype=np.float64)
+
+    # Keep only finite rows.
+    finite_mask = np.isfinite(positions).all(axis=1)
+    positions = positions[finite_mask]
+
+    if len(positions) < 2:
+        raise RuntimeError(
+            f"Not enough valid trajectory positions after filtering: {len(positions)}"
+        )
+
+    # Remove consecutive duplicates / near-duplicates before subsampling.
+    diffs = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+    keep = np.ones(len(positions), dtype=bool)
+    keep[1:] = diffs > 1e-4
+    positions = positions[keep]
+
+    if len(positions) < 2:
+        raise RuntimeError(
+            "Trajectory has fewer than 2 unique positions. "
+            "The vehicle may be stationary or the pose file may be invalid."
+        )
+
+    # Subsample, but do not destroy short trajectories.
     step = max(1, len(positions) // 500)
     pts = positions[::step]
 
-    tck, _ = splprep([pts[:, 0], pts[:, 1]], s=smoothing, k=3)
+    # Remove consecutive duplicates again after subsampling.
+    if len(pts) >= 2:
+        diffs = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        keep = np.ones(len(pts), dtype=bool)
+        keep[1:] = diffs > 1e-4
+        pts = pts[keep]
 
-    u = np.linspace(0, 1, 2000)
+    print(f"  Valid trajectory positions: {len(positions)}")
+    print(f"  Spline input points:        {len(pts)}")
+    print(f"  Trajectory x range:         [{pts[:, 0].min():.3f}, {pts[:, 0].max():.3f}]")
+    print(f"  Trajectory y range:         [{pts[:, 1].min():.3f}, {pts[:, 1].max():.3f}]")
 
-    traj = np.array(splev(u, tck)).T
-    tang = np.array(splev(u, tck, der=1)).T
-    tang = tang / np.linalg.norm(tang, axis=1, keepdims=True)
+    # If too few points for cubic spline, fallback to piecewise-linear trajectory.
+    if len(pts) < 4:
+        print("  [WARN] Too few points for cubic spline; using linear trajectory fallback.")
+
+        traj = pts.copy()
+
+        if len(traj) == 2:
+            u = np.linspace(0.0, 1.0, 2000)
+            traj = (1.0 - u[:, None]) * pts[0] + u[:, None] * pts[1]
+
+        tang = np.gradient(traj, axis=0)
+        norms = np.linalg.norm(tang, axis=1, keepdims=True)
+        norms[norms < 1e-8] = 1.0
+        tang = tang / norms
+
+        return traj, tang
+
+    # Cubic needs k <= number_of_points - 1.
+    k = min(3, len(pts) - 1)
+
+    # Parametrize by arc length. This avoids splprep failing on repeated implicit u.
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    dist = np.concatenate([[0.0], np.cumsum(seg)])
+
+    if dist[-1] <= 1e-8:
+        raise RuntimeError(
+            "Trajectory length is ~0 after filtering. Cannot fit trajectory."
+        )
+
+    u_in = dist / dist[-1]
+
+    try:
+        tck, _ = splprep(
+            [pts[:, 0], pts[:, 1]],
+            u=u_in,
+            s=smoothing,
+            k=k,
+        )
+
+        u = np.linspace(0, 1, 2000)
+
+        traj = np.array(splev(u, tck)).T
+        tang = np.array(splev(u, tck, der=1)).T
+
+    except Exception as e:
+        print(f"  [WARN] splprep failed: {e}")
+        print("  [WARN] Falling back to linear interpolation trajectory.")
+
+        u = np.linspace(0.0, 1.0, 2000)
+        traj_x = np.interp(u, u_in, pts[:, 0])
+        traj_y = np.interp(u, u_in, pts[:, 1])
+        traj = np.stack([traj_x, traj_y], axis=1)
+
+        tang = np.gradient(traj, axis=0)
+
+    # Normalize tangents safely.
+    norms = np.linalg.norm(tang, axis=1, keepdims=True)
+    norms[norms < 1e-8] = 1.0
+    tang = tang / norms
 
     return traj, tang
 

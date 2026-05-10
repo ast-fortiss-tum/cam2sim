@@ -1,1 +1,0 @@
-To Download the data_for_gaussian_splatting of the reference_bag.bag file used in this study please follow this link: https://drive.google.com/file/d/19DFgUXypwPixYI34QqBwaXJw3jl1kguG/view?usp=sharing

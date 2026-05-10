@@ -302,7 +302,8 @@ class CoordinateTransformer:
 
 class SplitModel:
     def __init__(self, name, pipeline, coord_transformer, training_cameras,
-                 frame_ids, training_filenames, data_root=None):
+                 frame_ids, training_filenames, data_root=None,
+                 filename_to_frame_id=None):
         self.name = name
         self.pipeline = pipeline
         self.coord_transformer = coord_transformer
@@ -316,11 +317,37 @@ class SplitModel:
 
         self.cam_idx_to_frame_id = {}
         self.frame_id_to_cam_idx = {}
+
+        filename_to_frame_id = filename_to_frame_id or {}
+
         for i, fn in enumerate(training_filenames):
-            fid = extract_frame_number(fn)
+            base = os.path.basename(str(fn))
+
+            # IMPORTANT:
+            # Prefer the real frame ID from frame_positions_split_N_*.txt.
+            # This handles overlap correctly.
+            fid = filename_to_frame_id.get(base)
+
+            # Fallback only if the positions file did not contain this image.
+            if fid is None:
+                fid = extract_frame_number(base)
+
             if fid is not None:
                 self.cam_idx_to_frame_id[i] = fid
                 self.frame_id_to_cam_idx[fid] = i
+
+        print(f"   Camera/frame mapping: {len(self.cam_idx_to_frame_id)} / "
+            f"{len(training_filenames)} cameras mapped")
+
+        if len(training_filenames) > 0:
+            first_base = os.path.basename(str(training_filenames[0]))
+            first_fid = self.cam_idx_to_frame_id.get(0)
+            print(f"   First training image: {first_base} -> frame_id={first_fid}")
+
+            last_idx = len(training_filenames) - 1
+            last_base = os.path.basename(str(training_filenames[last_idx]))
+            last_fid = self.cam_idx_to_frame_id.get(last_idx)
+            print(f"   Last training image:  {last_base} -> frame_id={last_fid}")
 
         if (hasattr(coord_transformer, "avg_pitch")
                 and coord_transformer.avg_pitch != 0.0):
@@ -618,8 +645,8 @@ def auto_detect_splits():
         data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_<N>/splatfacto/<TS>/config.yml
 
     For each split also resolves:
-        - utm_to_nerfstudio_transform.json  (next to config.yml)
-        - frame_positions_split_<N>_*.txt   (in GS_DATA_ROOT)
+        - utm_to_nerfstudio_transform.json
+        - frame_positions_split_<N>_*.txt
     """
     splits = []
 
@@ -633,10 +660,15 @@ def auto_detect_splits():
         and d.startswith("splatfacto_split_")
     ])
 
+    print(f"[INFO] Candidate GS split dirs: {split_dirs}")
+
     for split_dir in split_dirs:
-        match = re.match(r"splatfacto_split_(\d+)", split_dir)
+        # Safer than r"splatfacto_split_(\d+)" because it avoids partial weird matches.
+        match = re.match(r"^splatfacto_split_(\d+)$", split_dir)
         if not match:
+            print(f"[WARN] Ignoring unexpected split folder name: {split_dir}")
             continue
+
         split_num = int(match.group(1))
 
         splatfacto_dir = os.path.join(GS_OUTPUTS_DIR, split_dir, "splatfacto")
@@ -648,36 +680,55 @@ def auto_detect_splits():
             d for d in os.listdir(splatfacto_dir)
             if os.path.isdir(os.path.join(splatfacto_dir, d))
         ])
+
         if not runs:
             print(f"[WARN] No runs found in {splatfacto_dir}")
             continue
 
         run_name = runs[-1]
         run_dir = os.path.join(splatfacto_dir, run_name)
+
         config_path = os.path.join(run_dir, "config.yml")
         utm_transform_path = os.path.join(run_dir, "utm_to_nerfstudio_transform.json")
 
         if not os.path.exists(config_path):
             print(f"[WARN] No config.yml in {run_dir}")
             continue
+
         if not os.path.exists(utm_transform_path):
             print(f"[WARN] No utm_to_nerfstudio_transform.json in {run_dir}")
             print(f"       Run 4C_utm_yaw_to_nerfstudio.py for split {split_num} first.")
             continue
 
-        # Find frame_positions_split_<N>_*.txt
-        frame_positions = None
-        for fname in os.listdir(GS_DATA_ROOT):
-            if (fname.startswith(f"frame_positions_split_{split_num}_")
-                    and fname.endswith(".txt")):
-                frame_positions = os.path.join(GS_DATA_ROOT, fname)
-                break
+        # Deterministically find frame_positions_split_<N>_*.txt
+        frame_position_candidates = []
 
-        if frame_positions is None:
+        for fname in sorted(os.listdir(GS_DATA_ROOT)):
+            if (
+                fname.startswith(f"frame_positions_split_{split_num}_")
+                and fname.endswith(".txt")
+            ):
+                frame_position_candidates.append(fname)
+
+        frame_positions = None
+
+        if frame_position_candidates:
+            chosen_fname = frame_position_candidates[0]
+            frame_positions = os.path.join(GS_DATA_ROOT, chosen_fname)
+
+            print(f"[INFO] Using frame positions for split_{split_num}: "
+                  f"{chosen_fname}")
+
+            if len(frame_position_candidates) > 1:
+                print(f"[WARN] Multiple frame position files found for split_{split_num}:")
+                for c in frame_position_candidates:
+                    print(f"       {c}")
+                print(f"       Chose: {chosen_fname}")
+        else:
             print(f"[WARN] No frame_positions_split_{split_num}_*.txt found "
                   f"in {GS_DATA_ROOT}")
 
-        splits.append({
+        split_cfg = {
             "name": f"split_{split_num}",
             "split_num": split_num,
             "gs_config": config_path,
@@ -685,10 +736,17 @@ def auto_detect_splits():
             "frame_positions": frame_positions,
             "data_root": GS_DATA_ROOT,
             "run_name": run_name,
-        })
-        print(f"[INFO] Found split_{split_num} (run={run_name})")
+        }
+
+        splits.append(split_cfg)
+
+        print(f"[INFO] Found split_{split_num} "
+              f"(run={run_name}, config={config_path})")
 
     splits.sort(key=lambda s: s["split_num"])
+
+    print(f"[INFO] Total detected GS splits: {len(splits)}")
+
     return splits
 
 
@@ -712,21 +770,42 @@ def find_nearest_split_by_position(carla_x, carla_y, splits):
     return best_idx
 
 
-def read_frame_ids_from_positions(filepath):
+def read_frame_positions_mapping(filepath):
+    """
+    Read frame_positions_split_N_*.txt.
+
+    Returns:
+        frame_ids: list[int]
+        filename_to_frame_id: dict[str, int]
+
+    The positions file is the source of truth for mapping:
+        Nerfstudio image filename -> original CARLA/trajectory frame_id
+    """
     frame_ids = []
+    filename_to_frame_id = {}
+
     if filepath and os.path.exists(filepath):
+        print(f"[INFO] Reading frame positions: {filepath}")
+
         with open(filepath, "r") as f:
             for line in f:
                 line = line.strip()
+
                 if not line or line.startswith("#"):
                     continue
-                parts = line.split(",")
+
+                parts = [p.strip() for p in line.split(",")]
+
                 try:
-                    frame_ids.append(int(parts[0].strip()))
+                    frame_id = int(parts[0])
+                    image_file = os.path.basename(parts[-1])
                 except (ValueError, IndexError):
                     continue
-    return frame_ids
 
+                frame_ids.append(frame_id)
+                filename_to_frame_id[image_file] = frame_id
+
+    return frame_ids, filename_to_frame_id
 
 def load_split_models(split_configs, xodr_path, fov):
     split_models = []
@@ -753,6 +832,17 @@ def load_split_models(split_configs, xodr_path, fov):
             _, pipeline, _, step = eval_setup(config_path, test_mode="inference")
             pipeline.model.eval()
 
+            print(f"   Pipeline device: {pipeline.device}")
+
+            param_devices = sorted({str(p.device) for p in pipeline.model.parameters()})
+            print(f"   Model parameter devices: {param_devices}")
+
+            if torch.cuda.is_available():
+                print(f"   GPU allocated after load: "
+                    f"{torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+                print(f"   GPU reserved after load:  "
+                    f"{torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+
             print(f"   Loaded checkpoint at step {step}")
             if hasattr(pipeline.model, "num_points"):
                 print(f"   Number of gaussians: {pipeline.model.num_points}")
@@ -771,12 +861,22 @@ def load_split_models(split_configs, xodr_path, fov):
                 if fid is not None:
                     training_frame_ids.append(fid)
 
-            positions_frame_ids = read_frame_ids_from_positions(
+            positions_frame_ids, filename_to_frame_id = read_frame_positions_mapping(
                 cfg.get("frame_positions")
             )
-            all_frame_ids = sorted(
-                set(training_frame_ids) | set(positions_frame_ids)
-            )
+
+            # IMPORTANT:
+            # If the positions file exists, trust it over filename parsing.
+            # Filename parsing can be wrong when splits overlap or filenames are renumbered.
+            if positions_frame_ids:
+                all_frame_ids = sorted(set(positions_frame_ids))
+            else:
+                print(f"[WARN] {name}: no frame IDs from positions file; "
+                    f"falling back to filename parsing")
+                all_frame_ids = sorted(set(training_frame_ids))
+
+            if not all_frame_ids:
+                raise RuntimeError(f"{name}: could not determine frame IDs")
 
             print(f"OK {name}: {training_cameras.shape[0]} cameras, "
                   f"frames [{min(all_frame_ids)}-{max(all_frame_ids)}] "
@@ -790,6 +890,7 @@ def load_split_models(split_configs, xodr_path, fov):
                 frame_ids=all_frame_ids,
                 training_filenames=training_filenames,
                 data_root=str(data_root_abs),
+                filename_to_frame_id=filename_to_frame_id,
             ))
         except Exception as e:
             print(f"ERROR loading {name}: {e}")
@@ -843,6 +944,17 @@ def main():
     print(f"[INFO] GS data root:    {GS_DATA_ROOT}")
     print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
     print("=" * 80)
+
+    print("[GPU CHECK]")
+    print(f"torch version: {torch.__version__}")
+    print(f"torch cuda version: {torch.version.cuda}")
+    print(f"cuda available: {torch.cuda.is_available()}")
+
+    if torch.cuda.is_available():
+        print(f"cuda device count: {torch.cuda.device_count()}")
+        print(f"cuda device 0: {torch.cuda.get_device_name(0)}")
+    else:
+        print("[WARN] PyTorch does not see CUDA. GS will likely run on CPU.")
 
     # ---- Camera config ----
     with open(CAMERA_CONFIG_FILE, "r") as f:
@@ -1197,11 +1309,17 @@ def main():
             cx, cy_c = cam_tf.location.x, cam_tf.location.y
             ns_from_tf = sm.coord_transformer.carla_to_nerfstudio(cx, cy_c)
             slider_off = np.array([sliders[3].val, sliders[4].val, sliders[5].val])
-            pos_offset = (cam_pos - ns_from_tf) + slider_off
+            computed_pos_offset = (cam_pos - ns_from_tf) + slider_off
 
             ns_z_interp = sm.lookup_z(ns_from_tf[0], ns_from_tf[1])
             z_calib = cam_pos[2] + sliders[5].val
             z_offset_from_interp = z_calib - ns_z_interp
+
+            # IMPORTANT:
+            # Do not store XY translation offset for driving.
+            # It is anchored at the calibration/training camera and can pull the live
+            # render back toward the overlap-start pose when switching splits.
+            pos_offset = np.zeros(3, dtype=np.float64)
 
             calibration_offsets[sm.name] = {
                 "pos_offset": pos_offset,
@@ -1211,10 +1329,11 @@ def main():
                 "z_offset": z_offset_from_interp,
             }
             print(f"OK {sm.name} calibrated: "
-                  f"pos_offset=({pos_offset[0]:.4f}, {pos_offset[1]:.4f}, "
-                  f"{pos_offset[2]:.4f}), "
-                  f"yaw_offset={math.degrees(yaw_offset):.2f} deg, "
-                  f"z_offset_from_interp={z_offset_from_interp:.4f}")
+                f"computed_pos_offset=({computed_pos_offset[0]:.4f}, "
+                f"{computed_pos_offset[1]:.4f}, {computed_pos_offset[2]:.4f}) "
+                f"[XY disabled for driving], "
+                f"yaw_offset={math.degrees(yaw_offset):.2f} deg, "
+                f"z_offset_from_interp={z_offset_from_interp:.4f}")
 
     if args.skip_calibration and split_models:
         for sm in split_models:
@@ -1240,18 +1359,28 @@ def main():
                 cam_tf = rgb_sensor.get_transform()
                 cx, cy_c = cam_tf.location.x, cam_tf.location.y
                 ns_from_tf = sm.coord_transformer.carla_to_nerfstudio(cx, cy_c)
-                pos_offset = cam_pos_train - ns_from_tf
+
+                computed_pos_offset = cam_pos_train - ns_from_tf
                 ns_z_interp = sm.lookup_z(ns_from_tf[0], ns_from_tf[1])
+                z_offset = cam_pos_train[2] - ns_z_interp
+
+                # IMPORTANT:
+                # Do not use XY offset from training_cameras[0].
+                # For split_2, camera 0 is the overlap-start camera, so using its XY offset
+                # can make the live render jump backward at split switch.
+                pos_offset = np.zeros(3, dtype=np.float64)
+
                 calibration_offsets[sm.name] = {
                     "pos_offset": pos_offset,
                     "yaw_offset": 0.0,
                     "pitch_offset": 0.0,
                     "roll_offset": 0.0,
-                    "z_offset": cam_pos_train[2] - ns_z_interp,
+                    "z_offset": z_offset,
                 }
-                print(f"[skip_calibration] {sm.name}: auto pos_offset="
-                      f"({pos_offset[0]:.4f}, {pos_offset[1]:.4f}, "
-                      f"{pos_offset[2]:.4f})")
+                print(f"[skip_calibration] {sm.name}: "
+                    f"computed_pos_offset=({computed_pos_offset[0]:.4f}, "
+                    f"{computed_pos_offset[1]:.4f}, {computed_pos_offset[2]:.4f}) "
+                    f"[XY disabled], z_offset={z_offset:.4f}")
 
     # ============================================================
     #  PHASE 2: DAVE-2 AUTONOMOUS DRIVING
@@ -1475,7 +1604,7 @@ def main():
 
             # --- SAVE ---
             if save_flag:
-                save_drive_data(frame, run_folder, carla_pil, gs_pil)
+                # save_drive_data(frame, run_folder, carla_pil, gs_pil)
 
                 veh_tf = hero_vehicle.get_transform()
                 trajectory_log.append({
