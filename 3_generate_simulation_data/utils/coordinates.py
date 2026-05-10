@@ -8,9 +8,11 @@ from pyproj import Transformer, CRS
 # ==========================================
 LAT0 = 48.17559486315574
 LON0 = 11.5951469668968
-ODOM0_X = 692921.2199   # First trajectory point X (UTM Easting)
-ODOM0_Y = 5339074.0196  # First trajectory point Y (UTM Northing)
-YAW0 = 1.0868           # First trajectory point Yaw (radians) - vehicle heading
+ODOM0_X = 692932.695045   # First trajectory point X (UTM Easting)
+ODOM0_Y = 5339067.061488  # First trajectory point Y (UTM Northing)
+YAW0 = 1.058725           # First trajectory point Yaw (radians) - vehicle heading
+
+# 692932.695045,5339067.061488,549.924500,1.058725
 
 # ==========================================
 # ⚙️ COORDINATE TRANSFORMERS
@@ -100,7 +102,7 @@ def load_shift_values(centroid_file_path):
         print(f"⚠️  Warning: 'shift.txt' not found in {dataset_folder}. Using defaults (0.0).")
         return defaults
 
-    print(f"📖 Loading calibration from: {shift_file}")
+    print(f"Loading calibration from: {shift_file}")
     vals = defaults.copy()
     try:
         with open(shift_file, "r") as f:
@@ -111,5 +113,5 @@ def load_shift_values(centroid_file_path):
                         vals[key] = float(val)
         return vals
     except Exception as e:
-        print(f"❌ Error reading shift.txt: {e}. Using defaults.")
+        print(f"Error reading shift.txt: {e}. Using defaults.")
         return defaults
