@@ -2845,6 +2845,9 @@ To stop the server, press `Ctrl+C` in its terminal.
 
 ## Scripts
 
+
+MISSING PART ABOUT STARTING CARLA IN STEP 3!!!!!!!!!!!!!!!
+
 ### 5A_trajectory_only_carla.py
 
 Replays the recorded ego-vehicle trajectory inside CARLA, frame by frame, and saves CARLA RGB, semantic, and instance segmentation images.
