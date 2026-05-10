@@ -63,7 +63,7 @@ def start_server():
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((HOST, PORT))
         server.listen(5)
-        print(f"🚗 Dave2 server listening on {HOST}:{PORT}")
+        print(f"Dave2 server listening on {HOST}:{PORT}")
 
         while True:
             conn, addr = server.accept()

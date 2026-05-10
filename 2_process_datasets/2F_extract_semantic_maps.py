@@ -108,7 +108,7 @@ def create_semantic_maps():
         seg_img.save(out_path)
 
     print("\n" + "=" * 60)
-    print("✅ DONE!")
+    print("DONE")
     print(f"Saved to: {OUTPUT_DIR}")
     print("=" * 60)
 

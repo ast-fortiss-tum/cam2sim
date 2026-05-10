@@ -17,13 +17,13 @@ from config import VERTEX_DISTANCE, MAX_ROAD_LENGTH, WALL_HEIGHT, EXTRA_WIDTH, R
 def load_instance_color_map(filepath):
     mapped_colors = {}
     if not os.path.exists(filepath):
-        print(f"⚠️ Warning: {filepath} not found. No color remapping will occur.")
+        print(f" Warning: {filepath} not found. No color remapping will occur.")
         return mapped_colors
     try:
         with open(filepath, 'r') as f:
             raw_data = json.load(f)
         for key_str, val_str in raw_data.items():
-            # ✅ REPLACE NULL VALUES WITH 128,128,128
+            #  REPLACE NULL VALUES WITH 128,128,128
             if val_str is None:
                 rgb_val = [128, 128, 128]
             else:
@@ -31,9 +31,9 @@ def load_instance_color_map(filepath):
             
             rgb_key = ast.literal_eval(key_str)
             mapped_colors[rgb_key] = rgb_val
-        print(f"✅ Loaded {len(mapped_colors)} color mappings.")
+        print(f" Loaded {len(mapped_colors)} color mappings.")
     except Exception as e:
-        print(f"❌ Error loading color map: {e}")
+        print(f" Error loading color map: {e}")
     return mapped_colors
 
 def process_instance_map_fixed(inst_raw_data, global_color_map):
@@ -65,7 +65,7 @@ def process_instance_map_fixed(inst_raw_data, global_color_map):
     return Image.fromarray(output)
 
 def cleanup_old_sensors(hero_vehicle):
-    print("🧹 Cleaning up old sensors on Hero...")
+    print(" Cleaning up old sensors on Hero...")
     world = hero_vehicle.get_world()
     attached = [x for x in world.get_actors() if x.parent and x.parent.id == hero_vehicle.id]
     count = 0
@@ -73,7 +73,7 @@ def cleanup_old_sensors(hero_vehicle):
         if 'sensor' in sensor.type_id:
             sensor.destroy()
             count += 1
-    print(f"✅ Removed {count} old sensors.")
+    print(f" Removed {count} old sensors.")
     
 def get_map_size(xodr_data): #search for header in xodr
     root = ET.fromstring(xodr_data)
@@ -310,7 +310,7 @@ def calculate_auto_offset_from_osm(osm_file_path, hero_lat, hero_lon):
     osm_center_lat, osm_center_lon = get_osm_center(osm_file_path)
 
     if osm_center_lat is None:
-        print("⚠️ Could not find OSM center, using zero offset")
+        print(" Could not find OSM center, using zero offset")
         return {"x": 0.0, "y": 0.0, "heading": 0.0}
 
     print(f"[AUTO-OFFSET] OSM center: ({osm_center_lat:.6f}, {osm_center_lon:.6f})")

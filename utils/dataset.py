@@ -81,7 +81,7 @@ def load_frames_from_folder(images_root):
         raise FileNotFoundError(f"Images folder not found: {images_root}")
 
     dataset_list = []
-    print(f"📂 Scanning images in: {images_root}")
+    print(f" Scanning images in: {images_root}")
     
     # Get all png files
     image_files = glob.glob(os.path.join(images_root, "*.png"))
@@ -100,7 +100,7 @@ def load_frames_from_folder(images_root):
                 'frame_id': frame_id
             })
         except ValueError:
-            print(f"⚠️ Skipping file with unexpected format: {filename}")
+            print(f" Skipping file with unexpected format: {filename}")
             continue
 
     # Sort by Frame ID to ensure temporal order

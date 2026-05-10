@@ -169,7 +169,7 @@ def render_bw_image(obj_path, camera_pos, look_dir, image_path="output_bw.png", 
     # 5. Graustufen speichern
     img = Image.fromarray(color).convert("L")
     img.save(image_path)
-    print(f"✅ Schwarz-Weiß-Bild gespeichert unter: {image_path}")
+    print(f"Schwarz-Weiß-Bild gespeichert unter: {image_path}")
 
 
 #render_bw_image(
