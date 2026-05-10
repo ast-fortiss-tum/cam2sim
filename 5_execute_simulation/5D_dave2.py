@@ -134,7 +134,7 @@ COVERAGE_THRESHOLD = 0.15       # nerfstudio units, distance to nearest train ca
 COVERAGE_FRAME_LIMIT = 30       # consecutive out-of-coverage frames
 
 # Split switching
-SWITCH_DELAY = 50               # frames before actually switching split
+SWITCH_DELAY = 100               # frames before actually switching split
 
 
 # =============================================================================

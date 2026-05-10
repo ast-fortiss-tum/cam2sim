@@ -57,39 +57,8 @@ CAR_SPACING = 5
 
 ROTATION_DEGREES = 0.0  # Grid convergence for Munich (empirically tuned)
 
-# Fine-tuning offsets for CARLA spawn positions (in meters)
-# The main offset (OSM center → XODR center) is now calculated automatically.
-# These values are for ADDITIONAL fine-tuning if needed.
-# Positive X = East, Negative X = West
-# Positive Y = South, Negative Y = North (CARLA Y-axis convention)
-CARLA_OFFSET_X = 0.0  # Additional fine-tuning (negative = shift West)
-CARLA_OFFSET_Y = 0.0  # Additional fine-tuning (negative = shift North)
-STABLE_DIFF_PROMPT = "street, car, sidewalk, trees, person, trees, cars, trees, cars, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees"
-STABLE_DIFF_STEPS = 50
-OUTPUT_FOLDER_NAME = "output"
-SEGMENTATION_COND_SCALE = 0.8
-
-
-# Scales: Seg 0.7, Inst 0.7, Temp 1.1
+1
 COND_SCALES = [0.7, 0.7, 1.1] 
 
 # Schedules (Start/End steps for each controlnet)
-# Order: [Segmentation, Instance, Temporal]
-CONTROL_START = [0.41, 0.0, 0.0]
-CONTROL_END   = [1.0, 0.4, 0.4]
 
-# Static Prompt from your script
-STATIC_PROMPT = "street, car, sidewalk, trees, person, trees, cars, trees, cars, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees, trees"
-NEGATIVE_PROMPT = "blurry, distorted, low quality, bad anatomy"
-
-# -------------------
-# EXPORT CONFIGURATION
-# -------------------
-
-VIDEO_EXPORT_FOLDER = "exports"
-
-# CHECKERBOARD
-
-CHECKERBOARD_COLS = 10
-CHECKERBOARD_ROWS = 7
-CHECKERBOARD_MIN_FRAMES = 15

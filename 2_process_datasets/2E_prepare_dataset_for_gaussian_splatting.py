@@ -116,7 +116,7 @@ CROP_BOTTOM = 45
 FRAME_SKIP = 3
 
 # Split configuration.
-OVERLAP_FRAMES = 200
+OVERLAP_FRAMES = 400
 NUM_SPLITS = 3
 
 # Sky mask model. (disabled)
