@@ -1076,11 +1076,13 @@ You can also close the viewer window to exit.
 
 ---
 
+
+
 ### 2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py
 
 Runs the same LiDAR detection pipeline as `2B_lidar_parked_cars_detection.py`, then opens an interactive editor for manual refinement.
 
-This script is optional. Use it when you need a manually refined LiDAR ground truth, for example to evaluate detection quality.
+This script is optional. Use it when you need to manually refined LiDAR detections to increase precision of the parked cars.
 
 Default input:
 
@@ -1093,13 +1095,13 @@ data/raw_dataset/<bag_name>/point_clouds/*.bin
 Outputs:
 
 ```text
-data/processed_dataset/<bag_name>/lidar_refinement/
-├── detections_raw.json
-├── ground_truth_refined.json
-├── final_clusters.txt
-├── ground_truth_bboxes.txt
+data/processed_dataset/<bag_name>/lidar_detections/
+├── lidar_detections.json
+├── unified_clusters.txt
+├── lidar_bboxes.txt
 └── screenshots/
 ```
+
 
 Run:
 
