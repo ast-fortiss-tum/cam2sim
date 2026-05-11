@@ -218,7 +218,16 @@ ls -lh 2_process_datasets/utils/fcos3d.pth \
 ```
 
 # Quick use guide
-TODO USING SH SCRIPTS
+Follow the setup guide for the conda environments, then
+```bash
+bash 1_extract_ROS_data/step1.sh
+bash 2_process_datasets/step2.sh
+bash 3_generate_simulation_data/step3.sh
+```
+Follow Step 4A, then
+```bash
+bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
+```
 
 
 # Detailed description and usage of each script
