@@ -11,7 +11,7 @@ BAG_NAME="reference_bag"
 NUM_SPLITS=3
 FRAME_SKIP=3
 
-METHOD="splatfacto-big"
+METHOD="splatfacto"
 CONDA_ENV="nerfstudio"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
