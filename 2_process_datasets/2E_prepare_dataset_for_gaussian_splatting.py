@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Prepare images, sky masks, and overlapping splits for Gaussian Splatting.
+Prepare images and overlapping splits for Gaussian Splatting.
 
 Reads source data from:
 
@@ -16,18 +16,14 @@ Writes all Gaussian Splatting data to:
 Outputs include:
 
     _tmp_images_gs_1_of_<FRAME_SKIP>/
-    # _tmp_sky_masks_gs_1_of_<FRAME_SKIP>/   (disabled)
 
     images_gs_split_1_1_of_<FRAME_SKIP>/
-    # sky_masks_gs_split_1_1_of_<FRAME_SKIP>/   (disabled)
     frame_positions_split_1_1_of_<FRAME_SKIP>.txt
 
     images_gs_split_2_1_of_<FRAME_SKIP>/
-    # sky_masks_gs_split_2_1_of_<FRAME_SKIP>/   (disabled)
     frame_positions_split_2_1_of_<FRAME_SKIP>.txt
 
     images_gs_split_3_1_of_<FRAME_SKIP>/
-    # sky_masks_gs_split_3_1_of_<FRAME_SKIP>/   (disabled)
     frame_positions_split_3_1_of_<FRAME_SKIP>.txt
 
     colmap/split_1/sparse/0/   (empty, for the COLMAP reconstruction)
@@ -38,29 +34,31 @@ This script:
   - Uses hardcoded BAG_NAME, no command-line parameters
   - Imports local utils from the same folder as this script
   - Crops image bottoms
-  # - Generates sky masks using SegFormer   (disabled, see commented blocks below)
-  - Creates overlapping splits for Gaussian Splatting
+  - Creates overlapping splits for Gaussian Splatting (overlap forward)
   - Creates one empty COLMAP folder per split, ready to receive the
     sparse reconstruction exported from the COLMAP GUI
 
-Overlap behavior:
-  - Split 1 starts normally.
-  - Split 2 starts earlier, overlapping the end of split 1.
-  - Split 3 starts earlier, overlapping the end of split 2.
+Overlap behavior (overlap forward, matches the original snowy pipeline):
+  - Each split starts at its natural base_start.
+  - Each split (except the last) ends LATER than its base_end, extending
+    forward into the next split's territory by `overlap_subsampled` frames.
+  - Last split ends at the very end of the processed range.
+
+Consequence at inference time:
+  - Camera 0 of split N is the natural beginning of split N's training data
+    (NOT in an overlap zone), so it is a clean anchor for offset computations.
+  - The model switch between split N and split N+1 should happen at
+    split N's max_frame (which already includes the forward overlap),
+    so split N+1 only takes over once it is "warm" (already several
+    `overlap` frames inside its training, far from its starting boundary).
 """
 
 import os
 import sys
 import shutil
 
-# import torch
-# import numpy as np
 from PIL import Image
 from tqdm import tqdm
-# from transformers import (
-#     SegformerImageProcessor,
-#     SegformerForSemanticSegmentation,
-# )
 
 
 # =======================
@@ -125,11 +123,8 @@ CROP_BOTTOM = 45
 FRAME_SKIP = 3
 
 # Split configuration.
-OVERLAP_FRAMES = 400
+OVERLAP_FRAMES = 200
 NUM_SPLITS = 3
-
-# Sky mask model. disabled
-# MODEL_NAME = "nvidia/segformer-b1-finetuned-cityscapes-1024-1024"
 
 # If True, replace existing processed files.
 OVERWRITE_EXISTING = True
@@ -269,76 +264,6 @@ def create_empty_colmap_split_folders():
 
 
 # =======================
-# SKY MASK MODEL  disabled
-# =======================
-
-# def load_sky_model():
-#     """
-#     Load SegFormer model for sky segmentation.
-#     """
-#     print(f"[INFO] Loading SegFormer model: {MODEL_NAME}")
-#
-#     processor = SegformerImageProcessor.from_pretrained(MODEL_NAME)
-#     model = SegformerForSemanticSegmentation.from_pretrained(MODEL_NAME)
-#
-#     device = "cuda" if torch.cuda.is_available() else "cpu"
-#
-#     model.to(device)
-#     model.eval()
-#
-#     print(f"[INFO] Model loaded on: {device}")
-#
-#     id2label = model.config.id2label
-#
-#     sky_id = None
-#
-#     for class_id, label in id2label.items():
-#         if label.lower() == "sky":
-#             sky_id = int(class_id)
-#             break
-#
-#     if sky_id is None:
-#         raise RuntimeError("Could not find 'sky' class in model labels.")
-#
-#     print(f"[INFO] Sky class ID: {sky_id}")
-#
-#     return processor, model, device, sky_id
-
-
-# def generate_sky_mask(image, processor, model, device, sky_id):
-#     """
-#     Generate a binary sky mask for a single PIL image.
-#
-#     Nerfstudio convention:
-#       255 white = valid data, train on this
-#       0 black   = masked out, ignore this / sky
-#     """
-#     inputs = processor(
-#         images=image,
-#         return_tensors="pt",
-#     ).to(device)
-#
-#     with torch.no_grad():
-#         outputs = model(**inputs)
-#
-#     logits = outputs.logits
-#
-#     upsampled_logits = torch.nn.functional.interpolate(
-#         logits,
-#         size=image.size[::-1],
-#         mode="bilinear",
-#         align_corners=False,
-#     )
-#
-#     pred_seg = upsampled_logits.argmax(dim=1)[0]
-#
-#     mask = torch.ones_like(pred_seg, dtype=torch.uint8) * 255
-#     mask[pred_seg == sky_id] = 0
-#
-#     return Image.fromarray(mask.cpu().numpy())
-
-
-# =======================
 # MAIN PROCESSING
 # =======================
 
@@ -350,13 +275,7 @@ def process_frames():
         f"_tmp_images_gs_{skip_label}",
     )
 
-    # tmp_mask_folder = os.path.join(
-    #     OUTPUT_ROOT,
-    #     f"_tmp_sky_masks_gs_{skip_label}",
-    # )
-
     os.makedirs(tmp_image_folder, exist_ok=True)
-    # os.makedirs(tmp_mask_folder, exist_ok=True)
 
     header_lines, data_lines = load_position_lines(SOURCE_POSITIONS_FILE)
 
@@ -382,8 +301,6 @@ def process_frames():
     print(f"[INFO] Subsampled frame count:  {len(indices)}")
     print("=" * 80)
 
-    # processor, model, device, sky_id = load_sky_model()
-
     filenames_by_index = {}
 
     print("\n[INFO] Processing frames: crop images")
@@ -394,17 +311,12 @@ def process_frames():
 
         input_path = os.path.join(SOURCE_IMAGES_FOLDER, filename)
         output_path = os.path.join(tmp_image_folder, filename)
-        # mask_path = os.path.join(tmp_mask_folder, filename)
 
         if not os.path.exists(input_path):
             print(f"[WARN] Image not found: {input_path}")
             continue
 
-        if (
-            not OVERWRITE_EXISTING
-            and os.path.exists(output_path)
-            # and os.path.exists(mask_path)
-        ):
+        if not OVERWRITE_EXISTING and os.path.exists(output_path):
             filenames_by_index[original_index] = filename
             continue
 
@@ -428,16 +340,6 @@ def process_frames():
             cropped_img = img.crop(crop_box)
             cropped_img.save(output_path)
 
-            # mask_img = generate_sky_mask(
-            #     cropped_img.convert("RGB"),
-            #     processor,
-            #     model,
-            #     device,
-            #     sky_id,
-            # )
-            #
-            # mask_img.save(mask_path)
-
         filenames_by_index[original_index] = filename
 
     processed = sorted(filenames_by_index.items())
@@ -445,25 +347,30 @@ def process_frames():
 
     print(f"\n[INFO] Processed frames: {num_processed}")
     print(f"[INFO] Temporary cropped images: {tmp_image_folder}")
-    # print(f"[INFO] Temporary sky masks:      {tmp_mask_folder}")
 
     if num_processed == 0:
         raise RuntimeError("No frames were processed. Check image paths and position file.")
 
     # =======================
-    # SPLIT CREATION
+    # SPLIT CREATION (overlap forward)
     # =======================
+    #
+    # Layout produced (split_size = num_processed // NUM_SPLITS):
+    #
+    #   split 1: [0                                  -> split_size + overlap]
+    #   split 2: [split_size                         -> 2*split_size + overlap]
+    #   split 3: [2*split_size                       -> num_processed]
+    #
+    # Each split starts at its natural base_start. Splits 1..N-1 extend
+    # FORWARD by `overlap_subsampled` frames into the next split's
+    # territory. The last split simply runs to the end.
+    #
+    # Camera 0 of each split is thus its natural beginning (no overlap),
+    # which makes pos_offset anchoring on cam[0] safe in multi-split mode.
 
     # Convert overlap from original frame units to subsampled frame units.
-    #
-    # Example:
-    #   OVERLAP_FRAMES = 400
-    #   FRAME_SKIP = 3
-    #
-    #   400 / 3 = 133.33...
-    #
-    # We use ceil-style division so the actual overlap is at least
-    # OVERLAP_FRAMES in original-frame units.
+    # Ceil-style division so the actual overlap is at least OVERLAP_FRAMES
+    # in original-frame units.
     overlap_subsampled = max(
         1,
         (OVERLAP_FRAMES + FRAME_SKIP - 1) // FRAME_SKIP,
@@ -492,18 +399,16 @@ def process_frames():
         else:
             base_end = num_processed
 
-        # Desired behavior:
-        #   split 1: starts normally
-        #   split 2: starts earlier, overlapping the end of split 1
-        #   split 3: starts earlier, overlapping the end of split 2
-        #
-        # Therefore, the later split goes backward.
-        if split_index == 0:
-            start = base_start
-        else:
-            start = max(0, base_start - overlap_subsampled)
+        # Each split (except the last) extends FORWARD into the next
+        # split's territory by overlap_subsampled frames.
+        start = base_start
 
-        end = base_end
+        if split_index < NUM_SPLITS - 1:
+            end = base_end + overlap_subsampled
+        else:
+            end = base_end
+
+        end = min(end, num_processed)
 
         splits.append((start, end))
 
@@ -511,7 +416,7 @@ def process_frames():
     print(f"       Overlap original frames:    {OVERLAP_FRAMES}")
     print(f"       Overlap subsampled frames:  {overlap_subsampled}")
     print(f"       Base split size:            {split_size}")
-    print("       Overlap mode:               later split starts earlier")
+    print("       Overlap mode:               earlier split extends forward")
 
     for split_index, (start, end) in enumerate(splits, start=1):
         split_frames = processed[start:end]
@@ -521,28 +426,18 @@ def process_frames():
             f"images_gs_split_{split_index}_{skip_label}",
         )
 
-        # split_mask_dir = os.path.join(
-        #     OUTPUT_ROOT,
-        #     f"sky_masks_gs_split_{split_index}_{skip_label}",
-        # )
-
         split_positions_path = os.path.join(
             OUTPUT_ROOT,
             f"frame_positions_split_{split_index}_{skip_label}.txt",
         )
 
         os.makedirs(split_image_dir, exist_ok=True)
-        # os.makedirs(split_mask_dir, exist_ok=True)
 
         for original_index, filename in split_frames:
             src_img = os.path.join(tmp_image_folder, filename)
             dst_img = os.path.join(split_image_dir, filename)
 
-            # src_mask = os.path.join(tmp_mask_folder, filename)
-            # dst_mask = os.path.join(split_mask_dir, filename)
-
             link_or_copy(src_img, dst_img)
-            # link_or_copy(src_mask, dst_mask)
 
         write_split_positions_file(
             split_positions_path,
@@ -559,7 +454,6 @@ def process_frames():
         print(f"       Subsampled range:      [{start}, {end})")
         print(f"       Original index range:  [{orig_start}, {orig_end}]")
         print(f"       Images:                {split_image_dir}")
-        # print(f"       Sky masks:             {split_mask_dir}")
         print(f"       Positions:             {split_positions_path}")
 
     for split_index in range(NUM_SPLITS - 1):

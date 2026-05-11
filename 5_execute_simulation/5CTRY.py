@@ -2,33 +2,27 @@
 # -*- coding: utf-8 -*-
 
 """
-4-multiple_log_gs_new.py
+4-multiple_log_gs_new_knn.py
 
-Replay script for Gaussian Splatting / Nerfstudio models on cam2sim data layout.
+Variant of 4-multiple_log_gs_new.py that uses the KNN local similarity
+transform (utm_to_nerfstudio_transform_knn.json) produced by
+4C_utm_yaw_to_nerfstudio_knn.py.
+
+Differences from 4-multiple_log_gs_new.py:
+  - Looks for utm_to_nerfstudio_transform_knn.json (not _transform.json)
+  - CoordinateTransformer is updated to load the new format and to fit
+    a local Umeyama on the k nearest training points at every query.
+
+Everything else is identical, so the calibration GUI, the replay loop,
+and the CARLA / hero / sensor handling are the same.
 
 Reads from (project root):
     data/processed_dataset/<BAG>/maps/map.xodr
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
     data/data_for_carla/<BAG>/camera.json
-    data/data_for_gaussian_splatting/<BAG>/outputs/nerfacto_split_N/nerfacto/<TS>/config.yml
-    data/data_for_gaussian_splatting/<BAG>/outputs/nerfacto_split_N/nerfacto/<TS>/utm_to_nerfstudio_transform.json
+    data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_N/splatfacto/<TS>/config.yml
+    data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_N/splatfacto/<TS>/utm_to_nerfstudio_transform_knn.json
     data/data_for_gaussian_splatting/<BAG>/frame_positions_split_N_1_of_K.txt
-
-Workflow:
-  1. Start CARLA server.
-  2. Run prepare_carla_world.py once (loads xodr, spawns hero + parked cars,
-     leaves them alive in CARLA, exits).
-  3. Run THIS script. It re-uses the existing hero vehicle.
-
-Phases:
-  PHASE 1: 4-panel calibration GUI (CARLA, GS free cam, original training image,
-           GS rendered from training pose).
-  PHASE 2: Replay - drive trajectory with CARLA + GS side by side, save frames.
-
-Run with --skip_calibration to jump straight to phase 2.
-
-Coordinate chain (per split):
-    CARLA local coords -> UTM (inverse XODR projection) -> Nerfstudio (similarity transform)
 """
 
 import os
@@ -47,6 +41,7 @@ import torch
 from PIL import Image
 from pyproj import Transformer
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+from sklearn.neighbors import NearestNeighbors
 
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.cameras.cameras import Cameras, CameraType
@@ -103,8 +98,11 @@ GS_DATA_ROOT = os.path.join(
 )
 GS_OUTPUTS_DIR = os.path.join(GS_DATA_ROOT, "outputs")
 DEFAULT_OUTPUT_DIR = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME, "replay_results"
+    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME, "replay_results_knn"
 )
+
+# KNN transform filename (different from the global Umeyama one)
+UTM_TRANSFORM_FILENAME = "utm_to_nerfstudio_transform_knn.json"
 
 IM_WIDTH = 800
 IM_HEIGHT = 503
@@ -146,13 +144,53 @@ class Slider:
 
 
 # =============================================================================
-#  COORDINATE TRANSFORMS
+#  LOCAL UMEYAMA (used at runtime by CoordinateTransformer)
+# =============================================================================
+
+def _umeyama_alignment_2d(source, target, with_scale=True):
+    """Runtime local-fit Umeyama, fast and minimal-allocation."""
+    n, dim = source.shape
+
+    mu_source = source.mean(axis=0)
+    mu_target = target.mean(axis=0)
+
+    source_centered = source - mu_source
+    target_centered = target - mu_target
+
+    var_source = float(np.sum(source_centered ** 2)) / n
+    if var_source < 1e-12:
+        return 1.0, np.eye(dim), mu_target - mu_source
+
+    cov = (target_centered.T @ source_centered) / n
+    U, D, Vt = np.linalg.svd(cov)
+
+    S = np.eye(dim)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        S[dim - 1, dim - 1] = -1
+
+    R = U @ S @ Vt
+    s = float(np.trace(np.diag(D) @ S) / var_source) if with_scale else 1.0
+    t = mu_target - s * R @ mu_source
+    return s, R, t
+
+
+# =============================================================================
+#  COORDINATE TRANSFORMS (KNN local similarity)
 # =============================================================================
 
 class CoordinateTransformer:
-    """CARLA <-> UTM <-> Nerfstudio coordinate chain (per split)."""
+    """
+    CARLA <-> UTM <-> Nerfstudio coordinate chain (per split), with KNN local
+    similarity for UTM -> NS.
+
+    Supports both JSON formats:
+      - mode == "local_similarity_knn": uses training_points + k for runtime fit.
+      - mode == "2D" (or missing): falls back to the old global Umeyama
+        (so the same script can still load an old _transform.json).
+    """
 
     def __init__(self, xodr_path, utm_to_nerfstudio_path):
+        # ---- xodr / projection setup ----
         with open(xodr_path, "r") as f:
             xodr_data = f.read()
 
@@ -180,49 +218,98 @@ class CoordinateTransformer:
         print(f"[CoordinateTransformer] UTM +X angle in CARLA: "
               f"{np.degrees(self.utm_x_angle_in_carla):.4f} deg")
 
+        # ---- Load transform JSON ----
         with open(utm_to_nerfstudio_path, "r") as f:
             tf = json.load(f)
 
-        self.ns_scale = tf["scale"]
-        self.ns_rotation = np.array(tf["rotation"])
-        self.ns_translation = np.array(tf["translation"])
         self.transform_mode = tf.get("mode", "2D")
-        self.position_rotation_angle = np.arctan2(
-            self.ns_rotation[1, 0], self.ns_rotation[0, 0]
-        )
 
+        # Global Umeyama params (always loaded for the yaw module &
+        # position_rotation_angle, and as a fallback when KNN block is absent).
+        if "scale" in tf and "rotation" in tf and "translation" in tf:
+            self.ns_scale = float(tf["scale"])
+            self.ns_rotation = np.array(tf["rotation"])
+            self.ns_translation = np.array(tf["translation"])
+            self.position_rotation_angle = float(np.arctan2(
+                self.ns_rotation[1, 0], self.ns_rotation[0, 0]
+            ))
+        else:
+            self.ns_scale = 1.0
+            self.ns_rotation = np.eye(3)
+            self.ns_translation = np.zeros(3)
+            self.position_rotation_angle = 0.0
+
+        # KNN block
+        self.alignment_mode = "global"
+        self._knn_utm = None
+        self._knn_ns_xy = None
+        self._knn_ns_z = None
+        self._knn_k = None
+        self._knn_index = None
+
+        if self.transform_mode == "local_similarity_knn":
+            tp = tf.get("training_points")
+            if tp is None:
+                raise RuntimeError(
+                    f"JSON has mode=local_similarity_knn but no "
+                    f"'training_points' block: {utm_to_nerfstudio_path}"
+                )
+            self._knn_utm = np.column_stack([
+                np.array(tp["utm_easting"], dtype=np.float64),
+                np.array(tp["utm_northing"], dtype=np.float64),
+            ])
+            self._knn_ns_xy = np.column_stack([
+                np.array(tp["ns_x"], dtype=np.float64),
+                np.array(tp["ns_y"], dtype=np.float64),
+            ])
+            self._knn_ns_z = np.array(tp["ns_z"], dtype=np.float64)
+            self._knn_k = int(tf.get("k", 20))
+            self._knn_k = max(3, min(self._knn_k, len(self._knn_utm) - 1))
+            self._knn_index = NearestNeighbors(
+                n_neighbors=self._knn_k
+            ).fit(self._knn_utm)
+            self.alignment_mode = "local_knn"
+            print(f"[CoordinateTransformer] Using KNN local similarity "
+                  f"(k={self._knn_k}, n_train={len(self._knn_utm)})")
+        else:
+            print(f"[CoordinateTransformer] Using global Umeyama "
+                  f"(scale={self.ns_scale:.10f}, "
+                  f"angle="
+                  f"{np.degrees(self.position_rotation_angle):.2f} deg)")
+
+        # ---- Yaw alignment (kept global for both modes) ----
         yaw_align = tf.get("yaw_alignment")
         if yaw_align:
-            self.yaw_sign = yaw_align["yaw_sign"]
-            self.yaw_offset = yaw_align["yaw_offset_rad"]
+            self.yaw_sign = int(yaw_align["yaw_sign"])
+            self.yaw_offset = float(yaw_align["yaw_offset_rad"])
             self.use_orientation_yaw = True
             sign_str = "+" if self.yaw_sign > 0 else "-"
-            print(f"[CoordinateTransformer] Using orientation-based yaw: "
+            print(f"[CoordinateTransformer] yaw map: "
                   f"ns_yaw = {sign_str}utm_yaw + "
                   f"{np.degrees(self.yaw_offset):.2f} deg "
-                  f"(residual std: {yaw_align.get('residual_std_deg', '?')} deg)")
+                  f"(residual std: "
+                  f"{yaw_align.get('residual_std_deg', '?')} deg)")
         else:
             self.yaw_sign = -1
             self.yaw_offset = self.position_rotation_angle - math.pi / 2
             self.use_orientation_yaw = False
-            print(f"[CoordinateTransformer] WARN: No yaw_alignment in JSON. "
+            print(f"[CoordinateTransformer] WARN: no yaw_alignment in JSON. "
                   f"Using fallback formula. offset="
                   f"{np.degrees(self.yaw_offset):.2f} deg")
 
+        # ---- Camera mount angles ----
         mount = tf.get("camera_mount_angles")
         if mount:
-            self.avg_pitch = mount["avg_pitch_rad"]
-            self.avg_roll = mount["avg_roll_rad"]
-            print(f"[CoordinateTransformer] Camera mount: "
+            self.avg_pitch = float(mount["avg_pitch_rad"])
+            self.avg_roll = float(mount["avg_roll_rad"])
+            print(f"[CoordinateTransformer] camera mount: "
                   f"pitch={np.degrees(self.avg_pitch):.2f} deg, "
                   f"roll={np.degrees(self.avg_roll):.2f} deg")
         else:
             self.avg_pitch = 0.0
             self.avg_roll = 0.0
 
-        print(f"[CoordinateTransformer] scale={self.ns_scale:.10f}, "
-              f"position_rotation_angle="
-              f"{np.degrees(self.position_rotation_angle):.2f} deg")
+    # ---- Internal helpers ----
 
     def _utm_to_carla_point(self, utm_easting, utm_northing):
         lon, lat = self.transformer_utm_to_wgs84.transform(utm_easting, utm_northing)
@@ -244,16 +331,48 @@ class CoordinateTransformer:
         dy = cy1 - cy0
         return math.atan2(dy, dx)
 
+    # ---- Public API ----
+
     def carla_to_utm(self, carla_x, carla_y):
         local_x = carla_x
         local_y = -carla_y
         proj_x = local_x - self.xodr_offset[0]
         proj_y = local_y - self.xodr_offset[1]
         lon, lat = self.transformer_proj_to_wgs84.transform(proj_x, proj_y)
-        utm_easting, utm_northing = self.transformer_wgs84_to_utm.transform(lon, lat)
+        utm_easting, utm_northing = self.transformer_wgs84_to_utm.transform(
+            lon, lat
+        )
         return utm_easting, utm_northing
 
     def utm_to_nerfstudio(self, easting, northing, altitude=0.0):
+        """
+        - local_knn mode: fits a local Umeyama on the k nearest training
+          points and applies it. Z is inverse-distance interpolated from
+          the same neighbors' ns_z.
+        - global mode: scale * R @ [E, N, alt] + t.
+        """
+        if self.alignment_mode == "local_knn":
+            query = np.array([easting, northing], dtype=np.float64)
+            _, idx = self._knn_index.kneighbors(
+                query.reshape(1, -1), n_neighbors=self._knn_k
+            )
+            local_src = self._knn_utm[idx[0]]
+            local_tgt = self._knn_ns_xy[idx[0]]
+
+            s_loc, R_loc, t_loc = _umeyama_alignment_2d(
+                local_src, local_tgt, with_scale=True
+            )
+            xy_pred = s_loc * (R_loc @ query) + t_loc
+
+            # Z via inverse-distance on the same neighbors' ns_z
+            dists = np.linalg.norm(local_src - query, axis=1)
+            weights = 1.0 / (dists + 1e-9)
+            weights /= weights.sum()
+            z_pred = float((weights * self._knn_ns_z[idx[0]]).sum())
+
+            return np.array([xy_pred[0], xy_pred[1], z_pred])
+
+        # Global Umeyama fallback
         utm = np.array([easting, northing, altitude])
         return self.ns_scale * self.ns_rotation @ utm + self.ns_translation
 
@@ -265,8 +384,7 @@ class CoordinateTransformer:
         if self.use_orientation_yaw:
             utm_yaw = self.utm_x_angle_in_carla - carla_yaw_rad + math.pi / 2
             return self.yaw_sign * utm_yaw + self.yaw_offset
-        else:
-            return -carla_yaw_rad + self.position_rotation_angle - math.pi / 2
+        return -carla_yaw_rad + self.position_rotation_angle - math.pi / 2
 
 
 # =============================================================================
@@ -438,41 +556,41 @@ def render_gs(pipeline, c2w, width, height, fov):
 
 
 # =============================================================================
-#  SPLIT DETECTION (cam2sim layout)
+#  SPLIT DETECTION (cam2sim layout) - looks for the KNN transform JSON
 # =============================================================================
 
 def auto_detect_splits():
     """
     Look for splatfacto splits in:
         data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_<N>/splatfacto/<TS>/config.yml
- 
+
     For each split also resolves:
-        - utm_to_nerfstudio_transform.json  (next to config.yml)
-        - frame_positions_split_<N>_*.txt   (in GS_DATA_ROOT)
+        - UTM_TRANSFORM_FILENAME (next to config.yml)
+        - frame_positions_split_<N>_*.txt (in GS_DATA_ROOT)
     """
     splits = []
- 
+
     if not os.path.isdir(GS_OUTPUTS_DIR):
         print(f"[WARN] Outputs folder not found: {GS_OUTPUTS_DIR}")
         return splits
- 
+
     split_dirs = sorted([
         d for d in os.listdir(GS_OUTPUTS_DIR)
         if os.path.isdir(os.path.join(GS_OUTPUTS_DIR, d))
         and d.startswith("splatfacto_split_")
     ])
- 
+
     for split_dir in split_dirs:
         match = re.match(r"splatfacto_split_(\d+)", split_dir)
         if not match:
             continue
         split_num = int(match.group(1))
- 
+
         splatfacto_dir = os.path.join(GS_OUTPUTS_DIR, split_dir, "splatfacto")
         if not os.path.isdir(splatfacto_dir):
             print(f"[WARN] Missing 'splatfacto' subfolder in {split_dir}")
             continue
- 
+
         runs = sorted([
             d for d in os.listdir(splatfacto_dir)
             if os.path.isdir(os.path.join(splatfacto_dir, d))
@@ -480,20 +598,21 @@ def auto_detect_splits():
         if not runs:
             print(f"[WARN] No runs found in {splatfacto_dir}")
             continue
- 
+
         run_name = runs[-1]
         run_dir = os.path.join(splatfacto_dir, run_name)
         config_path = os.path.join(run_dir, "config.yml")
-        utm_transform_path = os.path.join(run_dir, "utm_to_nerfstudio_transform.json")
- 
+        utm_transform_path = os.path.join(run_dir, UTM_TRANSFORM_FILENAME)
+
         if not os.path.exists(config_path):
             print(f"[WARN] No config.yml in {run_dir}")
             continue
         if not os.path.exists(utm_transform_path):
-            print(f"[WARN] No utm_to_nerfstudio_transform.json in {run_dir}")
-            print(f"       Run 4C_utm_yaw_to_nerfstudio.py for split {split_num} first.")
+            print(f"[WARN] No {UTM_TRANSFORM_FILENAME} in {run_dir}")
+            print(f"       Run 4C_utm_yaw_to_nerfstudio_knn.py for split "
+                  f"{split_num} first.")
             continue
- 
+
         # Find frame_positions_split_<N>_*.txt
         frame_positions = None
         for fname in os.listdir(GS_DATA_ROOT):
@@ -501,11 +620,11 @@ def auto_detect_splits():
                     and fname.endswith(".txt")):
                 frame_positions = os.path.join(GS_DATA_ROOT, fname)
                 break
- 
+
         if frame_positions is None:
             print(f"[WARN] No frame_positions_split_{split_num}_*.txt found "
                   f"in {GS_DATA_ROOT}")
- 
+
         splits.append({
             "name": f"split_{split_num}",
             "split_num": split_num,
@@ -516,10 +635,10 @@ def auto_detect_splits():
             "run_name": run_name,
         })
         print(f"[INFO] Found split_{split_num} (run={run_name})")
- 
+
     splits.sort(key=lambda s: s["split_num"])
     return splits
- 
+
 
 def find_best_split(frame_id, splits, last_split_idx=0):
     current_split = splits[last_split_idx]
@@ -646,7 +765,8 @@ def load_split_models(split_configs, xodr_path, fov):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Replay with Nerfstudio-trained GS (multi-split, cam2sim layout)"
+        description="Replay with Nerfstudio-trained GS (KNN local similarity, "
+                    "multi-split, cam2sim layout)"
     )
     parser.add_argument("--only_carla", action="store_true",
                         help="Run without GS model")
@@ -665,16 +785,17 @@ def main():
     args = parser.parse_args()
 
     print("=" * 80)
-    print("REPLAY: CARLA + Gaussian Splatting (multi-split)")
+    print("REPLAY (KNN local similarity): CARLA + Gaussian Splatting (multi-split)")
     print("=" * 80)
-    print(f"[INFO] Project root:    {PROJECT_ROOT}")
-    print(f"[INFO] Bag name:        {BAG_NAME}")
-    print(f"[INFO] XODR file:       {XODR_FILE}")
-    print(f"[INFO] Trajectory:      {TRAJECTORY_FILE}")
-    print(f"[INFO] Camera config:   {CAMERA_CONFIG_FILE}")
-    print(f"[INFO] GS data root:    {GS_DATA_ROOT}")
-    print(f"[INFO] Output dir:      {args.output_dir}")
-    print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
+    print(f"[INFO] Project root:        {PROJECT_ROOT}")
+    print(f"[INFO] Bag name:            {BAG_NAME}")
+    print(f"[INFO] XODR file:           {XODR_FILE}")
+    print(f"[INFO] Trajectory:          {TRAJECTORY_FILE}")
+    print(f"[INFO] Camera config:       {CAMERA_CONFIG_FILE}")
+    print(f"[INFO] GS data root:        {GS_DATA_ROOT}")
+    print(f"[INFO] UTM transform file:  {UTM_TRANSFORM_FILENAME}")
+    print(f"[INFO] Output dir:          {args.output_dir}")
+    print(f"[INFO] CARLA:               {CARLA_IP}:{CARLA_PORT}")
     print("=" * 80)
 
     # ---- Camera config ----
@@ -721,7 +842,8 @@ def main():
             zmin = sm.training_cameras[:, 2, 3].min()
             zmax = sm.training_cameras[:, 2, 3].max()
             print(f"   {sm.name}: frames [{sm.min_frame}-{sm.max_frame}], "
-                  f"Z range [{zmin:.4f}, {zmax:.4f}]")
+                  f"Z range [{zmin:.4f}, {zmax:.4f}], "
+                  f"alignment_mode={sm.coord_transformer.alignment_mode}")
 
     # ---- Connect to CARLA ----
     print(f"\n[INFO] Connecting to CARLA at {CARLA_IP}:{CARLA_PORT}...")
@@ -1076,13 +1198,13 @@ def main():
     win_w = IM_WIDTH * 2
     win_h = IM_HEIGHT
     screen = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("GS Replay (Multi-Split) | Driving")
+    pygame.display.set_caption("GS Replay KNN (Multi-Split) | Driving")
 
     print(f"\n[INFO] Replaying with {len(split_models)} split(s)...")
 
     save_flag = not args.no_save
     if save_flag:
-        run_name = f"{BAG_NAME}_replay"
+        run_name = f"{BAG_NAME}_replay_knn"
         save_dir_carla = os.path.join(args.output_dir, run_name, "carla")
         save_dir_gs = os.path.join(args.output_dir, run_name, "gs")
         save_dir_combined = os.path.join(args.output_dir, run_name, "combined")
