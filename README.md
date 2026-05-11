@@ -2847,8 +2847,14 @@ To stop the server, press `Ctrl+C` in its terminal.
 
 ## Scripts
 
+Ensure CARLA is running and the Scenario is loaded. You will need two separate Terminals. Running 3F requires the conda environment data_extraction
+```bash
+python 3_generate_simulation_data/3C_setup_carla.py
+```
 
-MISSING PART ABOUT STARTING CARLA IN STEP 3!!!!!!!!!!!!!!!
+```bash
+python 3_generate_simulation_data/3F_generate_carla_scenario.py
+```
 
 ### 5A_trajectory_only_carla.py
 
