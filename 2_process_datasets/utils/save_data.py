@@ -5,7 +5,7 @@ import shutil
 import unicodedata
 import re
 import datetime
-from utils.config import MAPS_FOLDER_NAME, DATASETS_FOLDER_NAME, MODEL_FOLDER_NAME, OUTPUT_FOLDER_NAME
+from utils.config import MAPS_FOLDER_NAME, DATASETS_FOLDER_NAME, MODEL_FOLDER_NAME
 from utils.buildings import get_buildings_object
 from PIL import Image
 #from utils.map_data import save_graph_to_osm
@@ -35,16 +35,16 @@ def create_dataset_folders(output_folder):
     os.makedirs(DATASETS_FOLDER_NAME, exist_ok=True)  # Create the main datasets folder if it doesn't exist
     os.makedirs(output_folder, exist_ok=True)  # Create the output folder if it doesn't exist
 
-def create_output_folders(output_folder, delete = True):
-    os.makedirs(OUTPUT_FOLDER_NAME, exist_ok=True)
-    if os.path.exists(output_folder) and delete:
-        shutil.rmtree(output_folder)
-    os.makedirs(output_folder, exist_ok=True)
-    os.makedirs(os.path.join(output_folder, "carla"), exist_ok=True)
-    os.makedirs(os.path.join(output_folder, "output"), exist_ok=True)
-    os.makedirs(os.path.join(output_folder, "depth"), exist_ok=True)
-    os.makedirs(os.path.join(output_folder, "seg"), exist_ok=True)
-    os.makedirs(os.path.join(output_folder, "canny"), exist_ok=True)
+# def create_output_folders(output_folder, delete = True):
+#     os.makedirs(OUTPUT_FOLDER_NAME, exist_ok=True)
+#     if os.path.exists(output_folder) and delete:
+#         shutil.rmtree(output_folder)
+#     os.makedirs(output_folder, exist_ok=True)
+#     os.makedirs(os.path.join(output_folder, "carla"), exist_ok=True)
+#     os.makedirs(os.path.join(output_folder, "output"), exist_ok=True)
+#     os.makedirs(os.path.join(output_folder, "depth"), exist_ok=True)
+#     os.makedirs(os.path.join(output_folder, "seg"), exist_ok=True)
+#     os.makedirs(os.path.join(output_folder, "canny"), exist_ok=True)
 
 def save_vehicle_data(output_folder, output_json):
     with open(os.path.join(output_folder,"vehicle_data.json"), "w") as f:
