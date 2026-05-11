@@ -368,7 +368,7 @@ def main():
 
         status = ""
         if progress[0] > seg_start + 5.0:
-            status = f" ⚠️  STARTS LATE (progress={progress[0]:.1f} m > segment start={seg_start:.1f} m)"
+            status = f"   STARTS LATE (progress={progress[0]:.1f} m > segment start={seg_start:.1f} m)"
         print(f"  {fname}: {len(mx)} pts, progress [{progress[0]:.1f} → {progress[-1]:.1f}] m, "
               f"completion={completion:.1f}%{status}")
 
@@ -430,7 +430,7 @@ def main():
 
             status = ""
             if progress[0] > seg_start + 5.0:
-                status = f" ⚠️  STARTS LATE (progress={progress[0]:.1f} m > segment start={seg_start:.1f} m)"
+                status = f"   STARTS LATE (progress={progress[0]:.1f} m > segment start={seg_start:.1f} m)"
             print(f"  {effective_method}/{fname}: {len(mx)} pts, progress [{progress[0]:.1f} → {progress[-1]:.1f}] m, "
                   f"completion={completion:.1f}%{status}")
 
