@@ -26,6 +26,10 @@ Outputs include:
     # sky_masks_gs_split_2_1_of_<FRAME_SKIP>/   (disabled)
     frame_positions_split_2_1_of_<FRAME_SKIP>.txt
 
+    images_gs_split_3_1_of_<FRAME_SKIP>/
+    # sky_masks_gs_split_3_1_of_<FRAME_SKIP>/   (disabled)
+    frame_positions_split_3_1_of_<FRAME_SKIP>.txt
+
     colmap/split_1/sparse/0/   (empty, for the COLMAP reconstruction)
     colmap/split_2/sparse/0/   (empty, for the COLMAP reconstruction)
     colmap/split_3/sparse/0/   (empty, for the COLMAP reconstruction)
@@ -38,6 +42,11 @@ This script:
   - Creates overlapping splits for Gaussian Splatting
   - Creates one empty COLMAP folder per split, ready to receive the
     sparse reconstruction exported from the COLMAP GUI
+
+Overlap behavior:
+  - Split 1 starts normally.
+  - Split 2 starts earlier, overlapping the end of split 1.
+  - Split 3 starts earlier, overlapping the end of split 2.
 """
 
 import os
@@ -119,7 +128,7 @@ FRAME_SKIP = 3
 OVERLAP_FRAMES = 400
 NUM_SPLITS = 3
 
-# Sky mask model. (disabled)
+# Sky mask model. disabled
 # MODEL_NAME = "nvidia/segformer-b1-finetuned-cityscapes-1024-1024"
 
 # If True, replace existing processed files.
@@ -234,7 +243,7 @@ def create_empty_colmap_split_folders():
     """
     Create one COLMAP folder per split, each with its own sparse/0 sub-folder.
 
-    Layout produced (with NUM_SPLITS=3):
+    Layout produced with NUM_SPLITS=3:
       OUTPUT_ROOT/colmap/split_1/sparse/0
       OUTPUT_ROOT/colmap/split_2/sparse/0
       OUTPUT_ROOT/colmap/split_3/sparse/0
@@ -260,7 +269,7 @@ def create_empty_colmap_split_folders():
 
 
 # =======================
-# SKY MASK MODEL  (disabled)
+# SKY MASK MODEL  disabled
 # =======================
 
 # def load_sky_model():
@@ -445,7 +454,21 @@ def process_frames():
     # SPLIT CREATION
     # =======================
 
-    overlap_subsampled = max(1, OVERLAP_FRAMES // FRAME_SKIP)
+    # Convert overlap from original frame units to subsampled frame units.
+    #
+    # Example:
+    #   OVERLAP_FRAMES = 400
+    #   FRAME_SKIP = 3
+    #
+    #   400 / 3 = 133.33...
+    #
+    # We use ceil-style division so the actual overlap is at least
+    # OVERLAP_FRAMES in original-frame units.
+    overlap_subsampled = max(
+        1,
+        (OVERLAP_FRAMES + FRAME_SKIP - 1) // FRAME_SKIP,
+    )
+
     split_size = num_processed // NUM_SPLITS
 
     if split_size == 0:
@@ -453,17 +476,34 @@ def process_frames():
             f"NUM_SPLITS={NUM_SPLITS} is too large for {num_processed} processed frames."
         )
 
+    if overlap_subsampled >= split_size:
+        print(
+            "[WARN] overlap_subsampled is greater than or equal to split_size. "
+            "Splits will have very large overlap."
+        )
+
     splits = []
 
     for split_index in range(NUM_SPLITS):
-        start = split_index * split_size
+        base_start = split_index * split_size
 
         if split_index < NUM_SPLITS - 1:
-            end = (split_index + 1) * split_size + overlap_subsampled
+            base_end = (split_index + 1) * split_size
         else:
-            end = num_processed
+            base_end = num_processed
 
-        end = min(end, num_processed)
+        # Desired behavior:
+        #   split 1: starts normally
+        #   split 2: starts earlier, overlapping the end of split 1
+        #   split 3: starts earlier, overlapping the end of split 2
+        #
+        # Therefore, the later split goes backward.
+        if split_index == 0:
+            start = base_start
+        else:
+            start = max(0, base_start - overlap_subsampled)
+
+        end = base_end
 
         splits.append((start, end))
 
@@ -471,6 +511,7 @@ def process_frames():
     print(f"       Overlap original frames:    {OVERLAP_FRAMES}")
     print(f"       Overlap subsampled frames:  {overlap_subsampled}")
     print(f"       Base split size:            {split_size}")
+    print("       Overlap mode:               later split starts earlier")
 
     for split_index, (start, end) in enumerate(splits, start=1):
         split_frames = processed[start:end]
@@ -531,6 +572,11 @@ def process_frames():
             print(
                 f"\n[INFO] Overlap between split_{split_index + 1} "
                 f"and split_{split_index + 2}: {n_overlap} subsampled frames"
+            )
+        else:
+            print(
+                f"\n[WARN] No overlap detected between split_{split_index + 1} "
+                f"and split_{split_index + 2}"
             )
 
     print("\n[INFO] Done.")

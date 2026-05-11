@@ -118,7 +118,7 @@ IM_HEIGHT = 503
 
 # Drive control
 DRIVE_SPEED_KMH = 10.0          # constant forward speed for ackermann
-PREDICT_EVERY = 3               # call DAVE-2 every N frames
+PREDICT_EVERY = 1               # call DAVE-2 every N frames
 
 # Hero startup (mirrors the only_carla script that works)
 LAUNCH_SPEED_KMH = 12.0           # speed for warmup launch (kick-starts ackermann)
@@ -134,7 +134,7 @@ COVERAGE_THRESHOLD = 0.15       # nerfstudio units, distance to nearest train ca
 COVERAGE_FRAME_LIMIT = 30       # consecutive out-of-coverage frames
 
 # Split switching
-SWITCH_DELAY = 100               # frames before actually switching split
+SWITCH_DELAY = 200               # frames before actually switching split
 
 
 # =============================================================================
