@@ -20,6 +20,7 @@ cache
 *.h5
 !data/data_for_carla/reference_bag/
 data/data_for_gaussian_splatting/reference_bag_old/*
+data/data_for_gaussian_splatting/reference_bag_new/*
 data/data_for_carla/reference_bag/*
 !data/data_for_carla/reference_bag/camera.json
 results/*
