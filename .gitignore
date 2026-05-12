@@ -21,3 +21,4 @@ cache
 !data/data_for_carla/reference_bag/
 data/data_for_carla/reference_bag/*
 !data/data_for_carla/reference_bag/camera.json
+results/*
