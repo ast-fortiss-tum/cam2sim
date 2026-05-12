@@ -4,53 +4,30 @@
 """
 Prepare images and overlapping splits for Gaussian Splatting.
 
-Reads source data from:
+PATCHED to replicate thesis splits exactly:
+  - FRAME_SKIP = 2 (was 3)
+  - OVERLAP_FRAMES = 99 (was 200)
+  - Split partitioning is done in ORIGINAL frame_id units, then subsampled.
 
+Resulting splits for a 3144-frame bag with FRAME_SKIP=2, NUM_SPLITS=3,
+OVERLAP_FRAMES=99:
+  - split 1: frame_id 0    -> 1146  (~574 subsampled)
+  - split 2: frame_id 1048 -> 2194  (~574 subsampled)
+  - split 3: frame_id 2096 -> 3142  (~524 subsampled)
+  - overlap between consecutive splits: ~99 frame_id (= 50 subsampled)
+
+Reads source data from:
     data/raw_dataset/<BAG_NAME>/images
     data/raw_dataset/<BAG_NAME>/images_positions.txt
 
 Writes all Gaussian Splatting data to:
-
     data/data_for_gaussian_splatting/<BAG_NAME>/
 
 Outputs include:
-
     _tmp_images_gs_1_of_<FRAME_SKIP>/
-
-    images_gs_split_1_1_of_<FRAME_SKIP>/
-    frame_positions_split_1_1_of_<FRAME_SKIP>.txt
-
-    images_gs_split_2_1_of_<FRAME_SKIP>/
-    frame_positions_split_2_1_of_<FRAME_SKIP>.txt
-
-    images_gs_split_3_1_of_<FRAME_SKIP>/
-    frame_positions_split_3_1_of_<FRAME_SKIP>.txt
-
-    colmap/split_1/sparse/0/   (empty, for the COLMAP reconstruction)
-    colmap/split_2/sparse/0/   (empty, for the COLMAP reconstruction)
-    colmap/split_3/sparse/0/   (empty, for the COLMAP reconstruction)
-
-This script:
-  - Uses hardcoded BAG_NAME, no command-line parameters
-  - Imports local utils from the same folder as this script
-  - Crops image bottoms
-  - Creates overlapping splits for Gaussian Splatting (overlap forward)
-  - Creates one empty COLMAP folder per split, ready to receive the
-    sparse reconstruction exported from the COLMAP GUI
-
-Overlap behavior (overlap forward, matches the original snowy pipeline):
-  - Each split starts at its natural base_start.
-  - Each split (except the last) ends LATER than its base_end, extending
-    forward into the next split's territory by `overlap_subsampled` frames.
-  - Last split ends at the very end of the processed range.
-
-Consequence at inference time:
-  - Camera 0 of split N is the natural beginning of split N's training data
-    (NOT in an overlap zone), so it is a clean anchor for offset computations.
-  - The model switch between split N and split N+1 should happen at
-    split N's max_frame (which already includes the forward overlap),
-    so split N+1 only takes over once it is "warm" (already several
-    `overlap` frames inside its training, far from its starting boundary).
+    images_gs_split_N_1_of_<FRAME_SKIP>/
+    frame_positions_split_N_1_of_<FRAME_SKIP>.txt
+    colmap/split_N/sparse/0/   (empty)
 """
 
 import os
@@ -66,7 +43,6 @@ from tqdm import tqdm
 # =======================
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
 LOCAL_UTILS_DIR = os.path.join(SCRIPT_DIR, "utils")
@@ -78,7 +54,6 @@ if not os.path.isdir(LOCAL_UTILS_DIR):
 
 if SCRIPT_DIR in sys.path:
     sys.path.remove(SCRIPT_DIR)
-
 sys.path.insert(0, SCRIPT_DIR)
 
 
@@ -86,47 +61,25 @@ sys.path.insert(0, SCRIPT_DIR)
 # HARDCODED CONFIGURATION
 # =======================
 
-# Change this to select another bag.
-# No command-line parameters are used.
 BAG_NAME = "reference_bag"
 
-# Source images.
 SOURCE_IMAGES_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "raw_dataset",
-    BAG_NAME,
-    "images",
+    PROJECT_ROOT, "data", "raw_dataset", BAG_NAME, "images",
 )
-
-# Source position file.
 SOURCE_POSITIONS_FILE = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "raw_dataset",
-    BAG_NAME,
-    "images_positions.txt",
+    PROJECT_ROOT, "data", "raw_dataset", BAG_NAME, "images_positions.txt",
 )
-
-# Final Gaussian Splatting output root.
 OUTPUT_ROOT = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "data_for_gaussian_splatting",
-    BAG_NAME,
+    PROJECT_ROOT, "data", "data_for_gaussian_splatting", BAG_NAME,
 )
 
-# Crop this many pixels from the bottom of every image.
 CROP_BOTTOM = 45
 
-# Keep one frame every FRAME_SKIP frames.
-FRAME_SKIP = 3
-
-# Split configuration.
-OVERLAP_FRAMES = 200
+# THESIS PARAMETERS (do NOT change without rerunning COLMAP)
+FRAME_SKIP = 2
 NUM_SPLITS = 3
+OVERLAP_FRAMES = 100   # in ORIGINAL frame_id units
 
-# If True, replace existing processed files.
 OVERWRITE_EXISTING = True
 
 
@@ -139,77 +92,47 @@ def ensure_input_paths():
         raise FileNotFoundError(
             f"Source image folder not found: {SOURCE_IMAGES_FOLDER}"
         )
-
     if not os.path.exists(SOURCE_POSITIONS_FILE):
         raise FileNotFoundError(
             f"Source positions file not found: {SOURCE_POSITIONS_FILE}"
         )
-
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
 
 
 def load_position_lines(path):
-    """
-    Load position file.
-
-    Returns:
-      header_lines: comment/header lines starting with '#'
-      data_lines: valid non-empty non-comment lines
-    """
     header_lines = []
     data_lines = []
-
     with open(path, "r") as f:
         for line in f:
             raw = line.rstrip("\n")
             stripped = raw.strip()
-
             if not stripped:
                 continue
-
             if stripped.startswith("#"):
                 header_lines.append(raw)
             else:
                 data_lines.append(stripped)
-
     if not data_lines:
         raise RuntimeError(f"No valid data lines found in: {path}")
-
     return header_lines, data_lines
 
 
 def get_image_filename_from_position_line(line):
-    """
-    The image file is expected to be the last comma-separated column.
-
-    Example:
-      FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Z,
-      Qx, Qy, Qz, Qw, Odom_Yaw, ImageFile
-    """
     parts = [p.strip() for p in line.split(",")]
-
     if len(parts) < 2:
         raise RuntimeError(f"Invalid position line: {line}")
-
     return parts[-1]
 
 
 def link_or_copy(src, dst):
-    """
-    Prefer hard-link for speed and storage efficiency.
-    Fall back to copy if hard-linking fails.
-    """
     if not os.path.exists(src):
         raise FileNotFoundError(f"Source file missing: {src}")
-
     if os.path.exists(dst):
         if OVERWRITE_EXISTING:
             os.remove(dst)
         else:
             return
-
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-
     try:
         os.link(src, dst)
     except OSError:
@@ -217,9 +140,6 @@ def link_or_copy(src, dst):
 
 
 def write_split_positions_file(path, header_lines, split_frames, data_lines):
-    """
-    Write position file for a split.
-    """
     with open(path, "w") as f:
         if header_lines:
             for header in header_lines:
@@ -229,37 +149,17 @@ def write_split_positions_file(path, header_lines, split_frames, data_lines):
                 "# FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Z, "
                 "Qx, Qy, Qz, Qw, Odom_Yaw, ImageFile\n"
             )
-
         for original_index, _filename in split_frames:
             f.write(data_lines[original_index] + "\n")
 
 
 def create_empty_colmap_split_folders():
-    """
-    Create one COLMAP folder per split, each with its own sparse/0 sub-folder.
-
-    Layout produced with NUM_SPLITS=3:
-      OUTPUT_ROOT/colmap/split_1/sparse/0
-      OUTPUT_ROOT/colmap/split_2/sparse/0
-      OUTPUT_ROOT/colmap/split_3/sparse/0
-
-    Each split is an independent dataset for nerfstudio. The COLMAP GUI,
-    when exporting a sparse model, will write cameras.bin / images.bin /
-    points3D.bin directly into the chosen export folder; pointing it at
-    `colmap/split_N/sparse/0` therefore produces the expected layout for
-    nerfstudio without manual renames.
-    """
     colmap_root = os.path.join(OUTPUT_ROOT, "colmap")
-
     for split_index in range(1, NUM_SPLITS + 1):
         split_sparse_dir = os.path.join(
-            colmap_root,
-            f"split_{split_index}",
-            "sparse",
-            "0",
+            colmap_root, f"split_{split_index}", "sparse", "0",
         )
         os.makedirs(split_sparse_dir, exist_ok=True)
-
     print(f"[INFO] Empty COLMAP split folders created in: {colmap_root}")
 
 
@@ -271,24 +171,20 @@ def process_frames():
     skip_label = f"1_of_{FRAME_SKIP}"
 
     tmp_image_folder = os.path.join(
-        OUTPUT_ROOT,
-        f"_tmp_images_gs_{skip_label}",
+        OUTPUT_ROOT, f"_tmp_images_gs_{skip_label}",
     )
-
     os.makedirs(tmp_image_folder, exist_ok=True)
 
     header_lines, data_lines = load_position_lines(SOURCE_POSITIONS_FILE)
-
     total_frames = len(data_lines)
 
+    # Subsampled indices (in original-frame units)
     indices = list(range(0, total_frames, FRAME_SKIP))
 
     print("=" * 80)
-    print("GAUSSIAN SPLATTING IMAGE PREPARATION")
+    print("GAUSSIAN SPLATTING IMAGE PREPARATION (thesis-replicating)")
     print("=" * 80)
     print(f"[INFO] Project root:            {PROJECT_ROOT}")
-    print(f"[INFO] Script folder:           {SCRIPT_DIR}")
-    print(f"[INFO] Local utils:             {LOCAL_UTILS_DIR}")
     print(f"[INFO] Bag name:                {BAG_NAME}")
     print(f"[INFO] Source images:           {SOURCE_IMAGES_FOLDER}")
     print(f"[INFO] Source positions:        {SOURCE_POSITIONS_FILE}")
@@ -296,7 +192,7 @@ def process_frames():
     print(f"[INFO] Crop bottom:             {CROP_BOTTOM}")
     print(f"[INFO] Frame skip:              {FRAME_SKIP}")
     print(f"[INFO] Split count:             {NUM_SPLITS}")
-    print(f"[INFO] Overlap frames:          {OVERLAP_FRAMES}")
+    print(f"[INFO] Overlap frames (orig):   {OVERLAP_FRAMES}")
     print(f"[INFO] Total source frames:     {total_frames}")
     print(f"[INFO] Subsampled frame count:  {len(indices)}")
     print("=" * 80)
@@ -304,7 +200,6 @@ def process_frames():
     filenames_by_index = {}
 
     print("\n[INFO] Processing frames: crop images")
-
     for original_index in tqdm(indices, desc="Processing"):
         line = data_lines[original_index]
         filename = get_image_filename_from_position_line(line)
@@ -322,21 +217,12 @@ def process_frames():
 
         with Image.open(input_path) as img:
             width, height = img.size
-
             crop_height = height - CROP_BOTTOM
-
             if crop_height <= 0:
                 raise RuntimeError(
-                    f"CROP_BOTTOM={CROP_BOTTOM} is too large for image: {input_path}"
+                    f"CROP_BOTTOM={CROP_BOTTOM} too large for image: {input_path}"
                 )
-
-            crop_box = (
-                0,
-                0,
-                width,
-                crop_height,
-            )
-
+            crop_box = (0, 0, width, crop_height)
             cropped_img = img.crop(crop_box)
             cropped_img.save(output_path)
 
@@ -349,94 +235,68 @@ def process_frames():
     print(f"[INFO] Temporary cropped images: {tmp_image_folder}")
 
     if num_processed == 0:
-        raise RuntimeError("No frames were processed. Check image paths and position file.")
+        raise RuntimeError("No frames were processed.")
 
     # =======================
-    # SPLIT CREATION (overlap forward)
+    # SPLIT CREATION
     # =======================
     #
-    # Layout produced (split_size = num_processed // NUM_SPLITS):
+    # Logic (thesis-faithful): work in ORIGINAL frame_id units to partition,
+    # then filter by the subsampled set.
     #
-    #   split 1: [0                                  -> split_size + overlap]
-    #   split 2: [split_size                         -> 2*split_size + overlap]
-    #   split 3: [2*split_size                       -> num_processed]
+    #   split_step_orig = total_frames // NUM_SPLITS
+    #   split N start  = N * split_step_orig
+    #   split N end    = (N+1) * split_step_orig + OVERLAP_FRAMES   (forward)
+    #                    or total_frames-1 for the last split
     #
-    # Each split starts at its natural base_start. Splits 1..N-1 extend
-    # FORWARD by `overlap_subsampled` frames into the next split's
-    # territory. The last split simply runs to the end.
-    #
-    # Camera 0 of each split is thus its natural beginning (no overlap),
-    # which makes pos_offset anchoring on cam[0] safe in multi-split mode.
+    # Example for total_frames=3144, NUM_SPLITS=3, OVERLAP_FRAMES=99:
+    #   split_step_orig = 1048
+    #   split 1: orig [0,    1147)  -> [0, 1146]
+    #   split 2: orig [1048, 2195)  -> [1048, 2194]
+    #   split 3: orig [2096, 3144)  -> [2096, 3143]
+    # which matches the thesis splits at 3144 total frames.
 
-    # Convert overlap from original frame units to subsampled frame units.
-    # Ceil-style division so the actual overlap is at least OVERLAP_FRAMES
-    # in original-frame units.
-    overlap_subsampled = max(
-        1,
-        (OVERLAP_FRAMES + FRAME_SKIP - 1) // FRAME_SKIP,
-    )
+    split_step_orig = total_frames // NUM_SPLITS
 
-    split_size = num_processed // NUM_SPLITS
-
-    if split_size == 0:
+    if split_step_orig <= 0:
         raise RuntimeError(
-            f"NUM_SPLITS={NUM_SPLITS} is too large for {num_processed} processed frames."
+            f"NUM_SPLITS={NUM_SPLITS} is too large for {total_frames} total frames."
         )
 
-    if overlap_subsampled >= split_size:
-        print(
-            "[WARN] overlap_subsampled is greater than or equal to split_size. "
-            "Splits will have very large overlap."
-        )
-
-    splits = []
-
+    # Build (start_orig_inclusive, end_orig_inclusive) per split
+    splits_orig = []
     for split_index in range(NUM_SPLITS):
-        base_start = split_index * split_size
-
+        start_orig = split_index * split_step_orig
         if split_index < NUM_SPLITS - 1:
-            base_end = (split_index + 1) * split_size
+            end_orig = (split_index + 1) * split_step_orig + OVERLAP_FRAMES - 1
         else:
-            base_end = num_processed
-
-        # Each split (except the last) extends FORWARD into the next
-        # split's territory by overlap_subsampled frames.
-        start = base_start
-
-        if split_index < NUM_SPLITS - 1:
-            end = base_end + overlap_subsampled
-        else:
-            end = base_end
-
-        end = min(end, num_processed)
-
-        splits.append((start, end))
+            end_orig = total_frames - 1
+        end_orig = min(end_orig, total_frames - 1)
+        splits_orig.append((start_orig, end_orig))
 
     print("\n[INFO] Split configuration:")
     print(f"       Overlap original frames:    {OVERLAP_FRAMES}")
-    print(f"       Overlap subsampled frames:  {overlap_subsampled}")
-    print(f"       Base split size:            {split_size}")
-    print("       Overlap mode:               earlier split extends forward")
+    print(f"       Step (original frames):     {split_step_orig}")
+    print(f"       Mode:                       overlap forward (in original-frame units)")
 
-    for split_index, (start, end) in enumerate(splits, start=1):
-        split_frames = processed[start:end]
+    for split_index, (start_orig, end_orig) in enumerate(splits_orig, start=1):
+        # Keep only the subsampled originals inside this split range
+        split_frames = [
+            (oi, fn) for (oi, fn) in processed
+            if start_orig <= oi <= end_orig
+        ]
 
         split_image_dir = os.path.join(
-            OUTPUT_ROOT,
-            f"images_gs_split_{split_index}_{skip_label}",
+            OUTPUT_ROOT, f"images_gs_split_{split_index}_{skip_label}",
         )
-
         split_positions_path = os.path.join(
-            OUTPUT_ROOT,
-            f"frame_positions_split_{split_index}_{skip_label}.txt",
+            OUTPUT_ROOT, f"frame_positions_split_{split_index}_{skip_label}.txt",
         )
-
         os.makedirs(split_image_dir, exist_ok=True)
 
         for original_index, filename in split_frames:
             src_img = os.path.join(tmp_image_folder, filename)
             dst_img = os.path.join(split_image_dir, filename)
-
             link_or_copy(src_img, dst_img)
 
         write_split_positions_file(
@@ -446,30 +306,37 @@ def process_frames():
             data_lines,
         )
 
-        orig_start = split_frames[0][0] if split_frames else 0
-        orig_end = split_frames[-1][0] if split_frames else 0
+        actual_first_orig = split_frames[0][0] if split_frames else None
+        actual_last_orig  = split_frames[-1][0] if split_frames else None
 
         print(f"\n[INFO] Split {split_index}:")
-        print(f"       Frames:                {len(split_frames)}")
-        print(f"       Subsampled range:      [{start}, {end})")
-        print(f"       Original index range:  [{orig_start}, {orig_end}]")
+        print(f"       Frames in split:       {len(split_frames)}")
+        print(f"       Original range req'd:  [{start_orig}, {end_orig}]")
+        print(f"       Actual orig range:     [{actual_first_orig}, {actual_last_orig}]")
         print(f"       Images:                {split_image_dir}")
         print(f"       Positions:             {split_positions_path}")
 
+    # Overlap report (in subsampled frame count between consecutive splits)
     for split_index in range(NUM_SPLITS - 1):
-        overlap_start = splits[split_index + 1][0]
-        overlap_end = splits[split_index][1]
+        a_start, a_end = splits_orig[split_index]
+        b_start, b_end = splits_orig[split_index + 1]
 
-        if overlap_end > overlap_start:
-            n_overlap = overlap_end - overlap_start
+        overlap_lo_orig = max(a_start, b_start)
+        overlap_hi_orig = min(a_end, b_end)
 
+        if overlap_hi_orig >= overlap_lo_orig:
+            n_overlap_subsampled = sum(
+                1 for (oi, _) in processed
+                if overlap_lo_orig <= oi <= overlap_hi_orig
+            )
             print(
-                f"\n[INFO] Overlap between split_{split_index + 1} "
-                f"and split_{split_index + 2}: {n_overlap} subsampled frames"
+                f"\n[INFO] Overlap split_{split_index + 1} ∩ "
+                f"split_{split_index + 2}: orig [{overlap_lo_orig}, "
+                f"{overlap_hi_orig}] = {n_overlap_subsampled} subsampled frames"
             )
         else:
             print(
-                f"\n[WARN] No overlap detected between split_{split_index + 1} "
+                f"\n[WARN] No overlap between split_{split_index + 1} "
                 f"and split_{split_index + 2}"
             )
 
