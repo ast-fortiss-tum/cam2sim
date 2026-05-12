@@ -41,7 +41,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 
 GT_DIR = PROJECT_ROOT / "data" / "processed_dataset" / BAG_NAME / "semantic_maps"
 PRED_DIR = PROJECT_ROOT / "data" / "processed_dataset" / BAG_NAME / "carla_replay_dataset" / "semantic"
-RESULTS_DIR = PROJECT_ROOT / "data" / "processed_dataset" / BAG_NAME / "iou_results_semantic"
+RESULTS_DIR = PROJECT_ROOT / "results" / "semantic"
 
 TARGET_SIZE = (512, 512)  # (W, H)
 
