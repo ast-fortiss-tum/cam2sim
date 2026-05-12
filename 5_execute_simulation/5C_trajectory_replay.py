@@ -656,8 +656,8 @@ def main():
                              "All trajectory frames will use this split.")
     parser.add_argument("--max_frames", type=int, default=None,
                         help="Maximum number of frames to render")
-    parser.add_argument("--skip_calibration", action="store_true",
-                        help="Skip Phase 1 free camera calibration")
+    parser.add_argument("--skip_calibration", action="store_true", default=True,
+                        help="Skip Phase 1 free camera calibration (default: True)")
     parser.add_argument("--no_save", action="store_true",
                         help="Disable frame saving")
     parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR,
