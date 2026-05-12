@@ -286,7 +286,17 @@ bash 1_extract_ROS_data/step1.sh
 bash 2_process_datasets/step2.sh
 bash 3_generate_simulation_data/step3.sh
 ```
-Follow Step 4A, then
+Skip Step 4 by downloading the pre-processed data. Alternatively, download the data and run 4B afterwards to override the data.
+
+```bash
+pip install -U gdown   # only if not already installed
+
+gdown 1m1X30iiJWO_ZJrjg0HRc7VvZa7DgjzSx -O "data/data_for_gaussian_splatting.zip"
+
+unzip "data/data_for_gaussian_splatting.zip"
+```
+
+Optional Re-train:
 ```bash
 bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
 ```
@@ -318,9 +328,15 @@ python 5_execute_simulation/5D_dave2.py
 # Even quicker use guide: Just execute trajectory replay with gaussian splatting
 Follow the setup guide for the conda environments, then downlad the already executed output of Steps 1-4.
 
-Then, execute:
+Start CARLA and load the Map using Steps 3C and 3F
 
-TODO MISSING ALL STEPS TO RUN 5C (explain no dave2)
+Then, execute the following command in the nerfstudio conda environment.
+
+```bash
+python 5_execute_simulation/5C_trajectory_replay.py --skip_calibration
+```
+
+If this should fail, run the 3 Exports.
 
 
 # Detailed description and usage of each script
