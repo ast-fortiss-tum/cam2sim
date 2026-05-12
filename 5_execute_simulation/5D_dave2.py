@@ -924,8 +924,8 @@ def main():
                         help="Load and use ONLY this split number")
     parser.add_argument("--max_frames", type=int, default=None,
                         help="Maximum frames before stopping")
-    parser.add_argument("--skip_calibration", action="store_true",
-                        help="Skip Phase 1 free camera calibration")
+    parser.add_argument("--skip_calibration", action="store_true", default=True,
+                            help="Skip Phase 1 free camera calibration (default: True)")
     parser.add_argument("--no_save", action="store_true",
                         help="Disable frame saving")
     parser.add_argument("--output_dir", type=str, default=None,
