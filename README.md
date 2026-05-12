@@ -1,3 +1,65 @@
+![Cam2Sim demo video](https://img.youtube.com/vi/KmZ74l1__lI/maxresdefault.jpg)
+
+[▶ Watch the Cam2Sim screencast on YouTube](https://youtu.be/KmZ74l1__lI)
+
+# Cam2Sim
+
+**Neural Scenario Reconstruction for Closed-Loop Autonomous Driving Simulation**
+
+Cam2Sim is a pipeline for transforming real-world driving recordings into executable **CARLA** simulation scenarios. Starting from camera images, ego poses, and optional LiDAR / steering signals, it reconstructs the road layout, ego trajectory, parked vehicles, and simulation-ready assets, then augments the scenario with **Gaussian Splatting** to render camera observations that resemble the original recording.
+
+Cam2Sim is designed for researchers and practitioners working on simulation-based testing of autonomous driving systems, especially when the visual gap between real-world camera observations and simulator-rendered images matters for closed-loop behavior.
+
+---
+
+## Overview
+
+<!--
+
+Replace this placeholder with the workflow figure from the paper.
+
+Suggested path:
+
+docs/assets/cam2sim_overview.png
+
+Example:
+
+![Cam2Sim workflow overview](docs/assets/cam2sim_overview.png)
+
+-->
+
+![Cam2Sim workflow overview](docs/assets/ase_tool_schema.png)
+
+Cam2Sim turns a real-world driving recording into a playable simulation scenario through six main stages:
+
+1. **Data extraction**  
+
+   Extract camera frames, ego poses, LiDAR point clouds, odometry, steering status, and model outputs from ROS bags.
+
+2. **Dataset processing**  
+
+   Detect parked vehicles from camera or LiDAR data, refine detections, prepare OpenStreetMap-based map data, and generate image splits for Gaussian Splatting.
+
+3. **Simulation data generation**  
+
+   Convert trajectories and parked-vehicle positions into CARLA coordinates, generate CARLA-ready JSON files, and prepare the OpenDRIVE scenario.
+
+4. **Gaussian Splatting preparation**  
+
+   Run COLMAP, train one Nerfstudio / Splatfacto model per route segment, and compute the coordinate alignment between dataset poses and Nerfstudio poses.
+
+5. **Driving simulation**  
+
+   Replay the recorded trajectory or run closed-loop DAVE-2 experiments in CARLA. The system under test can receive either raw CARLA images or GS-rendered camera observations.
+
+6. **Validation**  
+
+   Compare real and simulated semantic maps, replay outputs, steering behavior, and trajectory traces.
+
+At the end of the pipeline, Cam2Sim produces CARLA-ready scenarios, trained Gaussian Splatting models, replay images, closed-loop driving traces, and validation outputs.
+
+---
+
 # Setup
 
 To run this pipeline you need:
