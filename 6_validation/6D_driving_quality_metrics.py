@@ -4,49 +4,11 @@
 """
 6C_metrics_drive_quality.py
 
-Drive-quality metrics for the validation in section 3.3 of the paper.
+PATCHED: real-world trajectories and steering predictions are now read from
+    data/data_for_validation/real_world_trajectories/<N>_trajectory.csv
+    data/data_for_validation/real_world_trajectories/<N>_steering_predictions.txt
 
-For each successful simulation run, computes:
-  1. Min-Frechet distance versus the closest real-world repetition (m).
-  2. Out-of-corridor rate and mean lateral excess versus the corridor built
-     from the real-world repetitions (signed lateral envelope).
-  3. Steering jitter, defined as std(delta_steering / delta_t) within the
-     scenario segment (rad/s in raw DAVE-2 units, divided by the time step).
-
-All runs are trimmed to the scenario segment before any metric is computed,
-and a sim run is considered successful only when its completion percentage
-on the reference path is above COMPLETION_THRESHOLD.
-
-Inputs (all hardcoded, see CONFIG section below):
-
-  - data/processed_dataset/<MAP_BAG_NAME>/maps/map.xodr
-        OpenDRIVE map used to convert UTM real trajectories to CARLA local
-        coordinates.
-
-  - data/processed_dataset/<MAP_BAG_NAME>/scenario_segment/scenario_segment.json
-        Reference path and scenario start/end in CARLA coordinates.
-        Produced by 6B_verify_scenario_segment.py.
-
-  - data/raw_dataset/<RUN_BAG_NAME>/trajectory.csv
-        Real-world trajectory (UTM EPSG:25832), produced by
-        1C_poses_and_trajectory.py. One CSV per real repetition.
-
-  - data/raw_dataset/<RUN_BAG_NAME>/steering_predictions.txt
-        Real-world DAVE-2 steering predictions with their timestamps,
-        produced by 1E_model_output.py. Optional: jitter is computed only
-        when this file is available.
-
-  - data/data_for_carla/<MAP_BAG_NAME>/drive_results/<RUN_NAME>/trajectory.json
-        Simulation runs. Method (carla_only / gs / ...) is inferred from
-        the prefix of RUN_NAME (everything before the trailing _run<N>).
-
-Outputs:
-
-  - data/processed_dataset/<MAP_BAG_NAME>/drive_evaluation/drive_quality_results.json
-        Per-run metrics plus aggregated mean/std per method.
-
-Run:
-    python 6C_metrics_drive_quality.py
+The steering files are optional (jitter reale is computed only when present).
 """
 
 import os
@@ -66,23 +28,12 @@ from pyproj import Transformer
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-# Bag whose reconstruction is being evaluated. The map.xodr and drive_results
-# live under data/.../<MAP_BAG_NAME>/.
 MAP_BAG_NAME = "reference_bag"
 
-# Real-world repetitions of the same route, used as ground truth.
-# Each name must be a folder under data/raw_dataset/.
-REAL_RUN_BAGS = [
-    "reference_bag_run1",
-    "reference_bag_run2",
-    "reference_bag_run3",
-]
-
-# Fallback to a single real-world bag if the three repetitions are not yet
-# available. With a single real bag the corridor degenerates (min == max),
-# so the corridor metric is essentially trivial; Frechet and jitter still
-# make sense.
-FALLBACK_TO_SINGLE_BAG = True
+REAL_RUNS_DIR = (
+    PROJECT_ROOT / "data" / "data_for_validation" / "real_world_trajectories"
+)
+REAL_RUN_PATTERN = re.compile(r"^(\d+)_trajectory\.csv$")
 
 XODR_PATH = (
     PROJECT_ROOT / "data" / "processed_dataset" / MAP_BAG_NAME / "maps" / "map.xodr"
@@ -103,33 +54,18 @@ RESULTS_DIR = (
 
 OUTPUT_JSON = RESULTS_DIR / "drive_quality_results.json"
 
-# A simulation run with completion below this threshold is treated as a
-# failure and excluded from the metrics (section 3.3: "for successful runs,
-# we report driving-quality metrics").
 COMPLETION_THRESHOLD = 0.95
-
-# Spacing of the corridor sampling grid along the reference path (meters).
 CORRIDOR_SPACING_M = 0.5
-
-# Maximum number of points used for the discrete Frechet computation.
-# Curves longer than this get evenly downsampled; Frechet is O(n*m) in time
-# and memory, so this keeps the cost bounded for long trajectories.
 FRECHET_MAX_PTS = 500
 
-# Sim steering: PREDICT_EVERY=3 at 30 FPS gives one real DAVE-2 decision
-# every 3.0/30.0 = 0.1 s. The trajectory.json logs one entry per frame and
-# the steering is held between decisions, so we subsample by 3 before
-# computing the rate.
 SIM_DT_S = 3.0 / 30.0
 SIM_SUBSAMPLE = 3
 
-# Real-world steering: skip pairs with delta_t larger than this (s). This
-# protects the jitter estimate from dropped-message gaps in the rosbag.
 RW_MAX_DT_S = 0.25
 
 
 # =============================================================================
-#  XODR PARSING + COORDINATE TRANSFORMS
+#  XODR + TRANSFORMS
 # =============================================================================
 
 def get_xodr_projection_params(xodr_data):
@@ -195,13 +131,6 @@ def utm_array_to_carla(uxs, uys, tfs):
 # =============================================================================
 
 def load_real_trajectory_csv(csv_path):
-    """
-    Read a trajectory.csv produced by 1C_poses_and_trajectory.py.
-    Columns: timestamp, x, y, z, yaw  (x and y in UTM EPSG:25832).
-
-    Returns:
-        utm_xs, utm_ys, timestamps (all numpy arrays).
-    """
     utm_xs, utm_ys, timestamps = [], [], []
 
     with open(csv_path, "r") as f:
@@ -231,14 +160,6 @@ def load_real_trajectory_csv(csv_path):
 
 
 def load_real_steering(txt_path):
-    """
-    Read steering_predictions.txt produced by 1E_model_output.py.
-
-    The file is expected to have lines with at least two comma-separated
-    columns where the first is a timestamp and the second is the steering
-    value (DAVE-2 raw radians, same scale as steer_raw in sim JSON).
-    Lines that don't parse are skipped.
-    """
     timestamps, values = [], []
     with open(txt_path, "r") as f:
         for line in f:
@@ -257,11 +178,6 @@ def load_real_steering(txt_path):
 
 
 def load_sim_trajectory(json_path):
-    """
-    Read a trajectory.json produced by 4-log_gs_new.py or 5B_dave2_only_carla.py.
-    Returns (xs, ys, steering) where steering may be None when the file does
-    not contain a steering field.
-    """
     with open(json_path, "r") as f:
         data = json.load(f)
 
@@ -285,33 +201,37 @@ def load_sim_trajectory(json_path):
 
 def discover_real_runs(tfs):
     """
-    Find every real-world trajectory.csv and load it.
-    Returns {run_label: dict with carla_x/carla_y/timestamps/steering}.
+    Scan REAL_RUNS_DIR for <N>_trajectory.csv files. For each, optionally
+    load the matching <N>_steering_predictions.txt if present.
     """
     real_runs = {}
 
-    candidate_bags = list(REAL_RUN_BAGS)
-    if FALLBACK_TO_SINGLE_BAG and MAP_BAG_NAME not in candidate_bags:
-        candidate_bags.append(MAP_BAG_NAME)
+    if not REAL_RUNS_DIR.exists():
+        print(f"[ERROR] Real runs dir not found: {REAL_RUNS_DIR}")
+        return real_runs
 
-    for bag_name in REAL_RUN_BAGS:
-        raw_dir = PROJECT_ROOT / "data" / "raw_dataset" / bag_name
-        csv_path = raw_dir / "trajectory.csv"
-
-        if not csv_path.exists():
-            print(f"[WARN] Missing real trajectory: {csv_path}")
+    entries = []
+    for entry in sorted(REAL_RUNS_DIR.iterdir()):
+        if not entry.is_file():
             continue
+        m = REAL_RUN_PATTERN.match(entry.name)
+        if not m:
+            continue
+        idx = int(m.group(1))
+        entries.append((idx, entry))
+
+    entries.sort(key=lambda t: t[0])
+
+    for idx, csv_path in entries:
+        run_label = f"run{idx}"
 
         utm_x, utm_y, ts = load_real_trajectory_csv(csv_path)
         cx, cy = utm_array_to_carla(utm_x, utm_y, tfs)
 
-        # Load steering predictions if present (optional).
-        steering_path = raw_dir / "steering_predictions.txt"
+        steering_path = REAL_RUNS_DIR / f"{idx}_steering_predictions.txt"
+
         if steering_path.exists():
             st_ts, st_vals = load_real_steering(steering_path)
-            # Interpolate CARLA positions at the steering timestamps so each
-            # DAVE-2 decision is anchored on the reference path at the same
-            # spatial location.
             valid = (st_ts >= ts[0]) & (st_ts <= ts[-1])
             st_ts_v = st_ts[valid]
             st_vals_v = st_vals[valid]
@@ -323,46 +243,24 @@ def discover_real_runs(tfs):
                 "carla_x": cx_at_steer,
                 "carla_y": cy_at_steer,
             }
-            print(f"  {bag_name}: {len(cx)} pts + "
-                  f"{len(st_vals_v)} steering cmds")
+            print(f"  {run_label}: {len(cx)} pts + "
+                  f"{len(st_vals_v)} steering cmds  <- {csv_path.name}")
         else:
             steering = None
-            print(f"  {bag_name}: {len(cx)} pts (no steering_predictions.txt)")
+            print(f"  {run_label}: {len(cx)} pts (no steering)  "
+                  f"<- {csv_path.name}")
 
-        real_runs[bag_name] = {
+        real_runs[run_label] = {
             "carla_x": cx,
             "carla_y": cy,
             "timestamps": ts,
             "steering": steering,
         }
 
-    # Fallback path if none of REAL_RUN_BAGS exist.
-    if not real_runs and FALLBACK_TO_SINGLE_BAG:
-        single_csv = (
-            PROJECT_ROOT / "data" / "raw_dataset" / MAP_BAG_NAME / "trajectory.csv"
-        )
-        if single_csv.exists():
-            print(f"[INFO] Falling back to single real bag: {MAP_BAG_NAME}")
-            utm_x, utm_y, ts = load_real_trajectory_csv(single_csv)
-            cx, cy = utm_array_to_carla(utm_x, utm_y, tfs)
-            real_runs[MAP_BAG_NAME] = {
-                "carla_x": cx, "carla_y": cy,
-                "timestamps": ts, "steering": None,
-            }
-
     return real_runs
 
 
 def discover_sim_runs():
-    """
-    Walk SIM_RUNS_ROOT and return a list of dicts:
-        {"run_name", "method", "run_idx", "trajectory_path"}.
-
-    The method is inferred from the prefix of the folder name. The folder
-    name is expected to follow <method>_run<N>, e.g. carla_only_run1 or
-    gs_run2. Folders that don't match keep the whole prefix as method and
-    run_idx = 0 (still get loaded so nothing is silently dropped).
-    """
     runs = []
 
     if not SIM_RUNS_ROOT.exists():
@@ -377,7 +275,6 @@ def discover_sim_runs():
 
         traj = child / "trajectory.json"
         if not traj.exists():
-            # Some scripts nest it under data/trajectory.json (5B layout).
             traj = child / "data" / "trajectory.json"
         if not traj.exists():
             print(f"[WARN] No trajectory.json in {child.name}")
@@ -402,16 +299,10 @@ def discover_sim_runs():
 
 
 # =============================================================================
-#  REFERENCE PROJECTION AND SIGNED LATERAL
+#  PROJECTION / LATERAL
 # =============================================================================
 
 def project_onto_reference(traj_xs, traj_ys, ref_xs, ref_ys, ref_s):
-    """
-    For every trajectory point, find the closest reference path point and
-    return (progress_along_ref, unsigned_lateral_distance, closest_indices).
-    Progress is forced to be monotonically non-decreasing (cleans up small
-    backtracking from sensor noise).
-    """
     n = len(traj_xs)
     progress = np.zeros(n)
     lateral = np.zeros(n)
@@ -432,10 +323,6 @@ def project_onto_reference(traj_xs, traj_ys, ref_xs, ref_ys, ref_s):
 
 
 def compute_signed_lateral(traj_xs, traj_ys, ref_xs, ref_ys, closest_idx):
-    """
-    Signed lateral distance using the tangent direction at the closest
-    reference point. Positive = right of reference, negative = left.
-    """
     n = len(traj_xs)
     signed = np.zeros(n)
 
@@ -466,7 +353,7 @@ def completion_fraction(progress, seg_start, seg_length):
 
 
 # =============================================================================
-#  DISCRETE FRECHET
+#  FRECHET
 # =============================================================================
 
 def downsample_curve(xs, ys, max_points):
@@ -478,10 +365,6 @@ def downsample_curve(xs, ys, max_points):
 
 
 def discrete_frechet_distance(P, Q):
-    """
-    Iterative discrete Frechet distance, O(n*m) time and memory.
-    P and Q are (k, 2) numpy arrays.
-    """
     n = len(P)
     m = len(Q)
     if n == 0 or m == 0:
@@ -511,10 +394,6 @@ def discrete_frechet_distance(P, Q):
 # =============================================================================
 
 def corridor_violation(sim_signed, corr_min, corr_max):
-    """
-    Returns (violation_rate, mean_excess, mean_excess_when_out).
-    All inputs aligned on the same progress grid.
-    """
     excess = np.zeros_like(sim_signed)
     below = sim_signed < corr_min
     above = sim_signed > corr_max
@@ -533,16 +412,12 @@ def corridor_violation(sim_signed, corr_min, corr_max):
 
 
 # =============================================================================
-#  STEERING JITTER
+#  JITTER
 # =============================================================================
 
 def compute_jitter(values, progress, seg_start, seg_end,
                    timestamps=None, dt_fixed=None,
                    max_dt_gap=None, subsample=1):
-    """
-    Returns (std_rate, max_abs_rate) of delta_steering / delta_t within the
-    scenario segment, or (None, None) when there are too few points.
-    """
     mask = (progress >= seg_start) & (progress <= seg_end)
     v_seg = values[mask]
     if timestamps is not None:
@@ -585,6 +460,7 @@ def main():
     print("=" * 70)
     print(f"[INFO] Project root:  {PROJECT_ROOT}")
     print(f"[INFO] Map bag:       {MAP_BAG_NAME}")
+    print(f"[INFO] Real runs dir: {REAL_RUNS_DIR}")
     print(f"[INFO] XODR:          {XODR_PATH}")
     print(f"[INFO] Segment JSON:  {SEGMENT_PATH}")
     print(f"[INFO] Sim runs root: {SIM_RUNS_ROOT}")
@@ -601,7 +477,6 @@ def main():
 
     tfs = setup_transforms(XODR_PATH)
 
-    # ---- Reference + segment from 6B ----
     with open(SEGMENT_PATH, "r") as f:
         segment = json.load(f)
 
@@ -613,33 +488,28 @@ def main():
     seg_length = float(segment["scenario_length_m"])
 
     if seg_length <= 0:
-        raise RuntimeError(
-            "Scenario length is non-positive; cannot compute metrics."
-        )
+        raise RuntimeError("Scenario length is non-positive.")
 
     corridor_progress = np.arange(seg_start, seg_end, CORRIDOR_SPACING_M)
     print(f"[INFO] Segment: start={seg_start:.1f} m, end={seg_end:.1f} m, "
-          f"length={seg_length:.1f} m, corridor grid={len(corridor_progress)} pts")
+          f"length={seg_length:.1f} m, "
+          f"corridor grid={len(corridor_progress)} pts")
 
-    # ---- Load real-world runs ----
     print("\n[INFO] Loading real-world runs...")
     real_runs = discover_real_runs(tfs)
     if not real_runs:
         raise RuntimeError(
-            "No real-world trajectory.csv files were found. "
-            "Run 1C_poses_and_trajectory.py for at least one bag first."
+            f"No <N>_trajectory.csv files in {REAL_RUNS_DIR}."
         )
 
-    # ---- Load sim runs ----
     print("\n[INFO] Loading sim runs...")
     sim_run_specs = discover_sim_runs()
     if not sim_run_specs:
         raise RuntimeError(
-            f"No sim trajectory.json files were found under {SIM_RUNS_ROOT}. "
-            f"Run the drive scripts under 5_execute_simulation/ first."
+            f"No sim trajectory.json files under {SIM_RUNS_ROOT}."
         )
 
-    sim_runs = {}  # run_name -> dict with cx/cy/steering/method/run_idx
+    sim_runs = {}
     for spec in sim_run_specs:
         cx, cy, steer = load_sim_trajectory(spec["trajectory_path"])
         sim_runs[spec["run_name"]] = {
@@ -652,7 +522,6 @@ def main():
         print(f"  {spec['run_name']}: {len(cx)} pts "
               f"(method={spec['method']}, run={spec['run_idx']})")
 
-    # ---- Compute completion for every run (success filter) ----
     print(f"\n[INFO] Filtering sim runs (completion >= "
           f"{COMPLETION_THRESHOLD * 100:.0f}%)...")
 
@@ -670,12 +539,11 @@ def main():
         if ok:
             successful_sim[run_name] = info
 
-    # ---- Project real-world runs and build corridor ----
     print("\n[INFO] Projecting real-world runs and building corridor...")
 
-    rw_proj = {}              # run_label -> dict with progress/signed_lat
-    rw_signed_resampled = []  # list of signed lateral arrays on corridor grid
-    rw_segment_curves = {}    # run_label -> (cx, cy) trimmed to segment, for Frechet
+    rw_proj = {}
+    rw_signed_resampled = []
+    rw_segment_curves = {}
 
     for label, run in sorted(real_runs.items()):
         cx, cy = run["carla_x"], run["carla_y"]
@@ -690,7 +558,6 @@ def main():
             "carla_y":    cy,
         }
 
-        # Resample signed lateral on the corridor progress grid.
         keep = np.diff(progress, prepend=-1) > 0
         p_clean = progress[keep]
         s_clean = signed_lat[keep]
@@ -703,7 +570,6 @@ def main():
             )
         rw_signed_resampled.append(s_full)
 
-        # Trim to segment for Frechet.
         in_seg = (progress >= seg_start) & (progress <= seg_end)
         rw_segment_curves[label] = (cx[in_seg], cy[in_seg])
 
@@ -720,7 +586,6 @@ def main():
               f"max width={np.max(width):.3f} m, "
               f"valid points={int(corridor_valid.sum())}/{len(corridor_valid)}")
 
-    # ---- Compute metrics for each successful sim run ----
     print("\n[INFO] Computing metrics for successful sim runs...")
     per_run_results = []
 
@@ -736,7 +601,6 @@ def main():
             print(f"  [SKIP] {run_name}: only {len(sim_cx)} pts in segment")
             continue
 
-        # --- Min-Frechet vs each real run ---
         sim_ds_x, sim_ds_y = downsample_curve(sim_cx, sim_cy, FRECHET_MAX_PTS)
         sim_curve = np.column_stack([sim_ds_x, sim_ds_y])
 
@@ -749,7 +613,6 @@ def main():
 
         best_label, best_fd = min(frechet_per_real, key=lambda kv: kv[1])
 
-        # --- Corridor violation ---
         signed_lat = compute_signed_lateral(cx, cy, ref_xs, ref_ys, closest)
         keep = np.diff(progress, prepend=-1) > 0
         p_clean = progress[keep]
@@ -772,7 +635,6 @@ def main():
                 s_eval, cmin_eval, cmax_eval
             )
 
-        # --- Steering jitter (sim) ---
         if info["steering"] is not None:
             jitter_std, jitter_max = compute_jitter(
                 info["steering"], progress, seg_start, seg_end,
@@ -807,7 +669,6 @@ def main():
               f"jitter_std="
               f"{(jitter_std if jitter_std is not None else float('nan')):.4f}")
 
-    # ---- Real-world jitter (one per real run, when steering is available) ----
     print("\n[INFO] Computing real-world steering jitter...")
     rw_jitter = []
     for label, run in sorted(real_runs.items()):
@@ -830,7 +691,6 @@ def main():
             })
             print(f"  {label}: jitter_std={j_std:.4f}, max={j_max:.4f}")
 
-    # ---- Aggregate per method ----
     by_method = {}
     for r in per_run_results:
         by_method.setdefault(r["method"], []).append(r)
@@ -856,7 +716,6 @@ def main():
             "mean_jitter_std":        _safe_mean([r["steering_jitter_std"] for r in rs]),
         })
 
-    # ---- Console summary table ----
     print("\n" + "=" * 70)
     print("  SUMMARY (successful runs only, mean +/- std per method)")
     print("=" * 70)
@@ -881,7 +740,6 @@ def main():
         print(f"  {s['method']:<14} {s['n_successful_runs']:>3} "
               f"{f_str:>14} {o_str:>10} {e_str:>10} {j_str:>10}")
 
-    # ---- Save JSON ----
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     output = {
         "map_bag":              MAP_BAG_NAME,

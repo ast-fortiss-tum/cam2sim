@@ -7,33 +7,26 @@
 Computes the scenario segment from multiple real-world repetitions of the
 same route and plots everything on OpenStreetMap for visual verification.
 
-Background:
-  The validation in section 3.3 of the paper compares simulated runs against
-  several real-world reference runs of the same scenario (the SUT is not
-  fully deterministic, so the recording is repeated). The common drivable
-  portion of those repetitions defines the scenario segment that will be
-  used as the reference path by all the downstream metric scripts.
+PATCHED: real-world trajectories are now read from
+    data/data_for_validation/real_world_trajectories/<N>_trajectory.csv
+
+instead of data/raw_dataset/<bag_name>/trajectory.csv.
 
 Inputs (all hardcoded under PROJECT_ROOT):
 
   - data/processed_dataset/<MAP_BAG_NAME>/maps/map.xodr
-        The OpenDRIVE map used to convert real UTM coordinates into
-        CARLA coordinates (and to plot everything on OSM via WebMercator).
+        OpenDRIVE map used to convert real UTM coordinates into CARLA
+        coordinates (and to plot on OSM via WebMercator).
 
-  - data/raw_dataset/<RUN_BAG_NAME>/trajectory.csv
-        For every real-world run listed in REAL_RUN_BAGS below.
-        Produced by 1_extract_ROS_data/1C_poses_and_trajectory.py.
+  - data/data_for_validation/real_world_trajectories/<N>_trajectory.csv
+        For every real-world repetition (N = 1, 2, 3, ...).
+        Produced by extract_trajectories_from_bags.py.
         Columns: timestamp, x, y, z, yaw  (x and y are in UTM EPSG:25832).
 
 Outputs:
 
   - data/processed_dataset/<MAP_BAG_NAME>/scenario_segment/scenario_segment.json
-        Reference path resampled in CARLA coordinates plus scenario
-        start/end/length. Consumed by the trajectory-metric scripts.
-
   - data/processed_dataset/<MAP_BAG_NAME>/scenario_segment/scenario_segment.png
-        OSM overlay of all real-world runs with the common segment
-        highlighted.
 
 Run:
     python 6B_verify_scenario_segment.py
@@ -61,20 +54,13 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 # Bag used for the simulation reconstruction. The map.xodr lives here.
 MAP_BAG_NAME = "reference_bag"
 
-# Real-world repetitions of the SAME route used as ground-truth reference.
-# Each entry is a folder name under data/raw_dataset/ that contains a
-# trajectory.csv produced by 1C_poses_and_trajectory.py.
-REAL_RUN_BAGS = [
-    "reference_bag_run1",
-    "reference_bag_run2",
-    "reference_bag_run3",
-]
+# Folder holding the N_trajectory.csv files of the real-world repetitions.
+REAL_RUNS_DIR = (
+    PROJECT_ROOT / "data" / "data_for_validation" / "real_world_trajectories"
+)
 
-# Optional fallback: if none of the entries above exist on disk, fall back to
-# the single MAP_BAG_NAME so the script still produces a segment (just from
-# one trajectory). Useful while the three repetitions are still being
-# recorded.
-FALLBACK_TO_SINGLE_BAG = True
+# Filename pattern: <index>_trajectory.csv where index is an int.
+REAL_RUN_PATTERN = re.compile(r"^(\d+)_trajectory\.csv$")
 
 XODR_PATH = (
     PROJECT_ROOT / "data" / "processed_dataset" / MAP_BAG_NAME / "maps" / "map.xodr"
@@ -120,11 +106,6 @@ def get_xodr_projection_params(xodr_data):
 # =============================================================================
 
 def setup_transforms(xodr_path):
-    """
-    Build the transformers required to go:
-        UTM (EPSG:25832) -> WGS84 -> map proj -> CARLA local
-        CARLA local      -> map proj -> WGS84  -> WebMercator (EPSG:3857)
-    """
     with open(xodr_path, "r") as f:
         xodr_data = f.read()
 
@@ -179,13 +160,6 @@ def carla_array_to_merc(cxs, cys, tfs):
 # =============================================================================
 
 def load_real_trajectory_csv_to_carla(csv_path, tfs):
-    """
-    Read a 1C-produced trajectory.csv (columns timestamp, x, y, z, yaw with
-    x and y in UTM EPSG:25832) and convert (x, y) to CARLA local coordinates.
-
-    Returns:
-        (carla_xs, carla_ys): numpy arrays in CARLA coordinates.
-    """
     utm_xs, utm_ys = [], []
 
     with open(csv_path, "r") as f:
@@ -220,32 +194,26 @@ def load_real_trajectory_csv_to_carla(csv_path, tfs):
 
 def discover_real_runs():
     """
-    For every name in REAL_RUN_BAGS, check that
-    data/raw_dataset/<name>/trajectory.csv exists.
-    Returns a list of (run_label, path_to_csv).
+    Scan REAL_RUNS_DIR for files matching <N>_trajectory.csv.
+    Returns list of (run_label, path_to_csv), sorted by N.
     """
     found = []
-    for bag_name in REAL_RUN_BAGS:
-        csv_path = (
-            PROJECT_ROOT
-            / "data" / "raw_dataset" / bag_name / "trajectory.csv"
-        )
-        if csv_path.exists():
-            found.append((bag_name, csv_path))
-        else:
-            print(f"[WARN] Missing trajectory CSV: {csv_path}")
+    if not REAL_RUNS_DIR.exists():
+        print(f"[ERROR] Real runs dir does not exist: {REAL_RUNS_DIR}")
+        return found
 
-    if not found and FALLBACK_TO_SINGLE_BAG:
-        single_csv = (
-            PROJECT_ROOT
-            / "data" / "raw_dataset" / MAP_BAG_NAME / "trajectory.csv"
-        )
-        if single_csv.exists():
-            print(f"[INFO] None of REAL_RUN_BAGS were found. "
-                  f"Falling back to single bag: {MAP_BAG_NAME}")
-            found.append((MAP_BAG_NAME, single_csv))
+    for entry in sorted(REAL_RUNS_DIR.iterdir()):
+        if not entry.is_file():
+            continue
+        m = REAL_RUN_PATTERN.match(entry.name)
+        if not m:
+            continue
+        idx = int(m.group(1))
+        run_label = f"run{idx}"
+        found.append((idx, run_label, entry))
 
-    return found
+    found.sort(key=lambda t: t[0])
+    return [(label, path) for _, label, path in found]
 
 
 # =============================================================================
@@ -294,11 +262,11 @@ def main():
     print("=" * 70)
     print("  SCENARIO SEGMENT VERIFICATION")
     print("=" * 70)
-    print(f"[INFO] Project root: {PROJECT_ROOT}")
-    print(f"[INFO] Map bag:      {MAP_BAG_NAME}")
-    print(f"[INFO] Real runs:    {REAL_RUN_BAGS}")
-    print(f"[INFO] XODR:         {XODR_PATH}")
-    print(f"[INFO] Results dir:  {RESULTS_DIR}")
+    print(f"[INFO] Project root:  {PROJECT_ROOT}")
+    print(f"[INFO] Map bag:       {MAP_BAG_NAME}")
+    print(f"[INFO] Real runs dir: {REAL_RUNS_DIR}")
+    print(f"[INFO] XODR:          {XODR_PATH}")
+    print(f"[INFO] Results dir:   {RESULTS_DIR}")
     print("=" * 70)
 
     if not XODR_PATH.exists():
@@ -306,24 +274,22 @@ def main():
 
     tfs = setup_transforms(XODR_PATH)
 
-    # ---- Load all real-world runs ----
     real_runs = discover_real_runs()
     if not real_runs:
         raise RuntimeError(
-            "No real-world trajectory.csv files were found. "
-            "Make sure 1C_poses_and_trajectory.py has been run for at least "
-            "one bag under data/raw_dataset/."
+            f"No <N>_trajectory.csv files found in {REAL_RUNS_DIR}. "
+            f"Run extract_trajectories_from_bags.py first."
         )
 
     print(f"\n[INFO] Loading {len(real_runs)} real-world run(s)...")
-    rw_trajs = {}  # run_label -> (carla_x, carla_y)
+    rw_trajs = {}
     for run_label, csv_path in real_runs:
         carla_xs, carla_ys = load_real_trajectory_csv_to_carla(csv_path, tfs)
         rw_trajs[run_label] = (carla_xs, carla_ys)
         arc = compute_arc_length(carla_xs, carla_ys)
-        print(f"  {run_label}: {len(carla_xs)} pts, length={arc[-1]:.1f} m")
+        print(f"  {run_label}: {len(carla_xs)} pts, length={arc[-1]:.1f} m  "
+              f"<- {csv_path.name}")
 
-    # ---- Build reference path from the longest run ----
     longest_label = None
     longest_length = 0.0
     for label, (cx, cy) in rw_trajs.items():
@@ -339,7 +305,6 @@ def main():
         ref_cx, ref_cy, spacing=REFERENCE_SPACING_M
     )
 
-    # ---- Project every run onto the reference ----
     print("\n[INFO] Projecting runs onto reference...")
     start_progresses = []
     end_progresses = []
@@ -352,7 +317,6 @@ def main():
         print(f"  {label}: progress [{progress[0]:.1f} m -> "
               f"{progress[-1]:.1f} m], max lateral={lat_dist.max():.2f} m")
 
-    # ---- Compute scenario segment (common to all runs) ----
     scenario_start = float(max(start_progresses))
     scenario_end = float(min(end_progresses))
     scenario_length = scenario_end - scenario_start
@@ -369,7 +333,6 @@ def main():
     seg_start_idx = int(np.argmin(np.abs(ref_s - scenario_start)))
     seg_end_idx = int(np.argmin(np.abs(ref_s - scenario_end)))
 
-    # ---- Save JSON ----
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_json = RESULTS_DIR / "scenario_segment.json"
 
@@ -392,7 +355,7 @@ def main():
 
     print(f"\n[INFO] Saved: {out_json}")
 
-    # ---- Convert everything to WebMercator and plot ----
+    # ---- Plot ----
     print("[INFO] Converting to WebMercator for plotting...")
 
     ref_mx, ref_my = carla_array_to_merc(ref_xs, ref_ys, tfs)
@@ -421,7 +384,6 @@ def main():
     except Exception as e:
         print(f"[WARN] Could not load OSM tiles: {e}")
 
-    # Scenario segment (thick band, behind the run lines)
     ax.plot(
         seg_mx, seg_my,
         color="#4CAF50", linewidth=8, alpha=0.3,
@@ -429,7 +391,6 @@ def main():
         label=f"Scenario segment ({scenario_length:.0f} m)",
     )
 
-    # Real-world runs
     palette = ["#1E88E5", "#FB8C00", "#8E24AA", "#43A047", "#E53935"]
     line_styles = ["-", "--", ":", "-."]
     for i, (label, (mx, my)) in enumerate(sorted(rw_merc.items())):
@@ -449,7 +410,6 @@ def main():
             markeredgecolor="black", markeredgewidth=1, zorder=20,
         )
 
-    # Segment start/end markers
     ax.plot(
         seg_mx[0], seg_my[0],
         marker="|", color="#4CAF50", markersize=20,
