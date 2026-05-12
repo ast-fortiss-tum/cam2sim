@@ -290,7 +290,30 @@ Follow Step 4A, then
 ```bash
 bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
 ```
-TODO MISSING ALL STEPS TO RUN 5D
+## Quick use Step 5D
+
+Make sure CARLA is running and the Map is loaded. This requires Step 1,2 and 3 to be run.
+
+If CARLA is not running after Step 1-3, start it (using the data_extraction environment) by using
+
+```bash
+python 3_generate_simulation_data/3C_setup_carla.py
+```
+and loading the Map using
+```bash
+python 3_generate_simulation_data/3F_generate_carla_scenario.py
+```
+
+Now start DAVE-2 within the dave_2 environment using
+```bash
+python system_under_test/communicator.py
+```
+If this should fail, run the 3 EXPORTS found under the nerfstudio section and try again.
+
+Now, while running CARLA and DAVE2, run 5D within the nerfstudio environment. If this should fail, run the 3 EXPORTS as well.
+```bash
+python 5_execute_simulation/5D_dave2.py
+```
 
 # Even quicker use guide: Just execute trajectory replay with gaussian splatting
 Follow the setup guide for the conda environments, then downlad the already executed output of Steps 1-4.
