@@ -14,7 +14,7 @@ set +e   # do NOT exit on error: keep going if one split fails
 
 BAG_NAME="reference_bag"
 NUM_SPLITS=3
-FRAME_SKIP=3
+FRAME_SKIP=2
 
 METHOD="splatfacto"
 CONDA_ENV="nerfstudio"
