@@ -228,6 +228,14 @@ Follow Step 4A, then
 ```bash
 bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
 ```
+TODO MISSING ALL STEPS TO RUN 5D
+
+# Even quicker use guide: Just execute trajectory replay with gaussian splatting
+Follow the setup guide for the conda environments, then downlad the already executed output of Steps 1-4.
+
+Then, execute:
+
+TODO MISSING ALL STEPS TO RUN 5C (explain no dave2)
 
 
 # Detailed description and usage of each script
