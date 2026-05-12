@@ -62,10 +62,10 @@ def main():
         print("Starting CARLA...")
 
         # Normal start
-        result = subprocess.run([carla_script_path], check=True)
+        # result = subprocess.run([carla_script_path], check=True)
 
         # Low quality start, if needed:
-        # result = subprocess.run([carla_script_path, "-quality-level=Low"], check=True)
+        result = subprocess.run([carla_script_path, "-quality-level=Low"], check=True)
 
         print("CARLA finished with return code:", result.returncode)
 

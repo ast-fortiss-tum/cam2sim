@@ -921,6 +921,94 @@ def main():
 
     args = parser.parse_args()
 
+    # =========================================================================
+    #  HARDCODE OVERRIDE (ONE-OFF TEST OF OLD SIM2DIFF MODELS)
+    #
+    #  Old Sim2Diff datasets that still exist on disk:
+    #      /home/davidejannussi/Sim2Diff/datasets/cloudy/
+    #      /home/davidejannussi/Sim2Diff/datasets/snowy/
+    #
+    #  Switch SCENARIO to "cloudy" or "snowy" to pick which one to test.
+    #  Set USE_HARDCODE = False to revert to normal CLI behaviour.
+    # =========================================================================
+    USE_HARDCODE = True
+    SCENARIO = "cloudy"   # "sunny", "snowy" or "cloudy"
+
+    if USE_HARDCODE:
+        OLD_REPO = "/home/davidejannussi/Sim2Diff"
+        OLD_MODELS_ROOT = "/media/davidejannussi/ssd space/GS_NERF_FINAL_MODELS"
+
+        if SCENARIO == "sunny":
+            args.xodr_file = f"{OLD_REPO}/maps/sunny_map/map.xodr"
+            args.trajectory_file = (
+                f"{OLD_REPO}/maps/sunny_map/"
+                f"trajectory_positions_rear_odom_yaw.json"
+            )
+            args.camera_config_file = f"{OLD_REPO}/datasets/sunny/camera.json"
+            args.gs_data_root = f"{OLD_REPO}/datasets/sunny"
+            args.gs_configs = [
+                f"{OLD_MODELS_ROOT}/sunny_splatfacto_split1_1_of_2/splatfacto/"
+                f"2026-03-04_214835/config.yml",
+                f"{OLD_MODELS_ROOT}/sunny_splatfacto_split2_1_of_2/splatfacto/"
+                f"2026-03-04_231618/config.yml",
+                f"{OLD_MODELS_ROOT}/sunny_splatfacto_split3_1_of_2/splatfacto/"
+                f"2026-03-04_232546/config.yml",
+            ]
+        elif SCENARIO == "snowy":
+            args.xodr_file = f"{OLD_REPO}/maps/snowy_map/map.xodr"
+            args.trajectory_file = (
+                f"{OLD_REPO}/maps/snowy_map/"
+                f"trajectory_positions_rear_odom_yaw.json"
+            )
+            args.camera_config_file = f"{OLD_REPO}/datasets/snowy/camera.json"
+            args.gs_data_root = f"{OLD_REPO}/datasets/snowy"
+            args.gs_configs = [
+                f"{OLD_MODELS_ROOT}/snowy_splatfacto_split1_1_of_2/splatfacto/"
+                f"2026-03-04_214835/config.yml",
+                f"{OLD_MODELS_ROOT}/snowy_splatfacto_split2_1_of_2/splatfacto/"
+                f"2026-03-04_231618/config.yml",
+                f"{OLD_MODELS_ROOT}/snowy_splatfacto_split3_1_of_2/splatfacto/"
+                f"2026-03-04_232546/config.yml",
+            ]
+        elif SCENARIO == "cloudy":
+            args.xodr_file = f"{OLD_REPO}/maps/cloudy_map/map.xodr"
+            args.trajectory_file = (
+                f"{OLD_REPO}/maps/cloudy_map/"
+                f"trajectory_positions_rear_odom_yaw.json"
+            )
+            args.camera_config_file = f"{OLD_REPO}/datasets/cloudy/camera.json"
+            args.gs_data_root = f"{OLD_REPO}/datasets/cloudy"
+            args.gs_configs = [
+                f"{OLD_MODELS_ROOT}/cloudy_splatfacto_split1_1_of_2/splatfacto/"
+                f"2026-03-05_005506/config.yml",
+                f"{OLD_MODELS_ROOT}/cloudy_splatfacto_split2_1_of_2/splatfacto/"
+                f"2026-03-05_022341/config.yml",
+                f"{OLD_MODELS_ROOT}/cloudy_splatfacto_split3_1_of_2/splatfacto/"
+                f"2026-03-05_031943/config.yml",
+            ]
+        else:
+            raise ValueError(f"Unknown SCENARIO: {SCENARIO}")
+
+        args.skip_calibration = True
+        # Force these to None so the dataset/map-based logic does not
+        # interfere with the explicit file paths above.
+        args.map = None
+        args.dataset = None
+        # Defensive: do NOT keep the cam2sim default replay_results dir,
+        # which writes under data/data_for_carla/reference_bag/...
+        args.output_dir = f"{OLD_REPO}/replay_results_legacy_{SCENARIO}"
+
+        print(f"[HARDCODE] One-off test of OLD Sim2Diff models")
+        print(f"[HARDCODE] scenario:           {SCENARIO}")
+        print(f"[HARDCODE] xodr_file:          {args.xodr_file}")
+        print(f"[HARDCODE] trajectory_file:    {args.trajectory_file}")
+        print(f"[HARDCODE] camera_config_file: {args.camera_config_file}")
+        print(f"[HARDCODE] gs_data_root:       {args.gs_data_root}")
+        print(f"[HARDCODE] gs_configs:")
+        for c in args.gs_configs:
+            print(f"             {c}")
+        print(f"[HARDCODE] output_dir:         {args.output_dir}")
+
     paths = resolve_input_paths(args)
     XODR_FILE = paths["xodr_file"]
     TRAJECTORY_FILE = paths["trajectory_file"]
