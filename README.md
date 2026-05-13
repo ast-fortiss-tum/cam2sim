@@ -494,14 +494,20 @@ data/raw_dataset/reference_bag/
 └── steering_predictions.txt      # commanded / model-output steering
 ```
 
-> **Skip Step 1 entirely.** If you only want to reproduce later stages and don't need to re-extract the bag, skip this step and rely on the precomputed dataset downloaded as part of the [Quick Start](#quick-start) (it contains the outputs of Steps 1–4 already).
-
-For details on each individual script in Step 1, see the [`1_extract_ROS_data`](#1_extract_ros_data) section further below.
-
----
-
-
----
+> **Skip Step 1.** If you don't want to re-extract the bag, download the precomputed output of Step 1 instead. From the project root:
+>
+> ```bash
+> conda activate data_extraction
+> pip install -U gdown   # only if not already installed
+>
+> gdown 1FGu0LRUwnrnEhmJAgYIvQgvu2-U0PMzK -O raw_dataset.zip
+> unzip -o raw_dataset.zip -d data/
+> rm raw_dataset.zip
+> ```
+>
+> Manual link: <https://drive.google.com/file/d/1FGu0LRUwnrnEhmJAgYIvQgvu2-U0PMzK/view?usp=sharing>
+>
+> After extracting, you should have the full `data/raw_dataset/reference_bag/` structure shown above and can continue with [Step 2](#step-2--process-the-extracted-dataset).
 
 ## Step 2 — Process the extracted dataset
 
