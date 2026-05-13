@@ -154,11 +154,11 @@ Make sure the `data_extraction` environment is active (so `gdown` is available),
 conda activate data_extraction
 pip install -U gdown
 
-gdown <FILE_ID> -O cam2sim_data.zip
+gdown 1MmAYlxy67F1oxDKADHl3yUZochmifV1Q -O cam2sim_data.zip
 unzip cam2sim_data.zip
 ```
 
-> TODO: replace `<FILE_ID>` with the actual Google Drive file ID once the archive is uploaded.
+Manual link: <https://drive.google.com/file/d/1MmAYlxy67F1oxDKADHl3yUZochmifV1Q/view?usp=sharing>
 
 After extracting, the project should contain:
 
@@ -437,42 +437,396 @@ If you record your own ROS bag, place it under `data/raw_ros_data/` and update t
 
 ---
 
+---
 
-# Quick use guide
-Follow the setup guide for the conda environments, then
-```bash
-bash 1_extract_ROS_data/step1.sh
-bash 2_process_datasets/step2.sh
-bash 3_generate_simulation_data/step3.sh
+## Step 1 — Extract data from the ROS bag
+
+This step reads the raw ROS bag and exports its contents into structured per-frame files: camera images synchronized with odometry, LiDAR point clouds, the full odometry stream, a simplified trajectory, the recorded vehicle steering status, and the steering target (model output). These files are the input for every subsequent stage.
+
+### Input: the ROS bag
+
+Step 1 reads a single ROS bag file from:
+
+```text
+data/raw_ros_data/reference_bag.bag
 ```
-Skip Step 4 by downloading the pre-processed data. Alternatively, download the data and run 4B afterwards to override the data.
+
+If you don't have this file yet (it is not shipped in the Git repository because of its size, ~6 GB), download the example one corresponding to the dataset referenced as `reference_bag` throughout the pipeline:
 
 ```bash
+conda activate data_extraction
 pip install -U gdown   # only if not already installed
 
-gdown 1m1X30iiJWO_ZJrjg0HRc7VvZa7DgjzSx -O "data/data_for_gaussian_splatting.zip"
-
-unzip "data/data_for_gaussian_splatting.zip"
+gdown 1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9 -O data/raw_ros_data/reference_bag.bag
 ```
 
-Optional Re-train:
+Manual link: <https://drive.google.com/file/d/1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9/view?usp=sharing>
+
+Verify the file is in place:
+
 ```bash
+ls -lh data/raw_ros_data/reference_bag.bag
+```
+
+> If you record your own bag, place it under `data/raw_ros_data/` and update the `bag_path` value at the top of the Step 1 scripts to point to it.
+
+### Run Step 1
+
+From the project root, with the `data_extraction` environment active:
+
+```bash
+conda activate data_extraction
+bash 1_extract_ROS_data/step1.sh
+```
+
+`step1.sh` runs all extraction scripts in order:
+
+1. `1A_camera_with_odometry.py` — camera frames + per-frame odometry-synchronized poses
+2. `1B_lidar_with_odometry.py` — LiDAR point clouds + per-scan odometry-synchronized poses
+3. `1C_poses_and_trajectory.py` — full odometry CSV + simplified trajectory CSV
+4. `1D_steering_status.py` — actual vehicle steering values
+5. `1E_model_output.py` — steering target / model-output values
+
+### Output
+
+All output is written under:
+
+```text
+data/raw_dataset/reference_bag/
+├── images/                       # frame_000000.png, frame_000001.png, ...
+├── images_positions.txt          # camera odometry-synchronized poses
+├── point_clouds/                 # point_cloud_000000.bin, ...
+├── lidar_positions.txt           # LiDAR odometry-synchronized poses
+├── odometry.csv                  # full odometry stream
+├── trajectory.csv                # simplified trajectory
+├── steering_pct.txt              # actual steering values
+└── steering_predictions.txt      # commanded / model-output steering
+```
+
+> **Skip Step 1 entirely.** If you only want to reproduce later stages and don't need to re-extract the bag, skip this step and rely on the precomputed dataset downloaded as part of the [Quick Start](#quick-start) (it contains the outputs of Steps 1–4 already).
+
+For details on each individual script in Step 1, see the [`1_extract_ROS_data`](#1_extract_ros_data) section further below.
+
+---
+
+
+---
+
+## Step 2 — Process the extracted dataset
+
+This step processes the data extracted in Step 1 into assets used by all later stages: 3D bounding boxes of parked vehicles (from both camera and LiDAR), an OpenStreetMap-based road map for the recorded area, and image / mask splits ready for Gaussian Splatting training.
+
+### Input
+
+Step 2 reads from the output of Step 1:
+
+```text
+data/raw_dataset/reference_bag/
+├── images/
+├── images_positions.txt
+├── point_clouds/
+├── lidar_positions.txt
+└── trajectory.csv
+```
+
+If you don't have this folder yet, run [Step 1](#step-1--extract-data-from-the-ros-bag) first.
+
+Step 2 also requires the pretrained FCOS3D and PointPillars checkpoints inside `2_process_datasets/utils/` — these are downloaded as part of [Download required assets](#download-required-assets) at the top of this Replication guide. If `step2.sh` doesn't find them, it will try to download them automatically (so make sure `gdown` is installed: `pip install -U gdown`).
+
+### Run Step 2
+
+From the project root, with the `data_extraction` environment active:
+
+```bash
+conda activate data_extraction
+bash 2_process_datasets/step2.sh
+```
+
+`step2.sh` runs the processing scripts in order:
+
+1. `2A_camera_parked_cars_detection.py` — detects parked cars from camera images using FCOS3D
+2. `2B_lidar_parked_cars_detection.py` — detects parked cars from LiDAR point clouds using PointPillars
+3. `2C_create_map_from_coordinates_auto.py` — downloads OSM data and prepares the road map for the recorded area
+4. `2E_prepare_dataset_for_gaussian_splatting.py` — crops images, generates sky masks, and creates overlapping image splits for Gaussian Splatting
+5. `2G_OPT_fix_sidewalk.sh` — optional sidewalk fix on the generated map
+
+#### Optional: refinement mode for LiDAR detections
+
+The default Step 2 uses the standard PointPillars LiDAR detection. If you want to manually refine LiDAR detections through an interactive editor (move, rotate, insert, or delete bounding boxes), use the `-r` / `--refinement` flag:
+
+```bash
+bash 2_process_datasets/step2.sh --refinement
+```
+
+This replaces `2B_lidar_parked_cars_detection.py` with `2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py`. See the [`2_process_datasets`](#2_process_datasets) section below for editor controls.
+
+### Output
+
+All output is written under:
+
+```text
+data/processed_dataset/reference_bag/
+├── camera_detections/
+│   ├── camera_detections.json
+│   ├── unified_clusters.txt
+│   └── unified_bbox_overlays/
+├── lidar_detections/
+│   ├── lidar_detections.json
+│   ├── unified_clusters.txt
+│   ├── lidar_bboxes.txt
+│   └── screenshots/
+└── maps/
+    ├── map.osm
+    └── vehicle_data.json   (placeholder, filled in by Step 3)
+
+data/data_for_gaussian_splatting/reference_bag/
+├── _tmp_images_gs_1_of_<FRAME_SKIP>/
+├── _tmp_sky_masks_gs_1_of_<FRAME_SKIP>/
+├── images_gs_split_<N>_1_of_<FRAME_SKIP>/
+├── sky_masks_gs_split_<N>_1_of_<FRAME_SKIP>/
+└── frame_positions_split_<N>_1_of_<FRAME_SKIP>.txt
+```
+
+For details on each individual script in Step 2, see the [`2_process_datasets`](#2_process_datasets) section further below.
+
+---
+
+---
+
+## Step 3 — Generate CARLA simulation data
+
+This step converts the processed dataset into CARLA-ready simulation inputs: the recorded trajectory and detected parked vehicles are transformed into CARLA coordinates, the OpenDRIVE map is loaded into CARLA, and the scene is prepared with the hero vehicle and parked cars in place.
+
+### Input
+
+Step 3 reads from the outputs of Steps 1 and 2:
+
+```text
+data/raw_dataset/reference_bag/
+└── images_positions.txt
+
+data/processed_dataset/reference_bag/
+├── lidar_detections/
+│   └── unified_clusters.txt
+└── maps/
+    ├── map.osm
+    ├── map.xodr
+    └── vehicle_data.json
+```
+
+If you don't have these folders, run [Step 1](#step-1--extract-data-from-the-ros-bag) and [Step 2](#step-2--process-the-extracted-dataset) first.
+
+### Camera configuration
+
+Step 3 also reads a per-bag camera configuration file at:
+
+```text
+data/data_for_carla/reference_bag/camera.json
+```
+
+For `reference_bag`, this file is committed in the repository, so no action is needed. If you record your own bag, copy `camera.json` from `reference_bag` to your own bag folder and edit it to match your camera setup. See the [`3_generate_simulation_data`](#3_generate_simulation_data) section below for the file structure and field meaning.
+
+### Run Step 3
+
+From the project root, with the `data_extraction` environment active:
+
+```bash
+conda activate data_extraction
+bash 3_generate_simulation_data/step3.sh
+```
+
+`step3.sh` runs the simulation-data scripts in order, and starts CARLA in the background between them:
+
+1. `3A_transform_coordinates_to_carla.py` — converts the recorded trajectory into CARLA coordinates and writes the trajectory JSONs and the initial `hero_car` entry
+2. `3B_transform_parked_vehicles_to_carla.py` — projects the detected parked-vehicle centroids into CARLA / OpenDRIVE coordinates and writes the final `vehicle_data.json`
+3. `3C_setup_carla.py` — starts CARLA (in the background) using the `CARLA_INSTALLATION_PATH` set in `3_generate_simulation_data/utils/config.py`
+4. `3F_generate_carla_scenario.py` — loads the OpenDRIVE map into CARLA, spawns the hero vehicle and the parked cars, freezes them, and exits leaving the prepared scene alive in CARLA
+
+> CARLA must be installed and `CARLA_INSTALLATION_PATH` must be set inside `3_generate_simulation_data/utils/config.py` before running this step. If CARLA is already running, the launcher will reuse the existing instance.
+
+### Output
+
+```text
+data/data_for_carla/reference_bag/
+├── camera.json                                  (already in repo)
+├── vehicle_data.json                            (with hero + parked spawn_positions)
+├── trajectory_positions.json
+├── trajectory_positions_rear.json
+├── trajectory_positions_odom_yaw.json
+└── trajectory_positions_rear_odom_yaw.json
+```
+
+At the end of Step 3 the CARLA world is loaded, the parked vehicles are placed, and the hero vehicle is spawned at the first trajectory pose. The world is left ready for Step 5 (`step5.sh`).
+
+For details on each individual script in Step 3, see the [`3_generate_simulation_data`](#3_generate_simulation_data) section further below.
+
+---
+---
+
+## Step 4 — Gaussian Splatting preparation
+
+This step produces the Gaussian Splatting assets needed by Step 5: a COLMAP sparse reconstruction for each route segment, one trained Splatfacto model per segment, and the coordinate alignment between dataset poses and Nerfstudio's internal coordinate system.
+
+Step 4 has two phases:
+
+1. **COLMAP reconstruction** — manual, run once per split through the COLMAP GUI
+2. **Splatfacto training + alignment** — automatic, all splits in one shell script
+
+### Input
+
+Step 4 reads from the output of Step 2:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/
+├── images_gs_split_1_1_of_2/
+├── sky_masks_gs_split_1_1_of_2/
+├── frame_positions_split_1_1_of_2.txt
+├── images_gs_split_2_1_of_2/
+├── sky_masks_gs_split_2_1_of_2/
+├── frame_positions_split_2_1_of_2.txt
+├── images_gs_split_3_1_of_2/
+├── sky_masks_gs_split_3_1_of_2/
+└── frame_positions_split_3_1_of_2.txt
+```
+
+If you don't have these folders, run [Step 2](#step-2--process-the-extracted-dataset) first.
+
+> The exact split count and the `_1_of_<FRAME_SKIP>` suffix depend on the configuration set inside `2E_prepare_dataset_for_gaussian_splatting.py`. The defaults for `reference_bag` are `NUM_SPLITS=3` and `FRAME_SKIP=2`.
+
+### Phase 1 — COLMAP reconstruction (manual, per split)
+
+You must run COLMAP **once per split** using the COLMAP GUI. The full step-by-step procedure (open project, feature extraction with `OPENCV` model + dataset-specific intrinsics, sequential matching, bundle adjustment with intrinsics fixed, sparse export) is documented in:
+
+```text
+4_gaussian_splatting_preparation/4A_colmap_guide.md
+```
+
+At the end of Phase 1, the expected folder structure is:
+
+```text
+data/data_for_gaussian_splatting/reference_bag/colmap/
+├── split_1/sparse/0/
+│   ├── cameras.bin
+│   ├── images.bin
+│   └── points3D.bin
+├── split_2/sparse/0/
+│   ├── cameras.bin
+│   ├── images.bin
+│   └── points3D.bin
+└── split_3/sparse/0/
+    ├── cameras.bin
+    ├── images.bin
+    └── points3D.bin
+```
+
+> **Why manual?** COLMAP is run from the GUI because it requires interactive choices (camera model, intrinsic refinement options) that depend on the specific camera used to record the bag. The guide in `4A_colmap_guide.md` documents the exact settings used for `reference_bag`.
+
+### Phase 2 — Splatfacto training + UTM alignment
+
+Once every split has a COLMAP sparse reconstruction, train all Splatfacto models and compute the dataset-to-Nerfstudio alignment with a single command, from the project root, with the `nerfstudio` environment active:
+
+```bash
+conda activate nerfstudio
 bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
 ```
-## Quick use of Step 5
 
-Make sure CARLA is **not** already running (the launcher will start it). Step 1, 2, and 3 must have been run at least once for the chosen bag.
+`4B_train_gaussian_splatting.sh` is **idempotent**: if a split already has a complete checkpoint (≥29000 steps), it is skipped automatically; if its `utm_to_nerfstudio_transform.json` is missing, the alignment step is run on the existing model. Re-running the script only retrains what is missing.
 
-A convenience launcher script orchestrates the entire step-5 pipeline in separate terminals (CARLA, scenario loading, DAVE-2 server when needed, and the chosen step-5 script). Pick the mode that matches the experiment you want to run:
+For each split, the script:
 
-| Mode | What it runs                          | Conda env  | DAVE-2 server |
-|------|---------------------------------------|------------|---------------|
-| 5A   | Trajectory replay in CARLA only       | `data_extraction` | no  |
-| 5B   | DAVE-2 closed-loop on raw CARLA images| `data_extraction` | yes |
-| 5C   | Trajectory replay with Gaussian Splatting (CARLA + GS side-by-side) | `nerfstudio` | no |
-| 5D   | DAVE-2 closed-loop on Gaussian-Splatted views | `nerfstudio` | yes |
+1. Runs `ns-train splatfacto` on the COLMAP reconstruction and the corresponding image / sky-mask folders (sky masks are included automatically when present)
+2. Runs `4C_utm_yaw_to_nerfstudio.py` on the trained model to compute the 2D similarity transform and yaw offset from dataset coordinates to Nerfstudio coordinates, and saves the result as `utm_to_nerfstudio_transform.json` next to the model `config.yml`
 
-Run any one of:
+Configuration values at the top of the script (`BAG_NAME`, `NUM_SPLITS`, `FRAME_SKIP`, `METHOD`) must match the values used in Step 2. The defaults match `reference_bag`.
+
+### Output
+
+```text
+data/data_for_gaussian_splatting/reference_bag/outputs/
+├── splatfacto_split_1/splatfacto/<timestamp>/
+│   ├── config.yml
+│   ├── nerfstudio_models/step-000029999.ckpt
+│   └── utm_to_nerfstudio_transform.json
+├── splatfacto_split_2/splatfacto/<timestamp>/
+│   ├── config.yml
+│   ├── nerfstudio_models/step-000029999.ckpt
+│   └── utm_to_nerfstudio_transform.json
+└── splatfacto_split_3/splatfacto/<timestamp>/
+    ├── config.yml
+    ├── nerfstudio_models/step-000029999.ckpt
+    └── utm_to_nerfstudio_transform.json
+```
+
+Verify the alignment files are in place before moving on:
+
+```bash
+find data/data_for_gaussian_splatting/reference_bag/outputs -name "utm_to_nerfstudio_transform.json"
+```
+
+You should see one file per split.
+
+For details on the COLMAP guide, the training script, and the alignment script, see the [`4_gaussian_splatting_preparation`](#4_gaussian_splatting_preparation) section further below.
+
+---
+
+
+---
+
+## Step 5 — Run the simulation
+
+This step runs the actual driving simulation. Step 5 has four independent modes that answer different questions:
+
+- **5A** — trajectory replay in CARLA only (no GS, no DAVE-2). Simplest sanity check.
+- **5B** — DAVE-2 closed-loop drive on raw CARLA RGB images.
+- **5C** — trajectory replay rendered through Gaussian Splatting (CARLA + GS side-by-side).
+- **5D** — DAVE-2 closed-loop drive on Gaussian-Splatted views. The main experiment of the pipeline.
+
+The modes are not alternatives to each other — you may run any subset depending on what you want to evaluate.
+
+### Input
+
+Step 5 reads from the outputs of Steps 1–4:
+
+```text
+data/processed_dataset/reference_bag/maps/
+└── map.xodr
+
+data/data_for_carla/reference_bag/
+├── camera.json
+├── trajectory_positions_rear_odom_yaw.json
+└── vehicle_data.json
+
+# 5C / 5D only:
+data/data_for_gaussian_splatting/reference_bag/
+├── frame_positions_split_<N>_1_of_<FRAME_SKIP>.txt
+└── outputs/splatfacto_split_<N>/splatfacto/<timestamp>/
+    ├── config.yml
+    ├── nerfstudio_models/step-000029999.ckpt
+    └── utm_to_nerfstudio_transform.json
+
+# 5B / 5D only:
+system_under_test/
+├── communicator.py
+├── dave2.py
+└── final.h5
+```
+
+If any of these are missing, see [Step 1](#step-1--extract-data-from-the-ros-bag) through [Step 4](#step-4--gaussian-splatting-preparation). DAVE-2 weights (`final.h5`) are downloaded as part of [Download required assets](#download-required-assets) at the top of this Replication guide.
+
+> **Important**: CARLA must NOT be already running. The launcher starts CARLA itself.
+
+### Run Step 5
+
+A convenience launcher script orchestrates the entire Step 5 pipeline in separate terminals (CARLA, scenario loading, DAVE-2 server when needed, and the chosen step-5 script). Pick the mode that matches the experiment you want to run:
+
+| Mode | What it runs                                                        | Conda env  | DAVE-2 server |
+|------|---------------------------------------------------------------------|------------|---------------|
+| 5A   | Trajectory replay in CARLA only                                     | `data_extraction` | no  |
+| 5B   | DAVE-2 closed-loop on raw CARLA images                              | `data_extraction` | yes |
+| 5C   | Trajectory replay with Gaussian Splatting (CARLA + GS side-by-side) | `nerfstudio`      | no  |
+| 5D   | DAVE-2 closed-loop on Gaussian-Splatted views                       | `nerfstudio`      | yes |
+
+From the project root, run any one of:
 
 ```bash
 bash 5_execute_simulation/step5.sh --mode 5A
@@ -490,9 +844,42 @@ The launcher opens the required terminals in sequence:
 
 Each terminal stays open after its command finishes so you can read logs or errors.
 
-If you prefer to run the individual scripts manually, see the detailed instructions in the [`5_execute_simulation`](#5_execute_simulation) section below.
+### Output
 
+Each mode writes to its own folder:
 
+```text
+# 5A
+data/processed_dataset/reference_bag/carla_replay_dataset/
+├── rgb/
+├── semantic/
+├── instance/
+└── data/all_frame_data.json
+
+# 5B
+data/processed_dataset/reference_bag/dave2_runs/only_carla_run<RUN_NUMBER>/
+├── rgb/
+├── semantic/
+├── instance/
+├── depth/
+└── data/trajectory.json
+
+# 5C
+data/data_for_carla/reference_bag/replay_results/reference_bag_replay/
+├── carla/
+├── gs/
+└── combined/
+
+# 5D
+data/data_for_carla/reference_bag/drive_results/reference_bag_drive_<timestamp>/
+├── rgb_gt/
+├── generated_gs/
+└── trajectory.json
+```
+
+For details on each individual script in Step 5 and on the launcher, see the [`5_execute_simulation`](#5_execute_simulation) section further below.
+
+---
 
 
 # Detailed description and usage of each script
