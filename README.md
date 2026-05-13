@@ -148,7 +148,7 @@ pip install -r data_extraction_requirements.txt
 
 The precomputed dataset contains everything Steps 1-4 would normally produce: the CARLA-ready trajectory, the OpenDRIVE map, the parked-vehicle JSON, and the trained Gaussian Splatting models with their alignment files.
 
-Make sure the `data_extraction` environment is active (so `gdown` is available), then run:
+From the project root, with the `data_extraction` environment active (so `gdown` is available):
 
 ```bash
 conda activate data_extraction
