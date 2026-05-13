@@ -154,8 +154,8 @@ Make sure the `data_extraction` environment is active (so `gdown` is available),
 conda activate data_extraction
 pip install -U gdown
 
-gdown 1MmAYlxy67F1oxDKADHl3yUZochmifV1Q -O cam2sim_data.zip
-unzip cam2sim_data.zip
+gdown 1MmAYlxy67F1oxDKADHl3yUZochmifV1Q -O data.zip
+unzip data.zip
 ```
 
 Manual link: <https://drive.google.com/file/d/1MmAYlxy67F1oxDKADHl3yUZochmifV1Q/view?usp=sharing>
