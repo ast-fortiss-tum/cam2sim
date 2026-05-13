@@ -2385,7 +2385,7 @@ fx, fy, cx, cy, k1, k2, p1, p2
 For the front narrow camera of `reference_bag`, use:
 
 ```text
-785.34926249, 784.07587341, 406.50794975, 249.45341029, -0.42020115, 0.64296938, -0.00531934, -0.00215015
+772.906855, 777.596896, 424.980372, 258.452509, -0.274231, 0.034838, 0.00226, -0.000972
 ```
 
 Optional but recommended: select the sky-mask folder for the same split.
