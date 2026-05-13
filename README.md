@@ -587,7 +587,36 @@ data/data_for_gaussian_splatting/reference_bag/
 For details on each individual script in Step 2, see the [`2_process_datasets`](#2_process_datasets) section further below.
 
 ---
-
+> **Skip Step 2.** If you don't want to re-process the extracted dataset, you can download the precomputed outputs directly. Step 2 produces output in **two** folders, so there are two separate downloads.
+>
+> **(a) Processed dataset**  — populates `data/processed_dataset/reference_bag/`:
+>
+> ```bash
+> conda activate data_extraction
+> pip install -U gdown   # only if not already installed
+>
+> gdown 17mxVLb_iC7WTdzQHUyic2ZaJ54cOCwdY -O processed_dataset.zip
+> unzip -o processed_dataset.zip -d data/
+> rm processed_dataset.zip
+> ```
+>
+> Manual link: <https://drive.google.com/file/d/17mxVLb_iC7WTdzQHUyic2ZaJ54cOCwdY/view?usp=sharing>
+>
+> **(b) Pre-COLMAP Gaussian Splatting data** — populates `data/data_for_gaussian_splatting/reference_bag/` with the image splits, sky masks, and frame-positions files (without COLMAP reconstructions, which are produced in Step 4):
+>
+> ```bash
+> # remove any existing data_for_gaussian_splatting/ folder to avoid mixing
+> rm -rf data/data_for_gaussian_splatting
+>
+> gdown 1MovMXUXgV8nG66lG39J8oojH8JgSv-p4 -O data_for_gaussian_splatting_pre_colmap.zip
+> unzip -o data_for_gaussian_splatting_pre_colmap.zip -d data/
+> mv data/data_for_gaussian_splatting_pre_colmap data/data_for_gaussian_splatting
+> rm data_for_gaussian_splatting_pre_colmap.zip
+> ```
+>
+> Manual link: <https://drive.google.com/file/d/1MovMXUXgV8nG66lG39J8oojH8JgSv-p4/view?usp=sharing>
+>
+> After extracting both, you should have the full `data/processed_dataset/reference_bag/` and `data/data_for_gaussian_splatting/reference_bag/` structures shown above. Continue with [Step 3](#step-3--generate-carla-simulation-data).
 ---
 
 ## Step 3 — Generate CARLA simulation data
