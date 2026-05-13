@@ -60,21 +60,36 @@ At the end of the pipeline, Cam2Sim produces CARLA-ready scenarios, trained Gaus
 
 ---
 
-# Setup
+---
 
-To run this pipeline you need:
+# Quick Start
 
-1. **Conda** (Miniconda or Anaconda) — used to manage the Python environments.
-2. **CARLA 0.9.15** — used by stages 3 and 5.
-3. **NVIDIA GPU** with a driver supporting CUDA 11.8 or higher.
-4. **Nerfstudio** — used by stages 4 and 5 (Gaussian Splatting training and rendering). Installing Nerfstudio also creates the `nerfstudio` Conda environment used by this pipeline.
-5. **COLMAP** — used by stage 4 (sparse reconstruction before Gaussian Splatting training).
+This Quick Start lets you reproduce a single Gaussian Splatting trajectory replay (Step 5C) without running the full data-processing pipeline. It downloads a precomputed dataset and runs the GS replay directly. For the full pipeline (ROS bag extraction, COLMAP, Gaussian Splatting training, DAVE-2 closed-loop), see the [Setup](#setup) and [Detailed description](#detailed-description-and-usage-of-each-script) sections below.
 
-## Install Conda
+## What it does
 
-Follow the official installation guide:
+1. Loads a precomputed dataset of a real driving recording converted into a CARLA scenario.
+2. Loads the Gaussian Splatting models trained on the same recording.
+3. Starts CARLA, loads the map and parked vehicles, and replays the recorded trajectory.
+4. Renders both the CARLA view and the Gaussian-Splatted view side by side.
 
-- Miniconda (recommended, lightweight): <https://www.anaconda.com/docs/getting-started/miniconda/install/overview>
+
+## Setup
+
+### Clone the repository
+
+```bash
+git clone <repo-url> cam2sim
+cd cam2sim
+```
+
+All commands below assume the project root is the current directory.
+
+### Install Conda
+
+Follow the official guide:
+
+- Miniconda (recommended): <https://www.anaconda.com/docs/getting-started/miniconda/install/overview>
 
 After installation, restart the terminal and verify:
 
@@ -82,7 +97,7 @@ After installation, restart the terminal and verify:
 conda --version
 ```
 
-## Install CARLA
+### Install CARLA 0.9.15
 
 Download and extract CARLA 0.9.15 following the official guide:
 
@@ -100,46 +115,120 @@ and edit:
 CARLA_INSTALLATION_PATH = "/absolute/path/to/CARLA_0.9.15"
 ```
 
-## Install Nerfstudio
+### Install Nerfstudio
 
-Stages 4 and 5 of this pipeline use Nerfstudio to train Gaussian Splatting models and to render views from them at simulation time. Follow the official installation guide:
+Follow the official guide:
 
 - Nerfstudio installation: <https://docs.nerf.studio/quickstart/installation.html>
 
-The guide walks you through creating a dedicated Conda environment (named `nerfstudio` by default) with the correct CUDA toolkit, PyTorch, `tinycudann`, `gsplat`, and Nerfstudio itself. Use the default environment name so the rest of this pipeline can find it.
+The guide walks you through creating a Conda environment named `nerfstudio` with the correct CUDA toolkit, PyTorch, `tinycudann`, `gsplat`, and Nerfstudio itself. **Keep the default environment name** so the rest of the pipeline can find it.
 
-After installation, verify the environment exists and works:
+Verify the environment exists and works:
 
 ```bash
 conda activate nerfstudio
 ns-train --help
 ```
 
-If `ns-train --help` prints the usage banner, the environment is ready.
+> Splatfacto (the GS model used here) requires a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer).
 
-> Splatfacto (the Gaussian Splatting model used in this pipeline) requires a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer). Older GPUs are not supported by `gsplat`.
+### Create the `data_extraction` environment
 
-## Install COLMAP
-
-Stage 4 uses COLMAP to compute a sparse reconstruction of the recorded images before Gaussian Splatting training.
-
-Install COLMAP following the official guide:
-
-- COLMAP installation: <https://colmap.github.io/install.html>
-
-On Ubuntu, COLMAP is also available from the package manager:
+Needed by the CARLA-side scripts (3C, 3F) launched by Step 5.
 
 ```bash
-sudo apt install colmap
+conda create -n data_extraction python=3.10 -y
+conda activate data_extraction
+
+pip install -U pip setuptools wheel
+pip install -r data_extraction_requirements.txt
 ```
 
-After installation, verify:
+### Download the precomputed dataset
+
+The precomputed dataset contains everything Steps 1-4 would normally produce: the CARLA-ready trajectory, the OpenDRIVE map, the parked-vehicle JSON, and the trained Gaussian Splatting models with their alignment files.
+
+Make sure the `data_extraction` environment is active (so `gdown` is available), then run:
 
 ```bash
-colmap -h
+conda activate data_extraction
+pip install -U gdown
+
+gdown <FILE_ID> -O cam2sim_data.zip
+unzip cam2sim_data.zip
 ```
 
-## Clone the repository
+> TODO: replace `<FILE_ID>` with the actual Google Drive file ID once the archive is uploaded.
+
+After extracting, the project should contain:
+
+```text
+cam2sim/
+├── data/
+│   ├── data_for_carla/reference_bag/
+│   │   ├── camera.json
+│   │   ├── trajectory_positions_rear_odom_yaw.json
+│   │   └── vehicle_data.json
+│   ├── processed_dataset/reference_bag/maps/
+│   │   └── map.xodr
+│   └── data_for_gaussian_splatting/reference_bag/
+│       ├── frame_positions_split_*_1_of_2.txt
+│       ├── images_gs_split_*_1_of_2/
+│       └── outputs/splatfacto_split_*/splatfacto/<timestamp>/
+│           ├── config.yml
+│           ├── nerfstudio_models/
+│           └── utm_to_nerfstudio_transform.json
+```
+
+## Run it
+
+From the project root:
+
+```bash
+bash 5_execute_simulation/step5.sh 
+```
+
+`step5.sh` opens three terminals in sequence:
+
+1. **CARLA server** (`3C_setup_carla.py`, env `data_extraction`)
+2. **Map + parked vehicles** (`3F_generate_carla_scenario.py`, env `data_extraction`)
+3. **Gaussian Splatting replay** (`5C_trajectory_replay.py`, env `nerfstudio`)
+
+The replay opens a window showing CARLA on the left and the Gaussian-Splatted view on the right, frame by frame along the recorded trajectory. Output frames are saved under:
+
+```text
+data/data_for_carla/reference_bag/replay_results/reference_bag_replay/
+├── carla/
+├── gs/
+└── combined/
+```
+
+## Tested setup
+
+This pipeline has been tested on:
+
+- **OS**: Ubuntu 20.04 LTS
+- **GPU**: NVIDIA RTX 4090 (24 GB VRAM)
+- **NVIDIA driver**: 565.57.01 (required for CUDA 12.x)
+- **CUDA**: 12.7 (compatible toolkit installed by Nerfstudio inside its Conda env)
+- **CPU**: Intel Core Ultra 9
+- **RAM**: 32 GB
+
+Other Ubuntu versions (22.04, 24.04) and other CUDA-capable GPUs with compute capability ≥7.5 should also work, but have not been validated.
+
+---
+---
+
+# Replication (full pipeline)
+
+This section describes how to set up the **full pipeline**, from raw ROS bag through closed-loop DAVE-2 driving on Gaussian-Splatted views. It covers all six stages of Cam2Sim, including parked-vehicle detection, COLMAP, Gaussian Splatting training, and DAVE-2 closed-loop experiments.
+
+If you only want to reproduce the trajectory replay with Gaussian Splatting, see the [Quick Start](#quick-start) above instead — it skips Steps 1-4 by downloading a precomputed dataset.
+
+Sub-sections marked **[Quick Start already done]** can be skipped if you have already followed the Quick Start.
+
+
+## Clone the repository  *[Quick Start already done]*
 
 ```bash
 git clone <repo-url> cam2sim
@@ -150,29 +239,86 @@ All commands below assume the project root is the current directory.
 
 ---
 
+## Software prerequisites
+
+You need all of the following:
+
+1. **Conda** (Miniconda or Anaconda) — manages the Python environments.
+2. **CARLA 0.9.15** — used by stages 3 and 5.
+3. **NVIDIA GPU** with a driver supporting CUDA 11.8 or higher.
+4. **Nerfstudio** — used by stages 4 and 5. Installs the `nerfstudio` Conda environment.
+5. **COLMAP** — used by stage 4 (sparse reconstruction before Gaussian Splatting training).
+
+### Install Conda  *[Quick Start already done]*
+
+- Miniconda (recommended, lightweight): <https://www.anaconda.com/docs/getting-started/miniconda/install/overview>
+
+After installation, restart the terminal and verify:
+
+```bash
+conda --version
+```
+
+### Install CARLA 0.9.15  *[Quick Start already done]*
+
+- CARLA 0.9.15 quick start: <https://carla.readthedocs.io/en/0.9.15/start_quickstart/>
+
+After extracting, set the CARLA installation path inside `3_generate_simulation_data/utils/config.py`:
+
+```python
+CARLA_INSTALLATION_PATH = "/absolute/path/to/CARLA_0.9.15"
+```
+
+### Install Nerfstudio  *[Quick Start already done]*
+
+- Nerfstudio installation: <https://docs.nerf.studio/quickstart/installation.html>
+
+Use the default environment name (`nerfstudio`). Verify:
+
+```bash
+conda activate nerfstudio
+ns-train --help
+```
+
+> Splatfacto requires a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer).
+
+### Install COLMAP  *(new, not in Quick Start)*
+
+Stage 4 uses COLMAP to compute a sparse reconstruction of the recorded images.
+
+- COLMAP installation: <https://colmap.github.io/install.html>
+
+On Ubuntu:
+
+```bash
+sudo apt install colmap
+```
+
+Verify:
+
+```bash
+colmap -h
+```
+
+
+
 ## Conda environments
 
-This pipeline uses three separate Conda environments. Each one isolates dependencies that would otherwise conflict.
+The pipeline uses three separate Conda environments. Each isolates dependencies that would otherwise conflict.
 
-### `data_extraction` (main environment)
+### `data_extraction` (main environment)  *[Quick Start already done]*
 
-Used by stages 1, 2, 3, and 5.
-
-Create the environment with Python 3.10 and activate it:
+Used by stages 1, 2, 3, and 5 (for the CARLA-side scripts).
 
 ```bash
 conda create -n data_extraction python=3.10 -y
 conda activate data_extraction
-```
 
-Install the Python packages listed in `data_extraction_requirements.txt`:
-
-```bash
 pip install -U pip setuptools wheel
 pip install -r data_extraction_requirements.txt
 ```
 
-Install the OpenMMLab packages with `mim` (this installs them inside the active environment):
+Stage 2 also requires the OpenMMLab packages installed with `mim`:
 
 ```bash
 pip install -U openmim
@@ -182,60 +328,57 @@ mim install mmdet==3.2.0
 mim install mmdet3d==1.4.0
 ```
 
-Verify the installation:
+Verify:
 
 ```bash
 python -c "import torch, mmcv, mmdet, mmdet3d; print('OK')"
 ```
 
-### `dave_2` (autonomous driving model)
+### `dave_2` (autonomous driving model)  *(new, not in Quick Start)*
 
-Used by stage 5 to run the DAVE-2 steering model as a standalone TCP server.
-This environment is independent from `data_extraction` because TensorFlow 2.13
-requires Python 3.8.
-
-Create the environment with Python 3.8 and activate it:
+Used by stage 5 to run the DAVE-2 steering model as a standalone TCP server (modes 5B and 5D). This environment is independent because TensorFlow 2.13 requires Python 3.8.
 
 ```bash
 conda create -n dave_2 python=3.8 -y
 conda activate dave_2
-```
 
-Install the required packages:
-
-```bash
 pip install -U pip setuptools wheel
 pip install tensorflow==2.13.1
 pip install pillow
 pip install opencv-python
 ```
 
-### `nerfstudio` (Gaussian Splatting / Nerfstudio training and rendering)
+### `nerfstudio` (Gaussian Splatting)  *[Quick Start already done]*
 
-
-
-This environment is **already created** by the Nerfstudio installation step above. There is no separate `conda create` command for it. As long as you followed the official Nerfstudio installation guide and kept the default environment name, you can use it directly:
+Already created by the Nerfstudio installation step above.
 
 ```bash
 conda activate nerfstudio
 ```
 
----
-## Download pretrained model checkpoints
+> **Troubleshooting — CUDA compilation errors.** On systems where the default GCC is too new for the installed CUDA toolkit (e.g. Ubuntu 24 with GCC 13), Nerfstudio or `gsplat` may fail to compile CUDA extensions. The scripts in this pipeline already export a compatible compiler automatically when `gcc-11` is available on the system. If you still hit a compiler error, install GCC 11:
+>
+> ```bash
+> sudo apt install gcc-11 g++-11
+> ```
 
-Stage 2 uses two pretrained 3D detection models that are too large to ship inside the Git repository:
+---
+
+## Download required assets
+
+The full pipeline requires several files that are too large to ship in the Git repository: pretrained detection models, the DAVE-2 weights, and the example ROS bag.
+
+### Pretrained 3D detection models  *(new, not in Quick Start)*
+
+Stage 2 uses two pretrained 3D detection models:
 
 - **FCOS3D** (camera-based 3D detection, ~1 GB)
 - **PointPillars** (LiDAR-based 3D detection, ~20 MB)
 
 Both must be placed inside `2_process_datasets/utils/` with their original filenames.
 
-Make sure the `data_extraction` environment is active (so `gdown` is available), then run:
-
 ```bash
 conda activate data_extraction
-
-# Make sure gdown is available
 pip install -U gdown
 
 cd 2_process_datasets/utils
@@ -249,28 +392,51 @@ gdown 1AGOR8C0tDUsWSSWTEc0fA7kysIE9-iol -O hv_pointpillars_secfpn_6x8_160e_kitti
 cd ../..
 ```
 
-Alternatively, download the files manually from these links and put them in `2_process_datasets/utils/`:
-
+Manual download links:
 - FCOS3D: <https://drive.google.com/file/d/1JIKRFQQI9CmQARk21Q619TPkdS49Voel/view?usp=sharing>
 - PointPillars: <https://drive.google.com/file/d/1AGOR8C0tDUsWSSWTEc0fA7kysIE9-iol/view?usp=sharing>
 
-After downloading, the folder should look like:
-
-```text
-2_process_datasets/utils/
-├── fcos3d_config.py
-├── fcos3d.pth
-├── my_pointpillars_config.py
-├── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
-└── ...
-```
-
-Verify that both files exist:
+Verify both files exist:
 
 ```bash
 ls -lh 2_process_datasets/utils/fcos3d.pth \
        2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth
 ```
+
+### DAVE-2 model weights  *(new, not in Quick Start)*
+
+Stage 5 modes 5B and 5D drive a self-driving model. The DAVE-2 model weights file (~50 MB) must be placed inside `system_under_test/`.
+
+```bash
+conda activate data_extraction
+cd system_under_test
+gdown 1_pJHuvU4386FOYrF_B0ETIZGmShObhIF -O final.h5
+cd ..
+```
+
+Manual link: <https://drive.google.com/file/d/1_pJHuvU4386FOYrF_B0ETIZGmShObhIF/view?usp=sharing>
+
+Verify:
+
+```bash
+ls -lh system_under_test/final.h5
+```
+
+### Example ROS bag  *(new, optional)*
+
+If you want to run the pipeline starting from raw recorded data, an example ROS bag (~6 GB) is provided. It corresponds to the `reference_bag` referenced throughout the pipeline.
+
+```bash
+conda activate data_extraction
+gdown 1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9 -O data/raw_ros_data/reference_bag.bag
+```
+
+Manual link: <https://drive.google.com/file/d/1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9/view?usp=sharing>
+
+If you record your own ROS bag, place it under `data/raw_ros_data/` and update the `bag_path` value at the top of the Step 1 scripts to point to it.
+
+---
+
 
 # Quick use guide
 Follow the setup guide for the conda environments, then
@@ -326,18 +492,7 @@ Each terminal stays open after its command finishes so you can read logs or erro
 
 If you prefer to run the individual scripts manually, see the detailed instructions in the [`5_execute_simulation`](#5_execute_simulation) section below.
 
-# Even quicker use guide: Just execute trajectory replay with gaussian splatting
-Follow the setup guide for the conda environments, then downlad the already executed output of Steps 1-4.
 
-Start CARLA and load the Map using Steps 3C and 3F
-
-Then, execute the following command in the nerfstudio conda environment.
-
-```bash
-python 5_execute_simulation/5C_trajectory_replay.py --skip_calibration
-```
-
-If this should fail, run the 3 Exports.
 
 
 # Detailed description and usage of each script
