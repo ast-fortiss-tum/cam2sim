@@ -442,10 +442,10 @@ Download the example bag (~6 GB) corresponding to `reference_bag`:
 conda activate data_extraction
 pip install -U gdown   # only if not already installed
 
-gdown 11dzQ3j5kxm25IBosHyn_WE0rF56vuHmf -O data/raw_ros_data/reference_bag.bag
+gdown 1ijhejhNO19jvrb3BUkEKRlxw-SkfZRhu -O data/raw_ros_data/reference_bag.bag
 ```
 
-Manual link: <https://drive.google.com/file/d/11dzQ3j5kxm25IBosHyn_WE0rF56vuHmf/view?usp=sharing>
+Manual link: <https://drive.google.com/file/d/1ijhejhNO19jvrb3BUkEKRlxw-SkfZRhu/view?usp=sharing>
 
 Verify the file is in place:
 
