@@ -682,6 +682,26 @@ data/data_for_carla/reference_bag/
 
 At the end of Step 3 the CARLA world is loaded, the parked vehicles are placed, and the hero vehicle is spawned at the first trajectory pose. The world is left ready for Step 5 (`step5.sh`).
 
+> **Skip Step 3.** If you don't want to re-generate the CARLA simulation data, download the precomputed output instead. From the project root:
+>
+> ```bash
+> conda activate data_extraction
+> pip install -U gdown   # only if not already installed
+>
+> # remove any existing data_for_carla/ folder to avoid mixing
+> rm -rf data/data_for_carla
+>
+> gdown 1yHZa747iQe7bEPCSJ9vIqlDIhYOm5Yzd -O data_for_carla.zip
+> unzip -o data_for_carla.zip -d data/
+> rm data_for_carla.zip
+> ```
+>
+> Manual link: <https://drive.google.com/file/d/1yHZa747iQe7bEPCSJ9vIqlDIhYOm5Yzd/view?usp=sharing>
+>
+> After extracting, you should have the full `data/data_for_carla/reference_bag/` structure shown above. **Note**: this download skips only the data preparation — you still need to start CARLA and load the scenario before running Step 5. The `step5.sh` launcher does both automatically.
+>
+> Continue with [Step 4](#step-4--gaussian-splatting-preparation) (or [Step 5](#step-5--run-the-simulation) if you already have the Gaussian Splatting models from a previous skip).
+
 For details on each individual script in Step 3, see the [`3_generate_simulation_data`](#3_generate_simulation_data) section further below.
 
 ---
