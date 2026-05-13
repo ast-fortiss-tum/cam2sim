@@ -422,22 +422,6 @@ Verify:
 ls -lh system_under_test/final.h5
 ```
 
-### Example ROS bag  *(new, optional)*
-
-If you want to run the pipeline starting from raw recorded data, an example ROS bag (~6 GB) is provided. It corresponds to the `reference_bag` referenced throughout the pipeline.
-
-```bash
-conda activate data_extraction
-gdown 1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9 -O data/raw_ros_data/reference_bag.bag
-```
-
-Manual link: <https://drive.google.com/file/d/1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9/view?usp=sharing>
-
-If you record your own ROS bag, place it under `data/raw_ros_data/` and update the `bag_path` value at the top of the Step 1 scripts to point to it.
-
----
-
----
 
 ## Step 1 — Extract data from the ROS bag
 
