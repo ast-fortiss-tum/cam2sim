@@ -212,14 +212,7 @@ pip install opencv-python
 
 ### `nerfstudio` (Gaussian Splatting / Nerfstudio training and rendering)
 
-Run the Commands
-```bash
-export CC=/usr/bin/gcc-11
-export CXX=/usr/bin/g++-11
-export CUDA_HOST_COMPILER=/usr/bin/g++-11
-```
 
-Used by stage 4 (training Gaussian Splatting models) and by the GS-based scripts in stage 5 (`5C_trajectory_replay.py` and `5D_dave2.py`), which load the trained models and render new views with `gsplat`.
 
 This environment is **already created** by the Nerfstudio installation step above. There is no separate `conda create` command for it. As long as you followed the official Nerfstudio installation guide and kept the default environment name, you can use it directly:
 
@@ -300,30 +293,38 @@ Optional Re-train:
 ```bash
 bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh
 ```
-## Quick use Step 5D
+## Quick use of Step 5
 
-Make sure CARLA is running and the Map is loaded. This requires Step 1,2 and 3 to be run.
+Make sure CARLA is **not** already running (the launcher will start it). Step 1, 2, and 3 must have been run at least once for the chosen bag.
 
-If CARLA is not running after Step 1-3, start it (using the data_extraction environment) by using
+A convenience launcher script orchestrates the entire step-5 pipeline in separate terminals (CARLA, scenario loading, DAVE-2 server when needed, and the chosen step-5 script). Pick the mode that matches the experiment you want to run:
+
+| Mode | What it runs                          | Conda env  | DAVE-2 server |
+|------|---------------------------------------|------------|---------------|
+| 5A   | Trajectory replay in CARLA only       | `data_extraction` | no  |
+| 5B   | DAVE-2 closed-loop on raw CARLA images| `data_extraction` | yes |
+| 5C   | Trajectory replay with Gaussian Splatting (CARLA + GS side-by-side) | `nerfstudio` | no |
+| 5D   | DAVE-2 closed-loop on Gaussian-Splatted views | `nerfstudio` | yes |
+
+Run any one of:
 
 ```bash
-python 3_generate_simulation_data/3C_setup_carla.py
-```
-and loading the Map using
-```bash
-python 3_generate_simulation_data/3F_generate_carla_scenario.py
+bash 5_execute_simulation/step5.sh --mode 5A
+bash 5_execute_simulation/step5.sh --mode 5B
+bash 5_execute_simulation/step5.sh --mode 5C
+bash 5_execute_simulation/step5.sh --mode 5D
 ```
 
-Now start DAVE-2 within the dave_2 environment using
-```bash
-python system_under_test/communicator.py
-```
-If this should fail, run the 3 EXPORTS found under the nerfstudio section and try again.
+The launcher opens the required terminals in sequence:
 
-Now, while running CARLA and DAVE2, run 5D within the nerfstudio environment. If this should fail, run the 3 EXPORTS as well.
-```bash
-python 5_execute_simulation/5D_dave2.py
-```
+1. **CARLA** (`3C_setup_carla.py`) and waits for it to be reachable on port 2000
+2. **Map + parked vehicles** (`3F_generate_carla_scenario.py`) and waits for it to finish
+3. **DAVE-2 server** (`system_under_test/communicator.py`), only for 5B / 5D, and waits for port 5090 to be reachable
+4. **The chosen step-5 script**
+
+Each terminal stays open after its command finishes so you can read logs or errors.
+
+If you prefer to run the individual scripts manually, see the detailed instructions in the [`5_execute_simulation`](#5_execute_simulation) section below.
 
 # Even quicker use guide: Just execute trajectory replay with gaussian splatting
 Follow the setup guide for the conda environments, then downlad the already executed output of Steps 1-4.

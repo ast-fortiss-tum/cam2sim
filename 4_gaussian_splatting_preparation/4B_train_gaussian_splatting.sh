@@ -37,6 +37,22 @@ fi
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV}"
 
+# ----------------------------------------------------------------------------
+# Force gcc-11 for CUDA compilation if available (safe: noop if absent).
+# Required on systems whose default gcc is too new for the installed CUDA
+# (e.g. Ubuntu 24 with gcc-13). On systems where gcc-11 is the default or
+# is not installed, this block does nothing.
+# ----------------------------------------------------------------------------
+if command -v gcc-11 &>/dev/null && command -v g++-11 &>/dev/null; then
+    export CC="$(command -v gcc-11)"
+    export CXX="$(command -v g++-11)"
+    export CUDA_HOST_COMPILER="$(command -v g++-11)"
+    echo "[INFO] Using CC=${CC}, CXX=${CXX}, CUDA_HOST_COMPILER=${CUDA_HOST_COMPILER}"
+else
+    echo "[INFO] gcc-11/g++-11 not found in PATH, leaving compiler env vars untouched."
+fi
+# ----------------------------------------------------------------------------
+
 if ! command -v ns-train &>/dev/null; then
     echo "[ERROR] ns-train not found. Is the '${CONDA_ENV}' env correct?"
     exit 1
