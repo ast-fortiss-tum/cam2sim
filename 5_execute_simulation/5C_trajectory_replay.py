@@ -32,6 +32,16 @@ Coordinate chain (per split):
 """
 
 import os
+import shutil
+
+if shutil.which("gcc-11") and shutil.which("g++-11"):
+    os.environ["CC"] = "/usr/bin/gcc-11"
+    os.environ["CXX"] = "/usr/bin/g++-11"
+    os.environ["CUDA_HOST_COMPILER"] = "/usr/bin/g++-11"
+# ============================================================================
+
+
+import os
 import sys
 import json
 import math
