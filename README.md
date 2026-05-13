@@ -610,12 +610,10 @@ For details on each individual script in Step 2, see the [`2_process_datasets`](
 >
 > gdown 1MovMXUXgV8nG66lG39J8oojH8JgSv-p4 -O data_for_gaussian_splatting_pre_colmap.zip
 > unzip -o data_for_gaussian_splatting_pre_colmap.zip -d data/
-> mv data/data_for_gaussian_splatting_pre_colmap data/data_for_gaussian_splatting
 > rm data_for_gaussian_splatting_pre_colmap.zip
 > ```
 >
 > Manual link: <https://drive.google.com/file/d/1MovMXUXgV8nG66lG39J8oojH8JgSv-p4/view?usp=sharing>
->
 > After extracting both, you should have the full `data/processed_dataset/reference_bag/` and `data/data_for_gaussian_splatting/reference_bag/` structures shown above. Continue with [Step 3](#step-3--generate-carla-simulation-data).
 ---
 
