@@ -155,7 +155,8 @@ conda activate data_extraction
 pip install -U gdown
 
 gdown 1MmAYlxy67F1oxDKADHl3yUZochmifV1Q -O data.zip
-unzip data.zip
+unzip -o data.zip
+rm data.zip
 ```
 
 Manual link: <https://drive.google.com/file/d/1MmAYlxy67F1oxDKADHl3yUZochmifV1Q/view?usp=sharing>
