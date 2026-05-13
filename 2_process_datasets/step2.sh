@@ -39,7 +39,7 @@ SCRIPTS=(
     "$SCRIPT_2B"
     "2_process_datasets/2C_create_map_from_coordinates_auto.py"
     "2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py"
-    #"2_process_datasets/2F_extract_semantic_maps.py"
+    "2_process_datasets/2F_extract_semantic_maps.py"
 )
 
 PTH_FILE_1="2_process_datasets/utils/fcos3d.pth"
