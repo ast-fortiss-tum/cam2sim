@@ -154,12 +154,12 @@ From the project root, with the `data_extraction` environment active (so `gdown`
 conda activate data_extraction
 pip install -U gdown
 
-gdown 1MmAYlxy67F1oxDKADHl3yUZochmifV1Q -O data.zip
+gdown 1SGDVeWIkNd0goRy2sR-i9sSmQIpMA-yj -O data.zip
 unzip -o data.zip
 rm data.zip
 ```
 
-Manual link: <https://drive.google.com/file/d/1MmAYlxy67F1oxDKADHl3yUZochmifV1Q/view?usp=sharing>
+Manual link: <https://drive.google.com/file/d/1SGDVeWIkNd0goRy2sR-i9sSmQIpMA-yj/view?usp=sharing>
 
 After extracting, the project should contain:
 
