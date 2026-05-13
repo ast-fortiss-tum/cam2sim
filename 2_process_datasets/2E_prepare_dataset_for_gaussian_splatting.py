@@ -2,40 +2,32 @@
 # -*- coding: utf-8 -*-
 
 """
-Prepare images and overlapping splits for Gaussian Splatting.
+Prepare images and overlapping splits for Gaussian Splatting,
+WITH sky masks (thesis-faithful).
 
-PATCHED to replicate thesis splits exactly:
-  - FRAME_SKIP = 2 (was 3)
-  - OVERLAP_FRAMES = 99 (was 200)
-  - Split partitioning is done in ORIGINAL frame_id units, then subsampled.
+Differences vs the original prepare_gs_splits_thesis.py:
+  - Generates sky masks using SegFormer (nvidia/segformer-b1-finetuned-cityscapes-1024-1024)
+  - Saves them in _tmp_sky_masks_gs_<skip>/ and sky_masks_gs_split_N_<skip>/
+  - Convention (matches thesis):
+        255 (white) = valid pixel (keep during training/COLMAP)
+        0   (black) = masked-out pixel (= sky, ignore)
 
-Resulting splits for a 3144-frame bag with FRAME_SKIP=2, NUM_SPLITS=3,
-OVERLAP_FRAMES=99:
-  - split 1: frame_id 0    -> 1146  (~574 subsampled)
-  - split 2: frame_id 1048 -> 2194  (~574 subsampled)
-  - split 3: frame_id 2096 -> 3142  (~524 subsampled)
-  - overlap between consecutive splits: ~99 frame_id (= 50 subsampled)
-
-Reads source data from:
-    data/raw_dataset/<BAG_NAME>/images
-    data/raw_dataset/<BAG_NAME>/images_positions.txt
-
-Writes all Gaussian Splatting data to:
-    data/data_for_gaussian_splatting/<BAG_NAME>/
-
-Outputs include:
-    _tmp_images_gs_1_of_<FRAME_SKIP>/
-    images_gs_split_N_1_of_<FRAME_SKIP>/
-    frame_positions_split_N_1_of_<FRAME_SKIP>.txt
-    colmap/split_N/sparse/0/   (empty)
+Everything else is IDENTICAL to the thesis-replicating script:
+  - FRAME_SKIP = 2
+  - NUM_SPLITS = 3
+  - OVERLAP_FRAMES = 100 (in original frame_id units)
+  - same hardcoded paths, same crop, same split partitioning logic
 """
 
 import os
 import sys
 import shutil
 
+import torch
+import numpy as np
 from PIL import Image
 from tqdm import tqdm
+from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 
 
 # =======================
@@ -81,6 +73,64 @@ NUM_SPLITS = 3
 OVERLAP_FRAMES = 100   # in ORIGINAL frame_id units
 
 OVERWRITE_EXISTING = True
+
+# Sky-mask model (same as thesis)
+SKY_MASK_MODEL_NAME = "nvidia/segformer-b1-finetuned-cityscapes-1024-1024"
+
+
+# =======================
+# SKY MASK
+# =======================
+
+def load_sky_model():
+    """Load SegFormer model for sky segmentation."""
+    print(f"[INFO] Loading SegFormer: {SKY_MASK_MODEL_NAME}...")
+    processor = SegformerImageProcessor.from_pretrained(SKY_MASK_MODEL_NAME)
+    model = SegformerForSemanticSegmentation.from_pretrained(SKY_MASK_MODEL_NAME)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    print(f"[INFO] Sky model loaded on {device}")
+
+    # Find sky class ID
+    id2label = model.config.id2label
+    sky_id = None
+    for class_id, label in id2label.items():
+        if label.lower() == "sky":
+            sky_id = class_id
+            break
+
+    if sky_id is None:
+        raise RuntimeError("Could not find 'sky' class in model labels!")
+    print(f"[INFO] Sky class ID: {sky_id}")
+
+    return processor, model, device, sky_id
+
+
+def generate_sky_mask(image, processor, model, device, sky_id):
+    """
+    Generate a binary sky mask for a single PIL image (cropped).
+
+    Convention:
+        255 = valid pixel  (keep)
+        0   = sky pixel    (mask out)
+    """
+    inputs = processor(images=image, return_tensors="pt").to(device)
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    logits = outputs.logits
+    upsampled_logits = torch.nn.functional.interpolate(
+        logits,
+        size=image.size[::-1],  # (height, width)
+        mode="bilinear",
+        align_corners=False,
+    )
+    pred_seg = upsampled_logits.argmax(dim=1)[0]
+
+    mask = torch.ones_like(pred_seg, dtype=torch.uint8) * 255
+    mask[pred_seg == sky_id] = 0
+    return Image.fromarray(mask.cpu().numpy())
 
 
 # =======================
@@ -173,7 +223,11 @@ def process_frames():
     tmp_image_folder = os.path.join(
         OUTPUT_ROOT, f"_tmp_images_gs_{skip_label}",
     )
+    tmp_mask_folder = os.path.join(
+        OUTPUT_ROOT, f"_tmp_sky_masks_gs_{skip_label}",
+    )
     os.makedirs(tmp_image_folder, exist_ok=True)
+    os.makedirs(tmp_mask_folder, exist_ok=True)
 
     header_lines, data_lines = load_position_lines(SOURCE_POSITIONS_FILE)
     total_frames = len(data_lines)
@@ -182,7 +236,7 @@ def process_frames():
     indices = list(range(0, total_frames, FRAME_SKIP))
 
     print("=" * 80)
-    print("GAUSSIAN SPLATTING IMAGE PREPARATION (thesis-replicating)")
+    print("GAUSSIAN SPLATTING IMAGE PREPARATION (thesis-replicating, WITH sky masks)")
     print("=" * 80)
     print(f"[INFO] Project root:            {PROJECT_ROOT}")
     print(f"[INFO] Bag name:                {BAG_NAME}")
@@ -195,23 +249,31 @@ def process_frames():
     print(f"[INFO] Overlap frames (orig):   {OVERLAP_FRAMES}")
     print(f"[INFO] Total source frames:     {total_frames}")
     print(f"[INFO] Subsampled frame count:  {len(indices)}")
+    print(f"[INFO] Sky mask model:          {SKY_MASK_MODEL_NAME}")
     print("=" * 80)
+
+    # Load sky model BEFORE the loop
+    processor, model, device, sky_id = load_sky_model()
 
     filenames_by_index = {}
 
-    print("\n[INFO] Processing frames: crop images")
+    print("\n[INFO] Processing frames: crop + sky masks")
     for original_index in tqdm(indices, desc="Processing"):
         line = data_lines[original_index]
         filename = get_image_filename_from_position_line(line)
 
         input_path = os.path.join(SOURCE_IMAGES_FOLDER, filename)
-        output_path = os.path.join(tmp_image_folder, filename)
+        output_image_path = os.path.join(tmp_image_folder, filename)
+        output_mask_path = os.path.join(tmp_mask_folder, filename)
 
         if not os.path.exists(input_path):
             print(f"[WARN] Image not found: {input_path}")
             continue
 
-        if not OVERWRITE_EXISTING and os.path.exists(output_path):
+        # Skip work if both already exist and we don't overwrite
+        if (not OVERWRITE_EXISTING
+                and os.path.exists(output_image_path)
+                and os.path.exists(output_mask_path)):
             filenames_by_index[original_index] = filename
             continue
 
@@ -224,7 +286,14 @@ def process_frames():
                 )
             crop_box = (0, 0, width, crop_height)
             cropped_img = img.crop(crop_box)
-            cropped_img.save(output_path)
+            cropped_img.save(output_image_path)
+
+            # Generate sky mask on cropped image
+            mask_img = generate_sky_mask(
+                cropped_img.convert("RGB"),
+                processor, model, device, sky_id,
+            )
+            mask_img.save(output_mask_path)
 
         filenames_by_index[original_index] = filename
 
@@ -233,6 +302,7 @@ def process_frames():
 
     print(f"\n[INFO] Processed frames: {num_processed}")
     print(f"[INFO] Temporary cropped images: {tmp_image_folder}")
+    print(f"[INFO] Temporary sky masks:      {tmp_mask_folder}")
 
     if num_processed == 0:
         raise RuntimeError("No frames were processed.")
@@ -240,30 +310,12 @@ def process_frames():
     # =======================
     # SPLIT CREATION
     # =======================
-    #
-    # Logic (thesis-faithful): work in ORIGINAL frame_id units to partition,
-    # then filter by the subsampled set.
-    #
-    #   split_step_orig = total_frames // NUM_SPLITS
-    #   split N start  = N * split_step_orig
-    #   split N end    = (N+1) * split_step_orig + OVERLAP_FRAMES   (forward)
-    #                    or total_frames-1 for the last split
-    #
-    # Example for total_frames=3144, NUM_SPLITS=3, OVERLAP_FRAMES=99:
-    #   split_step_orig = 1048
-    #   split 1: orig [0,    1147)  -> [0, 1146]
-    #   split 2: orig [1048, 2195)  -> [1048, 2194]
-    #   split 3: orig [2096, 3144)  -> [2096, 3143]
-    # which matches the thesis splits at 3144 total frames.
-
     split_step_orig = total_frames // NUM_SPLITS
-
     if split_step_orig <= 0:
         raise RuntimeError(
             f"NUM_SPLITS={NUM_SPLITS} is too large for {total_frames} total frames."
         )
 
-    # Build (start_orig_inclusive, end_orig_inclusive) per split
     splits_orig = []
     for split_index in range(NUM_SPLITS):
         start_orig = split_index * split_step_orig
@@ -280,7 +332,6 @@ def process_frames():
     print(f"       Mode:                       overlap forward (in original-frame units)")
 
     for split_index, (start_orig, end_orig) in enumerate(splits_orig, start=1):
-        # Keep only the subsampled originals inside this split range
         split_frames = [
             (oi, fn) for (oi, fn) in processed
             if start_orig <= oi <= end_orig
@@ -289,15 +340,23 @@ def process_frames():
         split_image_dir = os.path.join(
             OUTPUT_ROOT, f"images_gs_split_{split_index}_{skip_label}",
         )
+        split_mask_dir = os.path.join(
+            OUTPUT_ROOT, f"sky_masks_gs_split_{split_index}_{skip_label}",
+        )
         split_positions_path = os.path.join(
             OUTPUT_ROOT, f"frame_positions_split_{split_index}_{skip_label}.txt",
         )
         os.makedirs(split_image_dir, exist_ok=True)
+        os.makedirs(split_mask_dir, exist_ok=True)
 
         for original_index, filename in split_frames:
             src_img = os.path.join(tmp_image_folder, filename)
             dst_img = os.path.join(split_image_dir, filename)
             link_or_copy(src_img, dst_img)
+
+            src_mask = os.path.join(tmp_mask_folder, filename)
+            dst_mask = os.path.join(split_mask_dir, filename)
+            link_or_copy(src_mask, dst_mask)
 
         write_split_positions_file(
             split_positions_path,
@@ -314,9 +373,10 @@ def process_frames():
         print(f"       Original range req'd:  [{start_orig}, {end_orig}]")
         print(f"       Actual orig range:     [{actual_first_orig}, {actual_last_orig}]")
         print(f"       Images:                {split_image_dir}")
+        print(f"       Sky masks:             {split_mask_dir}")
         print(f"       Positions:             {split_positions_path}")
 
-    # Overlap report (in subsampled frame count between consecutive splits)
+    # Overlap report
     for split_index in range(NUM_SPLITS - 1):
         a_start, a_end = splits_orig[split_index]
         b_start, b_end = splits_orig[split_index + 1]
