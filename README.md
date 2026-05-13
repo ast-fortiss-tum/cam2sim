@@ -311,6 +311,8 @@ The pipeline uses three separate Conda environments. Each isolates dependencies 
 
 Used by stages 1, 2, 3, and 5 (for the CARLA-side scripts).
 
+If you have NOT done the Quick Start, create the environment first:
+
 ```bash
 conda create -n data_extraction python=3.10 -y
 conda activate data_extraction
@@ -319,9 +321,13 @@ pip install -U pip setuptools wheel
 pip install -r data_extraction_requirements.txt
 ```
 
-Stage 2 also requires the OpenMMLab packages installed with `mim`:
+#### Extra dependencies for Stage 2  *(not in Quick Start)*
+
+Stage 2 (parked-vehicle detection) requires the OpenMMLab packages, which are **not installed by the Quick Start**. Install them now into the existing `data_extraction` environment:
 
 ```bash
+conda activate data_extraction
+
 pip install -U openmim
 mim install mmengine
 mim install mmcv==2.1.0
