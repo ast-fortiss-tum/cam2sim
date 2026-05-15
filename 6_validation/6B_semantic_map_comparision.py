@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-6C_semantic_iou.py
+6B_semantic_map_comparision.py
 
 Semantic IoU evaluation: per-frame metrics + aggregated summary.
 
-Compares two semantic map sources for the same set of frames:
-  - GT   = SegFormer outputs from real-world images, written by step 2A:
-           data/processed_dataset/<BAG>/semantic_maps/<framename>.png
+Inputs are read from data/data_for_validation/, which is populated by
+6A_copy_data_for_validation.py from the actual sources (Step 2A SegFormer
+output for the GT, Step 5A CARLA replay output for the PRED).
+
+  - GT   = SegFormer outputs from real-world images:
+           data/data_for_validation/semantic/<framename>.png
   - PRED = CARLA-replay semantic outputs (cleaned, 512x512):
-           data/processed_dataset/<BAG>/carla_replay_dataset/semantic/<frame_id:06d>.png
+           data/data_for_validation/semantic_carla/<frame_id:06d>.png
 
 For each matched (GT, PRED) pair:
   1. Load both, NEAREST-resize GT to 512x512 (PRED is already at that size)
@@ -27,13 +30,13 @@ Outputs (under PROJECT_ROOT/results/semantic/):
 
 Usage (from the cam2sim project root):
     # Process new frames + aggregate
-    python 6_validation/6C_semantic_iou.py
+    python 6_validation/6B_semantic_map_comparision.py
 
     # Only aggregate already-computed per-frame JSONs into summary.json
-    python 6_validation/6C_semantic_iou.py --summary_only
+    python 6_validation/6B_semantic_map_comparision.py --summary_only
 
     # Rerun every frame, ignoring already-existing *_iou.json
-    python 6_validation/6C_semantic_iou.py --force
+    python 6_validation/6B_semantic_map_comparision.py --force
 """
 
 import argparse
@@ -51,14 +54,12 @@ from matplotlib.colors import ListedColormap
 # CONFIG
 # =============================================================================
 
-BAG_NAME = "reference_bag"
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-GT_DIR = PROJECT_ROOT / "data" / "processed_dataset" / BAG_NAME / "semantic_maps"
-PRED_DIR = PROJECT_ROOT / "data" / "processed_dataset" / BAG_NAME / \
-           "carla_replay_dataset" / "semantic"
+# Inputs come from data/data_for_validation/, populated by 6A.
+GT_DIR = PROJECT_ROOT / "data" / "data_for_validation" / "semantic"
+PRED_DIR = PROJECT_ROOT / "data" / "data_for_validation" / "semantic_carla"
 RESULTS_DIR = PROJECT_ROOT / "results" / "semantic"
 
 TARGET_SIZE = (512, 512)  # (W, H)
@@ -338,9 +339,11 @@ def main():
     # --- Validate inputs ---
     if not GT_DIR.exists():
         print(f"[ERROR] GT directory does not exist: {GT_DIR}")
+        print(f"[HINT]  Run 6A_copy_data_for_validation.py first to populate it.")
         sys.exit(1)
     if not PRED_DIR.exists():
         print(f"[ERROR] PRED directory does not exist: {PRED_DIR}")
+        print(f"[HINT]  Run 6A_copy_data_for_validation.py first to populate it.")
         sys.exit(1)
 
     gt_files = sorted([

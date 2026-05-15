@@ -24,3 +24,5 @@ data/data_for_gaussian_splatting/reference_bag_new/*
 data/data_for_carla/reference_bag/*
 !data/data_for_carla/reference_bag/camera.json
 results/*
+data/data_for_validation/semantic/
+data/data_for_validation/semantic_carla/
