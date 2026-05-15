@@ -4092,9 +4092,6 @@ If a previous run left the world in a strange state (vehicles destroyed, sensors
 <details>
 <summary><code>6_validation</code></summary>
 
-<details>
-<summary><code>6_validation</code></summary>
-
 # 6_validation
 
 This folder contains the sixth step of the data-processing pipeline.
