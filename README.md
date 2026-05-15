@@ -2878,6 +2878,7 @@ This step can produce:
 - One Nerfstudio / Gaussian Splatting model per split
 - A transform from dataset coordinates to Nerfstudio coordinates
 - Model outputs used later for GS-rendered simulation views
+- A path-fix utility for moving trained models between machines
 
 ---
 
@@ -2888,7 +2889,8 @@ project_root/
 ├── 4_gaussian_splatting_preparation/
 │   ├── 4A_colmap_guide.md
 │   ├── 4B_train_gaussian_splatting.sh
-│   └── 4C_utm_yaw_to_nerfstudio.py
+│   ├── 4C_utm_yaw_to_nerfstudio.py
+│   └── 4D_fix_paths.py
 │
 ├── data/
 │   └── data_for_gaussian_splatting/
@@ -3444,6 +3446,61 @@ The alignment files are used later by step 5 to convert simulation poses into th
 
 ---
 
+### 4D_fix_paths.py
+
+Rewrites the absolute paths that Nerfstudio embeds inside every `config.yml` so they match the current project root.
+
+Nerfstudio serializes paths as `pathlib.PosixPath` objects with the full machine-specific prefix (e.g. `/home/<original_user>/<original_path>/cam2sim/...`). When a trained model is moved to a different machine — for example after unzipping the precomputed `data.zip` bundle from the Quick Start — those absolute paths no longer exist, and `5C_trajectory_replay.py` / `5D_dave2.py` fail to load the splats.
+
+The script:
+
+1. Scans every `config.yml` under `data/data_for_gaussian_splatting/<bag_name>/outputs/splatfacto_split_*/splatfacto/<timestamp>/`.
+2. Finds every `PosixPath` block whose first component is `/` (absolute paths only).
+3. Rewrites the leading components (everything before `data/`) to match the current project root, leaving the suffix (e.g. `data/data_for_gaussian_splatting/<bag>/...`) intact.
+4. Leaves untouched any `PosixPath` that is empty or relative (e.g. `colmap_path`, `images_path`, `relative_log_dir`).
+
+The script is **idempotent**: running it twice does nothing on the second run. Before rewriting, it saves a `<config>.yml.bak` backup of each modified file.
+
+When to run it:
+
+- **Always**, after unzipping the precomputed `data.zip` bundle from the Quick Start.
+- **Always**, if you copy a trained `data/data_for_gaussian_splatting/<bag_name>/outputs/` directory from one machine to another.
+- **Optionally**, if you move your own `cam2sim/` project root to a different path on the same machine.
+
+You do not need to run it after `4B_train_gaussian_splatting.sh` on the same machine, because Nerfstudio will have written paths that already match the current project root.
+
+Default input:
+
+```text
+data/data_for_gaussian_splatting/<bag_name>/outputs/splatfacto_split_*/splatfacto/<timestamp>/config.yml
+```
+
+Output: the same `config.yml` files, rewritten in place. Backups are saved as `config.yml.bak` next to each rewritten file.
+
+CLI arguments:
+
+| Argument | Effect |
+|---|---|
+| (none) | Rewrite every `config.yml` whose absolute paths differ from the current project root |
+| `--dry_run` | Print what would be rewritten without writing |
+| `--project_root <path>` | Override the project root used for the rewrite (default: parent of this script) |
+
+Run, from the project root:
+
+```bash
+python 4_gaussian_splatting_preparation/4D_fix_paths.py
+```
+
+To preview the changes first:
+
+```bash
+python 4_gaussian_splatting_preparation/4D_fix_paths.py --dry_run
+```
+
+After it has rewritten the configs, `5C_trajectory_replay.py` and `5D_dave2.py` can load the trained splats from the current project root without errors.
+
+---
+
 ## Suggested execution order
 
 A typical workflow is:
@@ -3463,6 +3520,10 @@ python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
   --gs_config <path_to_split_N_config.yml> \
   --utm_file  <path_to_frame_positions_split_N.txt> \
   --data_root data/data_for_gaussian_splatting/<bag_name>
+
+# 5. (Only if you moved the project or unzipped a precomputed bundle)
+#    Fix the absolute paths embedded in the Nerfstudio config files.
+python 4_gaussian_splatting_preparation/4D_fix_paths.py
 ```
 
 ---
@@ -3474,6 +3535,7 @@ python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
 | `4A_colmap_guide.md` | COLMAP sparse reconstructions under `colmap/split_<N>/sparse/0/` |
 | `4B_train_gaussian_splatting.sh` | Trained Gaussian Splatting models under `outputs/splatfacto_split_<N>/splatfacto/<timestamp>/` |
 | `4C_utm_yaw_to_nerfstudio.py` | One `utm_to_nerfstudio_transform.json` per split, saved next to each `config.yml` |
+| `4D_fix_paths.py` | Rewritten `config.yml` files with absolute paths matching the current project root, plus a `config.yml.bak` backup next to each |
 
 ---
 
@@ -3490,6 +3552,9 @@ python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
 - One alignment file must be generated for each trained split. If any is missing, step 5 will warn and skip that split.
 - By default, `4C` saves the alignment file next to the model `config.yml`, which is where step 5 expects it. Avoid passing `--output` unless you need to override that location.
 - The `<timestamp>` value changes at every training run, so the path to `config.yml` changes too. There is no way to hardcode it in advance; list the trained folder before running `4C`.
+- `4D_fix_paths.py` is only needed if the trained models were produced on a different machine (e.g. via the precomputed `data.zip` bundle) or if you moved the project root. It is idempotent and safe to re-run.
+- `4D_fix_paths.py` only rewrites **absolute** `PosixPath` blocks in `config.yml`. Relative paths (`colmap_path`, `images_path`, `relative_log_dir`) are left untouched.
+- The `<config>.yml.bak` files created by `4D_fix_paths.py` are not used by any other script. They are kept as safety backups and can be deleted once `5C` / `5D` have been verified to load the models correctly.
 - The trained GS models and alignment files are used by step 5 to render camera observations from simulated poses.
 
 </details>
