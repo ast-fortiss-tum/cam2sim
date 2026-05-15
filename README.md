@@ -927,20 +927,38 @@ For details on each individual script in Step 5 and on the launcher, see the [`5
 
 ## Step 6 — Validate the simulation
 
-This step compares the simulated outputs produced by [Step 5](#step-5--run-the-simulation) against the real-world reference to quantify how faithful the simulation is. Two independent dimensions are evaluated:
+This step compares the simulated outputs of [Step 5](#step-5--run-the-simulation) against the real-world reference to quantify how faithful the simulation is. Step 6 has three independent scripts that answer different questions:
 
-- **6B — semantic fidelity** (rendering quality). Compares the semantic segmentation of real-world camera frames (SegFormer ground truth) against the semantic maps from the CARLA replay. Produces per-frame IoU + aggregated summary.
-- **6C — driving quality** (closed-loop behaviour). Compares trajectories driven autonomously by DAVE-2 in simulation against the real-world reference drives. Produces Min-Frechet distance, corridor violation rate, and steering jitter.
+- **6A** — copies new Step 5D drives into the validation directory (optional helper).
+- **6B** — semantic IoU between the SegFormer ground truth and the CARLA-replay semantic maps. Measures rendering fidelity.
+- **6C** — drive-quality metrics (Min-Frechet, corridor violation, steering jitter) comparing simulated drives to the real-world drives. Measures closed-loop behaviour fidelity.
 
-The two metrics are independent and can be run in any order.
+The scripts are not alternatives to each other — you may run any subset depending on what you want to evaluate. A 6UTIL plotting script is also provided for visual inspection (see further below).
 
-An optional **6A** step copies freshly produced data from Step 5D into the validation directory so the metric scripts can find them in the layout they expect.
+### Input
 
-A **6UTIL** script is also provided to plot all trajectories on an OpenStreetMap basemap for visual inspection.
+Step 6 reads from:
+
+```text
+data/processed_dataset/reference_bag/
+├── maps/map.xodr
+├── semantic_maps/                          # 6B only: SegFormer GT, from Step 2
+└── carla_replay_dataset/semantic/          # 6B only: CARLA replay, from Step 5A
+
+data/data_for_validation/
+├── real_world_trajectories/                # 6C only: ground-truth drives
+│   ├── trajectory<N>.csv
+│   ├── steering_cmd_<N>.txt
+│   └── scenario_segment.json
+└── GS_trajectories/                        # 6C only: simulated drives
+    └── <method>_run<N>_trajectory.json
+```
+
+If any of these are missing, see [Step 2](#step-2--run-the-pre-processing-on-the-extracted-data) (semantic_maps), [Step 5](#step-5--run-the-simulation) (carla_replay_dataset, GS_trajectories), or the **Download the validation data** sub-step below.
 
 ### Download the validation data
 
-Skip computing/collecting validation data yourself. If you only want to reproduce the paper's numbers without producing new drives, download the precomputed validation data instead. From the project root:
+Skip producing validation data yourself. If you only want to reproduce the paper's numbers, download the precomputed data instead. From the project root:
 
 ```
 conda activate data_extraction
@@ -956,101 +974,30 @@ rm data_for_validation.zip
 
 Manual link: __https://drive.google.com/file/d/16iTu0wRpsOU_tOU-lxcPNd9mEVJnlK1C/view?usp=sharing__
 
-After extracting, you should have the following `data/data_for_validation/` structure:
+After extracting, you should have the full `data/data_for_validation/reference_bag/` structure shown above. The three real-world `trajectory<N>.csv` are the cloudy-condition runs used as ground truth in the paper. The three `splatfacto_run<N>_trajectory.json` are the simulated drives that reproduce the paper's numbers; they are included as a baseline so 6C can be run end-to-end even before you produce your own Step 5D drives.
 
-```text
-data/data_for_validation/
-├── real_world_trajectories/
-│   ├── trajectory1.csv
-│   ├── trajectory2.csv
-│   ├── trajectory3.csv
-│   ├── steering_cmd_1.txt
-│   ├── steering_cmd_2.txt
-│   ├── steering_cmd_3.txt
-│   └── scenario_segment.json
-└── GS_trajectories/
-    ├── splatfacto_run1_trajectory.json
-    ├── splatfacto_run2_trajectory.json
-    └── splatfacto_run3_trajectory.json
-```
+For details on each individual script in Step 6, see the [`6_validation`](#6_validation) section further below.
 
-The three real-world `trajectory<N>.csv` are the cloudy-condition runs used as ground truth in the paper. The three `splatfacto_run<N>_trajectory.json` are the simulated drives that reproduce the paper's numbers; they are included as a baseline so Step 6C can be run end-to-end even before you produce your own Step 5D drives.
+### Run Step 6
 
-### Input
+Pick the script that matches what you want to evaluate:
 
-Step 6 reads from:
+| Script | What it runs                                                          | Conda env         |
+|--------|-----------------------------------------------------------------------|-------------------|
+| 6A     | Copy new Step 5D drives into the validation directory (optional)      | `data_extraction` |
+| 6B     | Semantic IoU between SegFormer GT and CARLA replay                    | `data_extraction` |
+| 6C     | Drive-quality metrics (Frechet, corridor, jitter)                     | `data_extraction` |
 
-```text
-data/processed_dataset/reference_bag/
-├── maps/map.xodr
-├── semantic_maps/                          # SegFormer outputs, GT for 6B
-└── carla_replay_dataset/semantic/          # CARLA replay outputs, PRED for 6B
-
-data/data_for_validation/
-├── real_world_trajectories/                # Ground truth drives, used by 6C
-└── GS_trajectories/                        # Simulated drives, used by 6C
-```
-
-### 6A — Copy data for validation (optional)
-
-If you have produced new drives with Step 5D (saved under `data/results/splatfacto_run<N>/`) and want to evaluate them, this helper copies them into the layout 6C expects.
+From the project root:
 
 ```bash
+# 6A — copy new sim drives into data/data_for_validation/GS_trajectories/
 python 6_validation/6A_copy_data_for_validation.py
-```
 
-It scans `data/results/` for directories matching `<method>_run<N>/` that contain a `trajectory.json`, and copies each into `data/data_for_validation/GS_trajectories/<method>_run<N>_trajectory.json`. Existing files in the destination are left untouched (a copy with the same name will overwrite the previous one).
-
-```text
-data/results/                                →  data/data_for_validation/GS_trajectories/
-├── splatfacto_run1/trajectory.json          ├── splatfacto_run1_trajectory.json
-├── splatfacto_run2/trajectory.json          ├── splatfacto_run2_trajectory.json
-└── splatfacto_run<N>/trajectory.json        └── splatfacto_run<N>_trajectory.json
-```
-
-Skip this step if you only want to score the bundled paper baseline.
-
-> Note: 6A currently only copies driving trajectories. Semantic data (Step 6B inputs) is read directly from `data/processed_dataset/reference_bag/` and does not need to be copied.
-
-### 6B — Semantic map comparison
-
-Compares the SegFormer ground-truth semantic maps with the CARLA-replay semantic maps, frame by frame.
-
-```bash
+# 6B — semantic IoU
 python 6_validation/6B_semantic_map_comparision.py
-```
 
-The script:
-
-1. Matches each GT frame in `data/processed_dataset/reference_bag/semantic_maps/` with the corresponding CARLA-replay frame in `data/processed_dataset/reference_bag/carla_replay_dataset/semantic/` (matched by frame index).
-2. Resizes GT to 512x512 (NEAREST) to align with CARLA's render resolution.
-3. Maps both images to class IDs (background / car / road) using a fixed palette with small color tolerance.
-4. Computes per-class IoU and mean IoU.
-5. Saves per-frame results and a 3-panel visualization (`GT | Diff | Pred`).
-6. Aggregates everything into a single summary at the end.
-
-Useful flags:
-
-| Flag | Effect |
-|------|--------|
-| (none) | Process new frames, skip already-done ones, then aggregate. |
-| `--summary_only` | Skip per-frame processing and only aggregate existing `*_iou.json` into `summary.json`. |
-| `--force` | Re-process every frame from scratch, ignoring existing per-frame JSONs. |
-
-**Output** (under `results/semantic/`):
-
-```text
-results/semantic/
-├── <frame>_iou.json        # per-frame: iou_background, iou_car, iou_road, mean_iou
-├── <frame>_vis.png         # per-frame visualization (GT | Diff | Pred)
-└── summary.json            # aggregated mean/std/n per class
-```
-
-### 6C — Driving quality metrics
-
-Computes Min-Frechet distance, corridor violation, mean excess, and steering jitter, comparing simulated drives to real-world reference drives within the common scenario segment.
-
-```bash
+# 6C — drive-quality metrics
 python 6_validation/6C_driving_quality_metrics.py \
     --map_xodr data/processed_dataset/reference_bag/maps/map.xodr \
     --segment data/data_for_validation/real_world_trajectories/scenario_segment.json \
@@ -1058,30 +1005,28 @@ python 6_validation/6C_driving_quality_metrics.py \
     --sim_dirs GS=data/data_for_validation/GS_trajectories
 ```
 
-The script:
+6A is only needed if you want to evaluate freshly produced Step 5D drives saved under `data/results/`. Skip it if you only want to score the bundled baseline.
 
-1. Loads real-world CSVs and converts UTM coordinates to the CARLA frame using the OpenDRIVE projection.
-2. Loads the simulated trajectories (already in CARLA frame).
-3. Filters out simulated runs that completed less than 95% of the scenario segment (failed runs are reported but excluded from averages).
-4. Builds the lateral corridor from the real-world envelope.
-5. Computes Min-Frechet, corridor violation %, mean excess, and steering jitter.
-6. Prints per-run and per-method tables and saves a single results JSON.
+6B and 6C are independent and can be run in any order, with or without 6A.
 
-If your real-world CSVs differ from the paper's (e.g. you replaced them with your own bag), rebuild the scenario segment from them on the fly with `--recompute_segment`. In that case `--segment` is ignored and a fresh `scenario_segment.json` is written to `<rw_dir>/`, overwriting the existing one:
+### Output
 
-```bash
-python 6_validation/6C_driving_quality_metrics.py \
-    --map_xodr data/processed_dataset/reference_bag/maps/map.xodr \
-    --rw_dir  data/data_for_validation/real_world_trajectories \
-    --sim_dirs GS=data/data_for_validation/GS_trajectories \
-    --recompute_segment
-```
-
-**Output**:
+Each script writes to its own folder:
 
 ```text
+# 6A
+data/data_for_validation/GS_trajectories/
+└── <method>_run<N>_trajectory.json     # one per drive copied from data/results/
+
+# 6B
+results/semantic/
+├── <frame>_iou.json                    # per-frame IoU
+├── <frame>_vis.png                     # 3-panel visualization (GT | Diff | Pred)
+└── summary.json                        # aggregated mean/std/n per class
+
+# 6C
 data/data_for_validation/real_world_trajectories/
-└── drive_quality_results.json     # per-run metrics + per-method averages + jitter
+└── drive_quality_results.json          # per-run + per-method averages + jitter
 ```
 
 Running 6C on the bundled validation data reproduces the paper's numbers:
@@ -1095,20 +1040,6 @@ Running 6C on the bundled validation data reproduces the paper's numbers:
 | Sim jitter (max, /s)     |  4.983 |      4.983 |
 | RW  jitter (avg, /s)     |  1.167 |      1.167 |
 | RW  jitter (max, /s)     |  6.452 |      6.452 |
-
-### 6UTIL — Plot trajectories on OSM
-
-Optional utility for visual inspection. Plots all trajectories (real-world + simulated) against the scenario segment on an OpenStreetMap basemap, with one subplot per weather condition. Also prints a LaTeX-formatted table with per-condition completion statistics.
-
-```bash
-python 6_validation/6UTIL_plot_all_trajectories.py \
-    --map_xodr data/processed_dataset/reference_bag/maps/map.xodr \
-    --segment data/data_for_validation/real_world_trajectories/scenario_segment.json \
-    --rw_dir  data/data_for_validation/real_world_trajectories \
-    --sim_dirs splatfacto=data/data_for_validation/GS_trajectories
-```
-
-The plot opens interactively; no files are written.
 
 For details on each individual script in Step 6, see the [`6_validation`](#6_validation) section further below.
 
