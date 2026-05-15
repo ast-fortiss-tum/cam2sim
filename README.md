@@ -929,7 +929,7 @@ For details on each individual script in Step 5 and on the launcher, see the [`5
 
 This step compares the simulated outputs of [Step 5](#step-5--run-the-simulation) against the real-world reference to quantify how faithful the simulation is. Step 6 has three independent scripts that answer different questions:
 
-- **6A** — copies new Step 5D drives into the validation directory (optional helper).
+- **6A** — collects new Step 5D drives and semantic maps into the validation directory (optional helper).
 - **6B** — semantic IoU between the SegFormer ground truth and the CARLA-replay semantic maps. Measures rendering fidelity.
 - **6C** — drive-quality metrics (Min-Frechet, corridor violation, steering jitter) comparing simulated drives to the real-world drives. Measures closed-loop behaviour fidelity.
 
@@ -937,22 +937,26 @@ The scripts are not alternatives to each other — you may run any subset depend
 
 ### Input
 
-Step 6 reads from:
+The metric scripts (`6B`, `6C`) read everything from a single self-contained directory:
 
 ```text
-data/processed_dataset/reference_bag/
-├── maps/map.xodr
-├── semantic_maps/                          # 6B only: SegFormer GT, from Step 2
-└── carla_replay_dataset/semantic/          # 6B only: CARLA replay, from Step 5A
-
 data/data_for_validation/
 ├── real_world_trajectories/                # 6C only: ground-truth drives
 │   ├── trajectory<N>.csv
 │   ├── steering_cmd_<N>.txt
 │   └── scenario_segment.json
-└── GS_trajectories/                        # 6C only: simulated drives
-    └── <method>_run<N>_trajectory.json
+├── GS_trajectories/                        # 6C only: simulated drives
+│   └── <method>_run<N>_trajectory.json
+├── semantic/                               # 6B only: SegFormer GT
+│   └── <frame>.png
+└── semantic_carla/                         # 6B only: CARLA replay
+    └── <frame_id:06d>.png
+
+data/processed_dataset/reference_bag/
+└── maps/map.xodr                           # 6C only: OpenDRIVE map
 ```
+
+`6A` populates `data/data_for_validation/` from the original sources produced by Step 2 (SegFormer GT) and Step 5 (CARLA replay semantic, simulated drives). If you only want to reproduce the paper's numbers, you can skip `6A` and download the precomputed bundle instead (see below).
 
 If any of these are missing, see [Step 2](#step-2--run-the-pre-processing-on-the-extracted-data) (semantic_maps), [Step 5](#step-5--run-the-simulation) (carla_replay_dataset, GS_trajectories), or the **Download the validation data** sub-step below.
 
@@ -974,7 +978,7 @@ rm data_for_validation.zip
 
 Manual link: __https://drive.google.com/file/d/16iTu0wRpsOU_tOU-lxcPNd9mEVJnlK1C/view?usp=sharing__
 
-After extracting, you should have the full `data/data_for_validation/reference_bag/` structure shown above. The three real-world `trajectory<N>.csv` are the cloudy-condition runs used as ground truth in the paper. The three `splatfacto_run<N>_trajectory.json` are the simulated drives that reproduce the paper's numbers; they are included as a baseline so 6C can be run end-to-end even before you produce your own Step 5D drives.
+After extracting, you should have the full `data/data_for_validation/` structure shown above. The three real-world `trajectory<N>.csv` are the cloudy-condition runs used as ground truth in the paper. The three `splatfacto_run<N>_trajectory.json` are the simulated drives that reproduce the paper's numbers; they are included as a baseline so `6C` can be run end-to-end even before you produce your own Step 5D drives. The `semantic/` and `semantic_carla/` folders contain the SegFormer GT and CARLA replay semantic maps used by `6B`.
 
 For details on each individual script in Step 6, see the [`6_validation`](#6_validation) section further below.
 
@@ -982,16 +986,16 @@ For details on each individual script in Step 6, see the [`6_validation`](#6_val
 
 Pick the script that matches what you want to evaluate:
 
-| Script | What it runs                                                          | Conda env         |
-|--------|-----------------------------------------------------------------------|-------------------|
-| 6A     | Copy new Step 5D drives into the validation directory (optional)      | `data_extraction` |
-| 6B     | Semantic IoU between SegFormer GT and CARLA replay                    | `data_extraction` |
-| 6C     | Drive-quality metrics (Frechet, corridor, jitter)                     | `data_extraction` |
+| Script | What it runs                                                                          | Conda env         |
+|--------|---------------------------------------------------------------------------------------|-------------------|
+| 6A     | Collect new Step 5D drives + semantic maps into `data/data_for_validation/` (optional)| `data_extraction` |
+| 6B     | Semantic IoU between SegFormer GT and CARLA replay                                    | `data_extraction` |
+| 6C     | Drive-quality metrics (Frechet, corridor, jitter)                                     | `data_extraction` |
 
 From the project root:
 
 ```bash
-# 6A — copy new sim drives into data/data_for_validation/GS_trajectories/
+# 6A — collect sim drives + semantic maps into data/data_for_validation/
 python 6_validation/6A_copy_data_for_validation.py
 
 # 6B — semantic IoU
@@ -1005,9 +1009,9 @@ python 6_validation/6C_driving_quality_metrics.py \
     --sim_dirs GS=data/data_for_validation/GS_trajectories
 ```
 
-6A is only needed if you want to evaluate freshly produced Step 5D drives saved under `data/results/`. Skip it if you only want to score the bundled baseline.
+`6A` is only needed if you have produced new data in earlier steps (Step 5D drives under `data/results/`, or new semantic outputs under `data/processed_dataset/`) and want to feed it to the metric scripts. Skip it if you only want to score the bundled baseline.
 
-6B and 6C are independent and can be run in any order, with or without 6A.
+`6B` and `6C` are independent and can be run in any order, with or without `6A`.
 
 ### Output
 
@@ -1015,8 +1019,10 @@ Each script writes to its own folder:
 
 ```text
 # 6A
-data/data_for_validation/GS_trajectories/
-└── <method>_run<N>_trajectory.json     # one per drive copied from data/results/
+data/data_for_validation/
+├── GS_trajectories/<method>_run<N>_trajectory.json   # from data/results/
+├── semantic/<frame>.png                              # from processed_dataset/<bag>/semantic_maps/
+└── semantic_carla/<frame_id:06d>.png                 # from processed_dataset/<bag>/carla_replay_dataset/semantic/
 
 # 6B
 results/semantic/
@@ -1044,7 +1050,6 @@ Running 6C on the bundled validation data reproduces the paper's numbers:
 For details on each individual script in Step 6, see the [`6_validation`](#6_validation) section further below.
 
 ---
-
 # Detailed description and usage of each script
 
 <details>
