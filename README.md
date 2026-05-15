@@ -208,11 +208,7 @@ Run the fix script once, from the project root, to rewrite the absolute paths in
 python 4_gaussian_splatting_preparation/4D_fix_paths.py
 ```
 
-The script is idempotent (re-running it does nothing if the paths are already correct) and saves a `<config>.yml.bak` backup of each file before rewriting. Run it with `--dry_run` first if you want to preview the changes:
 
-```bash
-python 4_gaussian_splatting_preparation/4D_fix_paths.py --dry_run
-```
 
 ## Run it
 
