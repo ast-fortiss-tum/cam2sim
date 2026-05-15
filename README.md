@@ -987,9 +987,9 @@ data/data_for_carla/reference_bag/replay_results/reference_bag_replay/
 └── combined/
 
 # 5D
-data/data_for_carla/reference_bag/drive_results/reference_bag_drive_<timestamp>/
-├── rgb_gt/
-├── generated_gs/
+data/results/splatfacto_run<N>/
+├── rgb_gt/             (CARLA ground-truth frames, currently disabled)
+├── generated_gs/       (GS rendered frames, currently disabled)
 └── trajectory.json
 ```
 
@@ -3700,8 +3700,13 @@ project_root/
 │   │   └── <bag_name>/
 │   │       ├── camera.json
 │   │       ├── trajectory_positions_rear_odom_yaw.json
-│   │       ├── vehicle_data.json
-│   │       └── drive_results/      (created by 5D)
+│   │       └── vehicle_data.json
+│   │
+│   ├── results/
+│   │   └── splatfacto_run<N>/      (created by 5D)
+│   │       ├── rgb_gt/
+│   │       ├── generated_gs/
+│   │       └── trajectory.json
 │   │
 │   ├── data_for_gaussian_splatting/
 │   │   └── <bag_name>/
@@ -4041,9 +4046,9 @@ Default input: same as `5C`, plus a running DAVE-2 server.
 Output:
 
 ```text
-data/data_for_carla/<bag_name>/drive_results/<bag_name>_drive_<timestamp>/
-├── rgb_gt/
-├── generated_gs/
+data/results/splatfacto_run<N>/
+├── rgb_gt/             (CARLA ground-truth frames, currently disabled)
+├── generated_gs/       (GS rendered frames, currently disabled)
 └── trajectory.json
 ```
 
@@ -4073,6 +4078,8 @@ Useful CLI arguments:
 | `--max_frames N` | Stop after `N` frames |
 | `--no_save` | Disable frame saving |
 | `--only_carla` | Fall back to raw CARLA images (equivalent to `5B`) |
+| `--output_dir <path>` | Custom output directory for this run (overrides auto-increment) |
+| `--run_id N` | Force a specific run number, e.g. `--run_id 5` → `data/results/splatfacto_run5` |
 
 This script is the **main experiment** of the pipeline: it answers whether a self-driving model trained on real images can drive in a CARLA scenario when the input is reconstructed from the same real images via Gaussian Splatting.
 
@@ -4116,7 +4123,7 @@ If a previous run left the world in a strange state (vehicles destroyed, sensors
 | `5A_trajectory_only_carla.py` | `data/processed_dataset/<bag_name>/carla_replay_dataset/{rgb,semantic,instance}/`, `data/all_frame_data.json` |
 | `5B_dave2_only_carla.py` | `data/processed_dataset/<bag_name>/dave2_runs/only_carla_run<RUN_NUMBER>/{rgb,semantic,instance,depth}/`, `data/trajectory.json` |
 | `5C_trajectory_replay.py` | `data/data_for_carla/<bag_name>/replay_results/<bag_name>_replay/{carla,gs,combined}/` |
-| `5D_dave2.py` | `data/data_for_carla/<bag_name>/drive_results/<bag_name>_drive_<timestamp>/{rgb_gt,generated_gs}/`, `trajectory.json` |
+| `5D_dave2.py` | `data/results/splatfacto_run<N>/{rgb_gt,generated_gs}/`, `data/results/splatfacto_run<N>/trajectory.json` |
 
 ---
 
