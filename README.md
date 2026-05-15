@@ -1134,19 +1134,19 @@ For details on each individual script in Step 6, see the [`6_validation`](#6_val
 
 ## Example ROS bag (optional)
 
-To run this pipeline without recording your own data, an example ROS bag(~6 GB) is provided on Google Drive. It corresponds to the dataset referenced as `reference_bag` throughout the pipeline.
+To run this pipeline without recording your own data, an example ROS bag (~6 GB) is provided on Google Drive. It corresponds to the dataset referenced as `reference_bag` throughout the pipeline.
 
 Make sure the `data_extraction` environment is active, then run:
 
 ```bash
 conda activate data_extraction
 
-gdown 1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9 -O data/raw_ros_data/reference_bag.bag
+gdown 1ijhejhNO19jvrb3BUkEKRlxw-SkfZRhu -O data/raw_ros_data/reference_bag.bag
 ```
 
 Alternatively, download the file manually from this link and place it in `data/raw_ros_data/`:
 
-- Example bag: <https://drive.google.com/file/d/1ka4dqG83aprB6FWjd0W0mWxyPZHsRfj9/view?usp=sharing>
+- Example bag: <https://drive.google.com/file/d/1ijhejhNO19jvrb3BUkEKRlxw-SkfZRhu/view?usp=sharing>
 
 After downloading, the folder should look like:
 
