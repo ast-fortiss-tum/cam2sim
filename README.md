@@ -940,11 +940,23 @@ A **6UTIL** script is also provided to plot all trajectories on an OpenStreetMap
 
 ### Download the validation data
 
-The real-world references and the simulated baselines used in the paper are bundled as a single archive on Google Drive:
+Skip computing/collecting validation data yourself. If you only want to reproduce the paper's numbers without producing new drives, download the precomputed validation data instead. From the project root:
 
-[`data_for_validation.zip`](https://drive.google.com/file/d/16iTu0wRpsOU_tOU-lxcPNd9mEVJnlK1C/view?usp=sharing)
+```
+conda activate data_extraction
+pip install -U gdown   # only if not already installed
 
-Download it and unpack into `data/` at the project root, so the resulting layout is:
+# remove any existing data_for_validation/ folder to avoid mixing
+rm -rf data/data_for_validation
+
+gdown 16iTu0wRpsOU_tOU-lxcPNd9mEVJnlK1C -O data_for_validation.zip
+unzip -o data_for_validation.zip -d data/
+rm data_for_validation.zip
+```
+
+Manual link: __https://drive.google.com/file/d/16iTu0wRpsOU_tOU-lxcPNd9mEVJnlK1C/view?usp=sharing__
+
+After extracting, you should have the following `data/data_for_validation/` structure:
 
 ```text
 data/data_for_validation/
