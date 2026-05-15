@@ -3956,7 +3956,7 @@ This folder contains the sixth step of the data-processing pipeline.
 
 The scripts in this folder compare the outputs of the simulation step against ground-truth produced from the real recording, and quantify how close the simulated views and the simulated drives are to the real ones. Each script is **independent** and corresponds to a different evaluation:
 
-- Copy newly produced Step 5D drives into the validation directory
+- Collect everything Step 6 needs into a single self-contained `data/data_for_validation/` directory
 - Compare semantic segmentation maps (real vs CARLA replay)
 - Compute driving-quality metrics (Min-Frechet distance, corridor violation, steering jitter)
 - Plot all trajectories on an OpenStreetMap basemap (utility)
@@ -3983,7 +3983,7 @@ The goal of this step is to evaluate the simulation against the real recording w
 
 The scripts can produce:
 
-- A flat copy of new Step 5D simulated drives, ready for the metric scripts
+- A self-contained `data/data_for_validation/` directory with all the inputs needed by `6B` and `6C` (simulated drive trajectories, semantic GT, semantic CARLA replays)
 - Per-frame IoU (Background, Car, Road) and mean IoU between real and simulated semantic maps, plus per-frame visual diagnostics and an aggregated summary
 - Per-run and per-method driving-quality metrics (Min-Frechet, corridor violation, mean excess, steering jitter)
 - A multi-panel plot of every real-world and simulated trajectory on top of OpenStreetMap, plus a LaTeX-formatted table with completion statistics
@@ -4005,22 +4005,28 @@ project_root/
 │   │   └── splatfacto_run<N>/             (Step 5D output; input for 6A)
 │   │       └── trajectory.json
 │   │
-│   ├── data_for_validation/
+│   ├── data_for_validation/               (populated by 6A; consumed by 6B and 6C)
 │   │   ├── real_world_trajectories/       (input for 6C; ground-truth drives)
 │   │   │   ├── trajectory<N>.csv
 │   │   │   ├── steering_cmd_<N>.txt
 │   │   │   ├── scenario_segment.json
 │   │   │   └── drive_quality_results.json (output of 6C)
 │   │   │
-│   │   └── GS_trajectories/               (input for 6C; output of 6A)
-│   │       └── <method>_run<N>_trajectory.json
+│   │   ├── GS_trajectories/               (input for 6C; populated by 6A)
+│   │   │   └── <method>_run<N>_trajectory.json
+│   │   │
+│   │   ├── semantic/                      (input for 6B; populated by 6A; SegFormer GT)
+│   │   │   └── <frame>.png
+│   │   │
+│   │   └── semantic_carla/                (input for 6B; populated by 6A; CARLA replay)
+│   │       └── <frame_id:06d>.png
 │   │
 │   └── processed_dataset/
 │       └── <bag_name>/
 │           ├── maps/map.xodr              (input for 6C)
-│           ├── semantic_maps/             (input for 6B; GT from SegFormer, Step 2)
+│           ├── semantic_maps/             (source for 6A; SegFormer GT, from Step 2)
 │           └── carla_replay_dataset/
-│               └── semantic/              (input for 6B; from Step 5A)
+│               └── semantic/              (source for 6A; from Step 5A)
 │
 └── results/
     └── semantic/                          (output of 6B)
@@ -4051,27 +4057,27 @@ pip install contextily
 
 ## Inputs from previous steps
 
-Before running the scripts in this folder, the input directories must already exist for the same `<bag_name>`.
-
-1. **Real-world ground-truth drives** (used by 6C):
+The metric scripts (`6B`, `6C`) read all their inputs from a single self-contained directory:
 
 ```text
-data/data_for_validation/real_world_trajectories/
-├── trajectory<N>.csv              (UTM x,y,z + yaw; header: timestamp,x,y,z,yaw)
-├── steering_cmd_<N>.txt           (DAVE-2 commands; header: # timestamp value)
-└── scenario_segment.json          (common comparison segment)
+data/data_for_validation/
+├── real_world_trajectories/   (for 6C)
+├── GS_trajectories/           (for 6C)
+├── semantic/                  (for 6B; SegFormer GT)
+└── semantic_carla/            (for 6B; CARLA replay)
 ```
 
-   These can either be downloaded as a precomputed bundle (see the Step 6 README section, "Download the validation data") or produced by your own data pipeline.
+`6A_copy_data_for_validation.py` populates this directory from the actual sources produced by Step 2 (SegFormer GT) and Step 5 (CARLA replay semantic, simulated drives). Alternatively, you can download the precomputed bundle directly (see the Step 6 README section, "Download the validation data").
 
-2. **Simulated drives** (used by 6C), produced either by 6A from new Step 5D runs or shipped with the precomputed bundle:
+The original sources, used by `6A` as input, are:
+
+1. **Simulated drives** produced by Step 5D:
 
 ```text
-data/data_for_validation/GS_trajectories/
-└── <method>_run<N>_trajectory.json
+data/results/<method>_run<N>/trajectory.json
 ```
 
-3. **Real semantic maps** (used by 6B), produced upstream by SegFormer on the recorded RGB frames:
+2. **Real semantic maps** produced upstream by SegFormer on the recorded RGB frames (Step 2):
 
 ```text
 data/processed_dataset/<bag_name>/semantic_maps/
@@ -4083,7 +4089,7 @@ data/processed_dataset/<bag_name>/semantic_maps/
    - Car:        `(0, 0, 142)`
    - Road:       `(128, 64, 128)`
 
-4. **Simulated semantic maps** (used by 6B), produced by Step 5A:
+3. **Simulated semantic maps** produced by Step 5A:
 
 ```text
 data/processed_dataset/<bag_name>/carla_replay_dataset/semantic/
@@ -4091,7 +4097,7 @@ data/processed_dataset/<bag_name>/carla_replay_dataset/semantic/
 
    These are 512x512 and named `{frame_id:06d}.png`.
 
-5. **OpenDRIVE map** (used by 6C and 6UTIL):
+4. **OpenDRIVE map** (used by 6C and 6UTIL):
 
 ```text
 data/processed_dataset/<bag_name>/maps/map.xodr
@@ -4103,13 +4109,15 @@ If any of these are missing, see the corresponding earlier step, or download the
 
 ## Configuration
 
-Two scripts (`6A`, `6B`) have a configuration section near the top with all paths hardcoded relative to the project root. The most important value is the bag name:
+`6A_copy_data_for_validation.py` has a configuration section near the top with all paths hardcoded relative to the project root. The most important value is the bag name, which controls which `processed_dataset/<bag>/` is read for the semantic GT and the CARLA replay:
 
 ```python
 BAG_NAME = "reference_bag"
 ```
 
-This must match the dataset folder used by the previous steps. For `6B`, the fixed color-to-class mapping and the resize target are also defined at the top of the file:
+This must match the dataset folder used by the previous steps. All source and destination paths in `6A` can also be overridden via CLI arguments (see the `6A` section below).
+
+`6B_semantic_map_comparision.py` reads everything from `data/data_for_validation/` and has no `BAG_NAME`. The only configuration values it exposes are the resize target, the number of classes, the color tolerance, and the fixed palette:
 
 ```python
 TARGET_SIZE = (512, 512)
@@ -4131,45 +4139,55 @@ COLOR_TO_CLASS = {
 
 ### 6A_copy_data_for_validation.py
 
-Copies newly produced Step 5D drives from `data/results/` into `data/data_for_validation/GS_trajectories/` with the flat naming expected by `6C`.
+Collects everything Step 6 needs into `data/data_for_validation/` so that `6B` and `6C` can read all their inputs from a single, self-contained directory.
 
-The script does **not** compute any metric and does **not** modify any source file: it only copies `trajectory.json` files and renames them.
+The script does **not** compute any metric and does **not** modify any source file: it only copies files (and renames the trajectory JSONs).
 
-Source layout (produced by `5D_dave2.py`):
+What this script copies:
+
+1. **Simulated drive trajectories** produced by Step 5D:
 
 ```text
-data/results/
-├── splatfacto_run1/trajectory.json
-├── splatfacto_run2/trajectory.json
-└── splatfacto_run<N>/trajectory.json
+data/results/<method>_run<N>/trajectory.json
+    ->  data/data_for_validation/GS_trajectories/<method>_run<N>_trajectory.json
 ```
 
-Destination layout (read by `6C_driving_quality_metrics.py`):
+2. **Real-world semantic maps** (SegFormer GT) produced by Step 2A:
 
 ```text
-data/data_for_validation/GS_trajectories/
-├── splatfacto_run1_trajectory.json
-├── splatfacto_run2_trajectory.json
-└── splatfacto_run<N>_trajectory.json
+data/processed_dataset/<BAG>/semantic_maps/*.png
+    ->  data/data_for_validation/semantic/*.png
+```
+
+3. **Simulated semantic maps** (CARLA replay PRED) produced by Step 5A:
+
+```text
+data/processed_dataset/<BAG>/carla_replay_dataset/semantic/*.png
+    ->  data/data_for_validation/semantic_carla/*.png
 ```
 
 Behavior:
 
-- Source: any subdirectory of `data/results/` matching `<method>_run<N>/` that contains a `trajectory.json`.
-- Destination filename: `<source_folder_name>_trajectory.json`.
-- Existing files in the destination directory are left untouched. A copy with the same name will overwrite the previous file.
-- The script validates each `trajectory.json` before copying (must be a non-empty list of dicts with `x`/`y` fields). Invalid files are reported and skipped.
+- Existing files in the destination directories are **left untouched**. A copy with the same name will overwrite the previous file.
+- Trajectory JSONs are validated before copying (must be a non-empty JSON list of dicts with `x`/`y` fields). Invalid files are reported and skipped.
+- PNGs are copied flat, preserving the source filename.
+- Pass `--dry_run` to see what would happen without writing.
+- Each of the three sub-copies can be disabled individually with `--skip_trajectories`, `--skip_semantic_gt`, `--skip_semantic_carla`.
 
 Default input:
 
 ```text
 data/results/<method>_run<N>/trajectory.json
+data/processed_dataset/<BAG>/semantic_maps/*.png
+data/processed_dataset/<BAG>/carla_replay_dataset/semantic/*.png
 ```
 
 Output:
 
 ```text
 data/data_for_validation/GS_trajectories/<method>_run<N>_trajectory.json
+data/data_for_validation/semantic/*.png
+data/data_for_validation/semantic_carla/*.png
 ```
 
 Run:
@@ -4183,22 +4201,29 @@ Useful CLI arguments:
 
 | Argument | Effect |
 |---|---|
-| `--src <path>` | Override the source directory (default: `data/results/`) |
-| `--dst <path>` | Override the destination directory (default: `data/data_for_validation/GS_trajectories/`) |
-| `--dry_run` | Print what would be copied without writing anything |
+| `--traj_src <path>` | Override the trajectories source dir (default: `data/results/`) |
+| `--traj_dst <path>` | Override the trajectories destination (default: `data/data_for_validation/GS_trajectories/`) |
+| `--sem_gt_src <path>` | Override the GT semantic source (default: `data/processed_dataset/<BAG>/semantic_maps/`) |
+| `--sem_gt_dst <path>` | Override the GT semantic destination (default: `data/data_for_validation/semantic/`) |
+| `--sem_carla_src <path>` | Override the CARLA semantic source (default: `data/processed_dataset/<BAG>/carla_replay_dataset/semantic/`) |
+| `--sem_carla_dst <path>` | Override the CARLA semantic destination (default: `data/data_for_validation/semantic_carla/`) |
+| `--skip_trajectories` | Do not copy drive trajectories |
+| `--skip_semantic_gt` | Do not copy SegFormer GT semantic maps |
+| `--skip_semantic_carla` | Do not copy CARLA replay semantic maps |
+| `--dry_run` | Print what would be copied without writing |
 
-This script is only needed if you want to evaluate freshly produced drives. Skip it if you only want to score the bundled paper baseline (which is already in the destination layout after the unzip).
+Skip this script if `data/data_for_validation/` is already populated (e.g. you downloaded the precomputed bundle and don't have new Step 5D drives or fresh semantic outputs to add).
 
 ---
 
 ### 6B_semantic_map_comparision.py
 
-Compares the real semantic maps against the simulated semantic maps frame by frame and computes per-class IoU.
+Compares the real semantic maps against the simulated semantic maps frame by frame and computes per-class IoU. Inputs are read from `data/data_for_validation/semantic/` (GT) and `data/data_for_validation/semantic_carla/` (PRED), which are populated by `6A`.
 
 What the script does:
 
-1. Lists every PNG in `semantic_maps/` (the ground truth).
-2. For each GT file, extracts the integer frame id from the filename (the script strips optional `seg_` or `frame_` prefixes), then looks for the matching `{frame_id:06d}.png` in `carla_replay_dataset/semantic/`.
+1. Lists every PNG in `data/data_for_validation/semantic/` (the ground truth).
+2. For each GT file, extracts the integer frame id from the filename (the script strips optional `seg_` or `frame_` prefixes), then looks for the matching `{frame_id:06d}.png` in `data/data_for_validation/semantic_carla/`.
 3. Resizes the GT to 512x512 with NEAREST interpolation so the two grids match. Aspect ratio is intentionally not preserved.
 4. Maps both RGB images to class IDs via the fixed `COLOR_TO_CLASS` lookup with a tolerance of `COLOR_TOLERANCE` to absorb resize and compression artifacts.
 5. Computes the 3x3 confusion matrix and per-class IoU (Background, Car, Road), plus the mean IoU over the classes that actually appear in the GT.
@@ -4208,8 +4233,8 @@ What the script does:
 Default input:
 
 ```text
-data/processed_dataset/<bag_name>/semantic_maps/
-data/processed_dataset/<bag_name>/carla_replay_dataset/semantic/
+data/data_for_validation/semantic/
+data/data_for_validation/semantic_carla/
 ```
 
 Output:
@@ -4227,6 +4252,8 @@ Run:
 conda activate data_extraction
 python 6_validation/6B_semantic_map_comparision.py
 ```
+
+If either input directory is missing, the script exits with an error and reminds you to run `6A_copy_data_for_validation.py` first.
 
 Useful CLI arguments:
 
@@ -4373,8 +4400,9 @@ A typical workflow that produces new drives in Step 5D and then evaluates them i
 
 conda activate data_extraction
 
-# 1. Copy fresh sim drives from data/results/ into the validation layout
-#    (skip if you only want to score the bundled paper baseline)
+# 1. Collect fresh data into data/data_for_validation/
+#    (copies sim drives, semantic GT, and CARLA replay semantic in one shot)
+#    Skip if data/data_for_validation/ is already populated with what you need.
 python 6_validation/6A_copy_data_for_validation.py
 
 # 2. Compute driving-quality metrics
@@ -4385,7 +4413,7 @@ python 6_validation/6C_driving_quality_metrics.py \
     --sim_dirs GS=data/data_for_validation/GS_trajectories
 
 # 3. Compute semantic IoU
-#    (requires 5A to have already produced carla_replay_dataset/semantic/)
+#    (requires data/data_for_validation/semantic/ and semantic_carla/ to be populated)
 python 6_validation/6B_semantic_map_comparision.py
 
 # 4. (Optional) Visual inspection on OSM
@@ -4402,7 +4430,7 @@ python 6_validation/6UTIL_plot_all_trajectories.py \
 
 | Script | Main output |
 |---|---|
-| `6A_copy_data_for_validation.py` | `data/data_for_validation/GS_trajectories/<method>_run<N>_trajectory.json` |
+| `6A_copy_data_for_validation.py` | `data/data_for_validation/GS_trajectories/<method>_run<N>_trajectory.json`, `data/data_for_validation/semantic/*.png`, `data/data_for_validation/semantic_carla/*.png` |
 | `6B_semantic_map_comparision.py` | `results/semantic/<frame>_iou.json`, `results/semantic/<frame>_vis.png`, `results/semantic/summary.json` |
 | `6C_driving_quality_metrics.py` | `data/data_for_validation/real_world_trajectories/drive_quality_results.json` |
 | `6UTIL_plot_all_trajectories.py` | (no files; interactive matplotlib window + LaTeX on stdout) |
@@ -4413,7 +4441,8 @@ python 6_validation/6UTIL_plot_all_trajectories.py \
 
 - All four scripts are **independent**. They are not alternatives to each other and you can run any subset.
 - All four scripts run inside the `data_extraction` Conda environment and do not need CARLA, Nerfstudio, or the DAVE-2 server to be running.
-- `6A` does not delete anything from the destination directory. Files already there are left untouched, but a copy with the same name as an existing file will overwrite it. Use `--dry_run` to preview without writing.
+- `6A` does not delete anything from the destination directories. Files already there are left untouched, but a copy with the same name as an existing file will overwrite it. Use `--dry_run` to preview without writing, and `--skip_trajectories` / `--skip_semantic_gt` / `--skip_semantic_carla` to disable individual sub-copies.
+- `6B` reads its inputs from `data/data_for_validation/semantic/` and `data/data_for_validation/semantic_carla/`, not from `processed_dataset/`. If those directories are missing, run `6A` first or download the precomputed bundle.
 - `6B` is resumable: any frame that already has a `<frame>_iou.json` is skipped on subsequent runs. Use `--force` to recompute from scratch, or `--summary_only` to only re-aggregate the existing JSONs into `summary.json`.
 - `6B` resizes the GT to 512x512 with NEAREST interpolation. If the real semantic maps were generated at a different aspect ratio, this resize intentionally distorts them so that the GT and the simulated maps share the same pixel grid.
 - The color tolerance of 15 used by `6B` absorbs small RGB differences introduced by image saving and resizing. If the GT and the simulated maps use different palettes, edit `COLOR_TO_CLASS` and `COLOR_TOLERANCE` at the top of the script accordingly.
