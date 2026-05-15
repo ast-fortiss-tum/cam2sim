@@ -198,6 +198,22 @@ cam2sim/
 │           └── utm_to_nerfstudio_transform.json
 ```
 
+### Fix the absolute paths in the Gaussian Splatting configs
+
+Nerfstudio saves every `config.yml` with **absolute paths** that include the username and project root of the machine where the model was trained. After unzipping `data.zip` on a different machine, those paths no longer exist and `5C` would fail to load the splats.
+
+Run the fix script once, from the project root, to rewrite the absolute paths inside every `config.yml` so they match the current project root:
+
+```bash
+python 4_gaussian_splatting_preparation/4D_fix_paths.py
+```
+
+The script is idempotent (re-running it does nothing if the paths are already correct) and saves a `<config>.yml.bak` backup of each file before rewriting. Run it with `--dry_run` first if you want to preview the changes:
+
+```bash
+python 4_gaussian_splatting_preparation/4D_fix_paths.py --dry_run
+```
+
 ## Run it
 
 From the project root:
