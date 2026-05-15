@@ -1040,6 +1040,12 @@ Pick the script that matches what you want to evaluate:
 | 6B     | Semantic IoU between SegFormer GT and CARLA replay                                    | `data_extraction` |
 | 6C     | Drive-quality metrics (Frechet, corridor, jitter)                                     | `data_extraction` |
 
+All three scripts run in the `data_extraction` environment. Activate it before running any of them:
+
+```bash
+conda activate data_extraction
+```
+
 From the project root:
 
 ```bash
