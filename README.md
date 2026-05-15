@@ -593,7 +593,8 @@ bash 2_process_datasets/step2.sh
 2. `2B_lidar_parked_cars_detection.py` — detects parked cars from LiDAR point clouds using PointPillars
 3. `2C_create_map_from_coordinates_auto.py` — downloads OSM data and prepares the road map for the recorded area
 4. `2E_prepare_dataset_for_gaussian_splatting.py` — crops images, generates sky masks, and creates overlapping image splits for Gaussian Splatting
-5. `2G_OPT_fix_sidewalk.sh` — optional sidewalk fix on the generated map
+5. `2F_extract_semantic_maps.py` — runs SegFormer on the recorded RGB frames and writes simplified 3-class semantic maps (road, car, background) used by Step 6B for semantic IoU evaluation
+6. `2G_OPT_fix_sidewalk.sh` — optional sidewalk fix on the generated map
 
 #### Optional: refinement mode for LiDAR detections
 
@@ -620,9 +621,11 @@ data/processed_dataset/reference_bag/
 │   ├── unified_clusters.txt
 │   ├── lidar_bboxes.txt
 │   └── screenshots/
-└── maps/
-    ├── map.osm
-    └── vehicle_data.json   (placeholder, filled in by Step 3)
+├── maps/
+│   ├── map.osm
+│   └── vehicle_data.json   (placeholder, filled in by Step 3)
+└── semantic_maps/                   (SegFormer GT, 3-class: road, car, background)
+    └── frame_XXXXXX.png
 
 data/data_for_gaussian_splatting/reference_bag/
 ├── _tmp_images_gs_1_of_<FRAME_SKIP>/
@@ -1728,7 +1731,7 @@ project_root/
 │   ├── 2D_manual_refinment_parked_cars_camera.py
 │   ├── 2D_manual_refinment_parked_cars_lidar.py
 │   ├── 2E_prepare_dataset_for_gaussian_splatting.py
-│   ├── 2F_TODO_extract_semantic_maps.py
+│   ├── 2F_extract_semantic_maps.py
 │   └── utils/
 │       ├── fcos3d_config.py
 │       ├── fcos3d.pth
@@ -2207,15 +2210,54 @@ The first run may download SegFormer weights from the Hugging Face Hub and cache
 
 ---
 
-### 2F_TODO_extract_semantic_maps.py
+### 2F_extract_semantic_maps.py
 
-Placeholder script for semantic-map extraction.
+Generates simplified semantic segmentation maps from the recorded RGB images using a pretrained SegFormer model. The output maps are used by Step 6B (`6B_semantic_map_comparision.py`) as ground truth for semantic IoU evaluation against CARLA-replay semantic maps.
 
-This script is marked `TODO` and is not part of the current standard pipeline.
+The script keeps only three classes (road, car, background) and writes one PNG per input image with the corresponding Cityscapes palette colors. All other Cityscapes classes are collapsed into background.
 
-Do not run this script unless it has been implemented.
+Default input:
 
----
+```text
+data/raw_dataset/<bag_name>/images/*.png
+```
+
+Output:
+
+```text
+data/processed_dataset/<bag_name>/semantic_maps/
+└── frame_XXXXXX.png   (same filename as input, RGB palette)
+```
+
+Output palette (RGB tuples):
+
+| Class | Cityscapes class ID | RGB color |
+|---|---:|---|
+| Background | (everything else, including sky, sidewalk, building, ...) | `(0, 0, 0)` |
+| Road | 0 | `(128, 64, 128)` |
+| Car | 13 | `(0, 0, 142)` |
+
+Configuration (top of the script):
+
+```python
+DATASET_NAME = "reference_bag"
+SEGFORMER_MODEL = "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+```
+
+The first run downloads the SegFormer weights from the Hugging Face Hub (~330 MB) and caches them locally. Subsequent runs reuse the cached weights without re-downloading.
+
+The script is **resumable**: if `data/processed_dataset/<bag>/semantic_maps/<frame>.png` already exists, that frame is skipped. To force a full regeneration, delete the output folder before running.
+
+GPU is used automatically if available. CPU is supported but significantly slower (the script processes every image in `data/raw_dataset/<bag>/images/`, not a subsample).
+
+Run:
+
+```bash
+python 2_process_datasets/2F_extract_semantic_maps.py
+```
+
+This script must be run before Step 6B if you want to evaluate semantic IoU. If you only need parked-car detections and the OSM map, you can skip it.
 
 ## Suggested execution order
 
@@ -2240,6 +2282,9 @@ python 2_process_datasets/2D_manual_refinment_parked_cars_lidar.py
 
 # Gaussian Splatting input preparation
 python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py
+
+# Semantic maps for Step 6 IoU evaluation (optional unless running 6B)
+python 2_process_datasets/2F_extract_semantic_maps.py
 ```
 
 If you only need camera-based detections, you can skip the `2B*` scripts and `2D_manual_refinment_parked_cars_lidar.py`.
@@ -2260,7 +2305,7 @@ If you only need LiDAR-based detections, you can skip `2A_camera_parked_cars_det
 | `2D_manual_refinment_parked_cars_camera.py` | `camera_detections/unified_clusters_filtered.txt` |
 | `2D_manual_refinment_parked_cars_lidar.py` | `lidar_detections/unified_clusters_filtered.txt` |
 | `2E_prepare_dataset_for_gaussian_splatting.py` | `data/data_for_gaussian_splatting/<bag_name>/` |
-| `2F_TODO_extract_semantic_maps.py` | Not implemented |
+| `2F_extract_semantic_maps.py` | `data/processed_dataset/<bag_name>/semantic_maps/*.png` (SegFormer GT for Step 6B) |
 
 ---
 
