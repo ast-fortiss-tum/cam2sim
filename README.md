@@ -857,10 +857,31 @@ find data/data_for_gaussian_splatting/reference_bag/outputs -name "utm_to_nerfst
 
 You should see one file per split.
 
+> **Skip Step 4.** If you don't want to re-run COLMAP and train the Splatfacto models yourself, download the precomputed Gaussian Splatting assets instead. From the project root:
+>
+> ```bash
+> conda activate data_extraction
+> pip install -U gdown   # only if not already installed
+>
+> # remove any existing data_for_gaussian_splatting/ folder to avoid mixing
+> rm -rf data/data_for_gaussian_splatting
+>
+> gdown 1FDrkiWCNUNVQUcSkWpuD93c7ht3PWBRa -O data_for_gaussian_splatting.zip
+> unzip -o data_for_gaussian_splatting.zip -d data/
+> rm data_for_gaussian_splatting.zip
+> ```
+>
+> Manual link: <https://drive.google.com/file/d/1FDrkiWCNUNVQUcSkWpuD93c7ht3PWBRa/view?usp=sharing>
+>
+> After extracting, you should have the full `data/data_for_gaussian_splatting/reference_bag/` structure shown in the Input section, plus the trained models and alignment files shown above. **Note**: the `config.yml` files inside the bundle contain absolute paths from the machine where the models were trained, so you must rewrite them to match your project root before running Step 5:
+>
+> ```bash
+> python 4_gaussian_splatting_preparation/4D_fix_paths.py
+> ```
+>
+> Continue with [Step 5](#step-5--run-the-simulation).
+
 For details on the COLMAP guide, the training script, and the alignment script, see the [`4_gaussian_splatting_preparation`](#4_gaussian_splatting_preparation) section further below.
-
----
-
 
 ---
 
