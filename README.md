@@ -132,6 +132,23 @@ ns-train --help
 
 > Splatfacto (the GS model used here) requires a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer).
 
+Once Nerfstudio is installed, add the extra packages required by Step 5's GS-based scripts (`5C_trajectory_replay.py` and `5D_dave2.py`), which need to talk to CARLA, drive a pygame UI, and project CARLA <-> UTM coordinates:
+
+```bash
+conda activate nerfstudio
+pip install \
+    carla==0.9.15 \
+    pygame==2.6.1 \
+    pyproj==3.5.0 \
+    pyrender==0.1.45
+```
+
+Verify they import cleanly:
+
+```bash
+python -c "import carla, pygame, pyproj, pyrender; print('OK')"
+```
+
 ### Create the `data_extraction` environment
 
 Needed by the CARLA-side scripts (3C, 3F) launched by Step 5.
@@ -279,6 +296,25 @@ Use the default environment name (`nerfstudio`). Verify:
 ```bash
 conda activate nerfstudio
 ns-train --help
+```
+
+> Splatfacto requires a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer).
+
+Once Nerfstudio is installed, add the extra packages required by Step 5's GS-based scripts (`5C_trajectory_replay.py` and `5D_dave2.py`):
+
+```bash
+conda activate nerfstudio
+pip install \
+    carla==0.9.15 \
+    pygame==2.6.1 \
+    pyproj==3.5.0 \
+    pyrender==0.1.45
+```
+
+Verify they import cleanly:
+
+```bash
+python -c "import carla, pygame, pyproj, pyrender; print('OK')"
 ```
 
 > Splatfacto requires a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer).
