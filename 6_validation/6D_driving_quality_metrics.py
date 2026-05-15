@@ -15,16 +15,29 @@ Expected file layout:
         trajectory<N>.csv              (UTM x,y + timestamp; one per real-world run)
                                        Header: timestamp,x,y,z,yaw
         steering_cmd_<N>.txt           (optional; DAVE-2 cmds with timestamps)
+        scenario_segment.json          (precomputed; or rebuilt via --recompute_segment)
 
     <sim_dir>/
         <prefix>_run<N>_trajectory.json   (sim runs; <prefix> becomes the "method")
 
-Usage:
+Usage (default: use precomputed segment):
     python 6D_driving_quality_metrics.py \
         --map_xodr data/processed_dataset/reference_bag/maps/map.xodr \
         --segment data/data_for_validation/real_world_trajectories/scenario_segment.json \
         --rw_dir data/data_for_validation/real_world_trajectories \
         --sim_dirs GS=data/data_for_validation/GS_trajectories
+
+Usage (recompute segment from the real-world CSVs in --rw_dir, save it as
+<rw_dir>/scenario_segment.json, then run metrics on it):
+    python 6D_driving_quality_metrics.py \
+        --map_xodr data/processed_dataset/reference_bag/maps/map.xodr \
+        --rw_dir data/data_for_validation/real_world_trajectories \
+        --sim_dirs GS=data/data_for_validation/GS_trajectories \
+        --recompute_segment
+
+When --recompute_segment is passed, --segment is ignored (if provided) and the
+resulting scenario_segment.json is written to <rw_dir>/scenario_segment.json,
+overwriting any existing file there.
 """
 
 import os
@@ -220,6 +233,122 @@ def resample_at_progress(traj_xs, traj_ys, progress, target_progress):
 
 
 # =============================================================================
+# SCENARIO SEGMENT (optional, built from real-world trajectories)
+# =============================================================================
+
+def compute_arc_length(xs, ys):
+    dx = np.diff(xs)
+    dy = np.diff(ys)
+    ds = np.sqrt(dx**2 + dy**2)
+    return np.concatenate([[0.0], np.cumsum(ds)])
+
+
+def build_reference_path(xs, ys, spacing=0.5):
+    """
+    Resample a trajectory uniformly along its arc length so the reference
+    path has one point every `spacing` meters.
+    """
+    s = compute_arc_length(xs, ys)
+    total_length = s[-1]
+    n_points = max(int(total_length / spacing) + 1, 2)
+    s_uniform = np.linspace(0, total_length, n_points)
+    ref_xs = np.interp(s_uniform, s, xs)
+    ref_ys = np.interp(s_uniform, s, ys)
+    return ref_xs, ref_ys, s_uniform
+
+
+def compute_scenario_segment(rw_carla, rw_dir, spacing=0.5):
+    """
+    Build a scenario_segment.json from the real-world trajectories already
+    loaded into rw_carla = {run_id: (carla_x, carla_y), ...}.
+
+    Logic:
+      1. Pick the longest real-world run as the reference path.
+      2. Resample it at uniform `spacing` along arc length.
+      3. Project every run onto that reference and collect start/end progress.
+      4. The scenario segment is the intersection:
+            start = max of every run's first projected progress
+            end   = min of every run's last  projected progress
+      5. Save to <rw_dir>/scenario_segment.json (overwriting if present).
+
+    Returns the segment dict.
+    """
+    print("\n" + "=" * 70)
+    print("  RECOMPUTING SCENARIO SEGMENT")
+    print("=" * 70)
+
+    if not rw_carla:
+        raise RuntimeError("Cannot recompute scenario segment: no real-world "
+                           "trajectories loaded.")
+
+    # 1. Find longest run
+    longest_run = None
+    longest_length = 0.0
+    for run, (cx, cy) in rw_carla.items():
+        length = compute_arc_length(cx, cy)[-1]
+        if length > longest_length:
+            longest_length = length
+            longest_run = run
+
+    print(f"  Reference run: trajectory{longest_run}.csv "
+          f"(length={longest_length:.1f} m)")
+
+    # 2. Build reference path
+    ref_cx, ref_cy = rw_carla[longest_run]
+    ref_xs, ref_ys, ref_s = build_reference_path(ref_cx, ref_cy, spacing=spacing)
+    print(f"  Reference path: {len(ref_xs)} points, spacing={spacing} m")
+
+    # 3. Project every run onto it
+    start_progresses = []
+    end_progresses = []
+    for run, (cx, cy) in sorted(rw_carla.items()):
+        progress, lat_dist, _ = project_onto_reference(
+            cx, cy, ref_xs, ref_ys, ref_s
+        )
+        start_progresses.append(progress[0])
+        end_progresses.append(progress[-1])
+        print(f"    run{run}: [{progress[0]:.1f} m -> {progress[-1]:.1f} m] "
+              f"(max lateral {lat_dist.max():.2f} m)")
+
+    # 4. Segment = intersection
+    scenario_start = float(max(start_progresses))
+    scenario_end = float(min(end_progresses))
+    scenario_length = scenario_end - scenario_start
+
+    if scenario_length <= 0:
+        raise RuntimeError(
+            f"Computed scenario length is non-positive "
+            f"(start={scenario_start:.1f}, end={scenario_end:.1f}). "
+            f"The real-world trajectories don't share a common segment."
+        )
+
+    print(f"\n  Scenario segment:")
+    print(f"    start  = {scenario_start:.1f} m")
+    print(f"    end    = {scenario_end:.1f} m")
+    print(f"    length = {scenario_length:.1f} m")
+
+    # 5. Save
+    segment = {
+        "reference_run": f"trajectory{longest_run}",
+        "reference_length_m": float(longest_length),
+        "scenario_start_m": scenario_start,
+        "scenario_end_m": scenario_end,
+        "scenario_length_m": float(scenario_length),
+        "reference_path_carla_x": ref_xs.tolist(),
+        "reference_path_carla_y": ref_ys.tolist(),
+        "reference_path_arc_length": ref_s.tolist(),
+        "reference_path_spacing_m": float(spacing),
+    }
+
+    output_path = os.path.join(rw_dir, "scenario_segment.json")
+    with open(output_path, "w") as f:
+        json.dump(segment, f, indent=2)
+    print(f"  Saved: {output_path}")
+
+    return segment
+
+
+# =============================================================================
 # FRECHET DISTANCE (discrete)
 # =============================================================================
 
@@ -277,7 +406,15 @@ def compute_corridor_violations(sim_signed_lateral, corridor_min, corridor_max):
 def main():
     parser = argparse.ArgumentParser(description="Drive quality metrics")
     parser.add_argument("--map_xodr", required=True, help="Path to .xodr file")
-    parser.add_argument("--segment", required=True, help="Path to scenario_segment.json")
+    parser.add_argument("--segment", required=False, default=None,
+                        help="Path to scenario_segment.json (precomputed). "
+                             "Required unless --recompute_segment is set.")
+    parser.add_argument("--recompute_segment", action="store_true",
+                        help="Recompute the scenario segment from the real-world "
+                             "CSVs in --rw_dir and save it to "
+                             "<rw_dir>/scenario_segment.json. When set, --segment "
+                             "is ignored. Use this if you replaced or added "
+                             "trajectory<N>.csv files and need a fresh segment.")
     parser.add_argument("--rw_dir", required=True,
                         help="Directory with real-world trajectory<N>.csv files")
     parser.add_argument("--sim_dirs", nargs="+", required=True,
@@ -289,20 +426,11 @@ def main():
                         help="Max points for Frechet computation (default: 500)")
     args = parser.parse_args()
 
+    if not args.recompute_segment and not args.segment:
+        parser.error("Either --segment <path> or --recompute_segment must be given.")
+
     # --- Setup ---
     tf_utm_to_wgs, tf_wgs_to_proj, xodr_offset = setup_transforms(args.map_xodr)
-
-    with open(args.segment, "r") as f:
-        segment = json.load(f)
-
-    ref_xs = np.array(segment["reference_path_carla_x"])
-    ref_ys = np.array(segment["reference_path_carla_y"])
-    ref_s = np.array(segment["reference_path_arc_length"])
-    seg_start = segment["scenario_start_m"]
-    seg_end = segment["scenario_end_m"]
-    seg_length = segment["scenario_length_m"]
-
-    corridor_progress = np.arange(seg_start, seg_end, 0.5)
 
     # --- Load ALL real-world trajectories ---
     print("=" * 70)
@@ -355,6 +483,26 @@ def main():
             f"No trajectory<N>.csv files found in {args.rw_dir}. "
             f"Expected files like trajectory1.csv, trajectory2.csv, ..."
         )
+
+    # --- Load or recompute scenario segment ---
+    if args.recompute_segment:
+        if args.segment:
+            print(f"\n[INFO] --recompute_segment set: ignoring "
+                  f"--segment {args.segment}")
+        segment = compute_scenario_segment(rw_carla, args.rw_dir, spacing=0.5)
+    else:
+        print(f"\n[INFO] Loading precomputed segment: {args.segment}")
+        with open(args.segment, "r") as f:
+            segment = json.load(f)
+
+    ref_xs = np.array(segment["reference_path_carla_x"])
+    ref_ys = np.array(segment["reference_path_carla_y"])
+    ref_s = np.array(segment["reference_path_arc_length"])
+    seg_start = segment["scenario_start_m"]
+    seg_end = segment["scenario_end_m"]
+    seg_length = segment["scenario_length_m"]
+
+    corridor_progress = np.arange(seg_start, seg_end, 0.5)
 
     # --- Load ALL simulated trajectories ---
     print("\n" + "=" * 70)

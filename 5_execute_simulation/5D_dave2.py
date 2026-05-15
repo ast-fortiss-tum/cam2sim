@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-4-log_gs_new.py
+5D_dave2.py
 
 DAVE-2 autonomous driving with Gaussian Splatting / Nerfstudio rendering,
 adapted to the cam2sim data layout.
@@ -14,6 +14,17 @@ Reads from (project root):
     data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_N/splatfacto/<TS>/config.yml
     data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_N/splatfacto/<TS>/utm_to_nerfstudio_transform.json
     data/data_for_gaussian_splatting/<BAG>/frame_positions_split_N_1_of_K.txt
+
+Writes to (project root):
+    data/results/splatfacto_run<N>/
+        trajectory.json
+        rgb_gt/          (CARLA ground-truth frames, currently disabled)
+        generated_gs/    (GS rendered frames, currently disabled)
+
+The output run folder name is auto-incremented: at start, the script scans
+data/results/ for existing splatfacto_run<N> directories and picks the next
+free N (e.g. if run1 and run2 exist, the new run becomes splatfacto_run3).
+You can override with --output_dir or --run_id.
 
 Workflow:
   1. Start CARLA server.
@@ -118,9 +129,11 @@ GS_DATA_ROOT = os.path.join(
     PROJECT_ROOT, "data", "data_for_gaussian_splatting", BAG_NAME
 )
 GS_OUTPUTS_DIR = os.path.join(GS_DATA_ROOT, "outputs")
-DEFAULT_OUTPUT_DIR = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME, "drive_results"
-)
+
+# Results: all drive runs land here. Each run gets its own
+# splatfacto_run<N> subfolder (auto-incremented).
+DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "results")
+RUN_PREFIX = "splatfacto_run"
 
 IM_WIDTH = 800
 IM_HEIGHT = 503
@@ -144,6 +157,33 @@ COVERAGE_FRAME_LIMIT = 30       # consecutive out-of-coverage frames
 
 # Split switching
 SWITCH_DELAY = 50               # frames before actually switching split
+
+
+def next_run_folder(base_dir, prefix=RUN_PREFIX, forced_id=None):
+    """
+    Return the next free `<base_dir>/<prefix><N>` folder path.
+
+    If `forced_id` is given, returns `<base_dir>/<prefix><forced_id>` directly
+    (even if it already exists -- caller decides whether to overwrite).
+
+    Otherwise scans existing siblings and picks max(N) + 1, starting from 1.
+    """
+    os.makedirs(base_dir, exist_ok=True)
+    if forced_id is not None:
+        return os.path.join(base_dir, f"{prefix}{int(forced_id)}")
+
+    existing = []
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+    for entry in os.listdir(base_dir):
+        full = os.path.join(base_dir, entry)
+        if not os.path.isdir(full):
+            continue
+        m = pattern.match(entry)
+        if m:
+            existing.append(int(m.group(1)))
+
+    next_n = max(existing) + 1 if existing else 1
+    return os.path.join(base_dir, f"{prefix}{next_n}")
 
 
 # =============================================================================
@@ -332,7 +372,6 @@ class SplitModel:
         for i, fn in enumerate(training_filenames):
             base = os.path.basename(str(fn))
 
-            # IMPORTANT:
             # Prefer the real frame ID from frame_positions_split_N_*.txt.
             # This handles overlap correctly.
             fid = filename_to_frame_id.get(base)
@@ -524,9 +563,9 @@ def make_drive_start_transform(world, traj_pt):
     """
     Build a clean spawn transform from a trajectory point.
 
-    KEY FIX: the trajectory's z is the LiDAR/base_link altitude, which is
-    typically a few cm below the CARLA road mesh. Spawning there makes
-    physics expel the car upward.
+    The trajectory's z is the LiDAR/base_link altitude, which is typically
+    a few cm below the CARLA road mesh. Spawning there makes physics
+    expel the car upward.
 
     We instead query the road waypoint and use waypoint.z + 0.10 m, plus
     apply the rear->center back-offset (0.13 m) used by the only_carla
@@ -672,7 +711,6 @@ def auto_detect_splits():
     print(f"[INFO] Candidate GS split dirs: {split_dirs}")
 
     for split_dir in split_dirs:
-        # Safer than r"splatfacto_split_(\d+)" because it avoids partial weird matches.
         match = re.match(r"^splatfacto_split_(\d+)$", split_dir)
         if not match:
             print(f"[WARN] Ignoring unexpected split folder name: {split_dir}")
@@ -709,9 +747,7 @@ def auto_detect_splits():
             print(f"       Run 4C_utm_yaw_to_nerfstudio.py for split {split_num} first.")
             continue
 
-        # Deterministically find frame_positions_split_<N>_*.txt
         frame_position_candidates = []
-
         for fname in sorted(os.listdir(GS_DATA_ROOT)):
             if (
                 fname.startswith(f"frame_positions_split_{split_num}_")
@@ -720,14 +756,11 @@ def auto_detect_splits():
                 frame_position_candidates.append(fname)
 
         frame_positions = None
-
         if frame_position_candidates:
             chosen_fname = frame_position_candidates[0]
             frame_positions = os.path.join(GS_DATA_ROOT, chosen_fname)
-
             print(f"[INFO] Using frame positions for split_{split_num}: "
                   f"{chosen_fname}")
-
             if len(frame_position_candidates) > 1:
                 print(f"[WARN] Multiple frame position files found for split_{split_num}:")
                 for c in frame_position_candidates:
@@ -786,9 +819,6 @@ def read_frame_positions_mapping(filepath):
     Returns:
         frame_ids: list[int]
         filename_to_frame_id: dict[str, int]
-
-    The positions file is the source of truth for mapping:
-        Nerfstudio image filename -> original CARLA/trajectory frame_id
     """
     frame_ids = []
     filename_to_frame_id = {}
@@ -815,6 +845,7 @@ def read_frame_positions_mapping(filepath):
                 filename_to_frame_id[image_file] = frame_id
 
     return frame_ids, filename_to_frame_id
+
 
 def load_split_models(split_configs, xodr_path, fov):
     split_models = []
@@ -874,9 +905,6 @@ def load_split_models(split_configs, xodr_path, fov):
                 cfg.get("frame_positions")
             )
 
-            # IMPORTANT:
-            # If the positions file exists, trust it over filename parsing.
-            # Filename parsing can be wrong when splits overlap or filenames are renumbered.
             if positions_frame_ids:
                 all_frame_ids = sorted(set(positions_frame_ids))
             else:
@@ -938,8 +966,14 @@ def main():
     parser.add_argument("--no_save", action="store_true",
                         help="Disable frame saving")
     parser.add_argument("--output_dir", type=str, default=None,
-                        help="Output directory (default: auto-named under "
-                             "data/data_for_carla/<bag>/drive_results/)")
+                        help="Custom output directory for this run. "
+                             "If omitted, the script auto-picks "
+                             "data/results/splatfacto_run<N> with the next free N.")
+    parser.add_argument("--run_id", type=int, default=None,
+                        help="Force a specific run number, e.g. --run_id 5 -> "
+                             "data/results/splatfacto_run5. Useful for re-running "
+                             "the same slot. If the folder exists, files inside "
+                             "may be overwritten.")
     args = parser.parse_args()
 
     print("=" * 80)
@@ -951,6 +985,7 @@ def main():
     print(f"[INFO] Trajectory:      {TRAJECTORY_FILE}")
     print(f"[INFO] Camera config:   {CAMERA_CONFIG_FILE}")
     print(f"[INFO] GS data root:    {GS_DATA_ROOT}")
+    print(f"[INFO] Results root:    {DEFAULT_OUTPUT_DIR}")
     print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
     print("=" * 80)
 
@@ -1069,7 +1104,7 @@ def main():
         print(f"[INFO] Spawned new hero vehicle "
               f"(id={hero_vehicle.id}, type={HERO_VEHICLE_TYPE})")
 
-    hero_vehicle.set_simulate_physics(False)  # off until phase 2
+    hero_vehicle.set_simulate_physics(False)
     hero_vehicle.set_autopilot(False)
     cleanup_old_sensors(hero_vehicle)
 
@@ -1324,10 +1359,6 @@ def main():
             z_calib = cam_pos[2] + sliders[5].val
             z_offset_from_interp = z_calib - ns_z_interp
 
-            # IMPORTANT:
-            # Do not store XY translation offset for driving.
-            # It is anchored at the calibration/training camera and can pull the live
-            # render back toward the overlap-start pose when switching splits.
             pos_offset = np.zeros(3, dtype=np.float64)
 
             calibration_offsets[sm.name] = {
@@ -1373,10 +1404,6 @@ def main():
                 ns_z_interp = sm.lookup_z(ns_from_tf[0], ns_from_tf[1])
                 z_offset = cam_pos_train[2] - ns_z_interp
 
-                # IMPORTANT:
-                # Do not use XY offset from training_cameras[0].
-                # For split_2, camera 0 is the overlap-start camera, so using its XY offset
-                # can make the live render jump backward at split switch.
                 pos_offset = np.zeros(3, dtype=np.float64)
 
                 calibration_offsets[sm.name] = {
@@ -1402,20 +1429,22 @@ def main():
 
     # ---- Output dir setup ----
     save_flag = not args.no_save
+    run_folder = None
     if save_flag:
         if args.output_dir:
             run_folder = args.output_dir
         else:
-            ts = int(time.time())
-            run_folder = os.path.join(
+            run_folder = next_run_folder(
                 DEFAULT_OUTPUT_DIR,
-                f"{BAG_NAME}_drive_{ts}"
+                prefix=RUN_PREFIX,
+                forced_id=args.run_id,
             )
         os.makedirs(os.path.join(run_folder, "rgb_gt"), exist_ok=True)
         os.makedirs(os.path.join(run_folder, "generated_gs"), exist_ok=True)
-        print(f"[INFO] Output: {run_folder}")
+        print(f"[INFO] Run output:    {run_folder}")
+        print(f"[INFO] Trajectory at: {os.path.join(run_folder, 'trajectory.json')}")
     else:
-        run_folder = None
+        print("[INFO] --no_save set: nothing will be written.")
 
     # ---- Build drive-start transform (waypoint.z + back-offset) ----
     if split_models:
@@ -1515,7 +1544,6 @@ def main():
                             current_split_idx = new_split_idx
                             switch_pending_idx = -1
 
-                            # Warmup new pipeline
                             sm_new = split_models[current_split_idx]
                             warmup_c2w = sm_new.get_training_cam_c2w(0)
                             for _ in range(5):
@@ -1534,12 +1562,10 @@ def main():
                     "z_offset": 0.0,
                 })
 
-                # CARLA -> Nerfstudio
                 ns_pos_raw = sm.coord_transformer.carla_to_nerfstudio(
                     carla_x, carla_y)
                 ns_pos_raw[2] = sm.lookup_z(ns_pos_raw[0], ns_pos_raw[1])
 
-                # --- Coverage check ---
                 coverage_dist = sm.nearest_cam_distance(ns_pos_raw[0], ns_pos_raw[1])
                 if coverage_dist > COVERAGE_THRESHOLD:
                     out_of_coverage_count += 1
@@ -1611,7 +1637,7 @@ def main():
             )
             hero_vehicle.apply_ackermann_control(ackermann_control)
 
-            # --- SAVE ---
+            # --- LOG TRAJECTORY ---
             if save_flag:
                 # save_drive_data(frame, run_folder, carla_pil, gs_pil)
 
@@ -1638,7 +1664,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[INFO] Stopping...")
     finally:
-        if save_flag and trajectory_log:
+        if save_flag and trajectory_log and run_folder is not None:
             traj_out = os.path.join(run_folder, "trajectory.json")
             with open(traj_out, "w") as f:
                 json.dump(trajectory_log, f, indent=2)
