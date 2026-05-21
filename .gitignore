@@ -3,6 +3,7 @@ raw_scripts/*
 datasets/*
 datasets_old/*
 *.pth
+*.pt
 *.pyc
 data/extracted_ros_data/reference_bag
 data/extracted_ros_data/reference_bag/images/*
