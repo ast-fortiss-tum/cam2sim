@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-5E_train_stable_diffusion.py
+4A_train_stable_diff.py
 
 Train a per-split LoRA + 3 ControlNets (segmentation, instance, temporal) for
 the Stable Diffusion branch of cam2sim. Mirrors the GS split structure
