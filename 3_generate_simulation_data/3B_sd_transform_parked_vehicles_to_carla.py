@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-3B_OPT_transform_parked_vehicles_with_colors.py
+3B_sd_transform_parked_vehicles_to_carla.py
 
 Same as 3B_transform_parked_vehicles_to_carla.py but:
   - reads centroids from camera_detections/unified_clusters.txt (the file

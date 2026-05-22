@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-5E_sd_offline_generation.py
+5E_stable_diff_offline_generation.py
 
 Offline Stable Diffusion generation on top of the CARLA replay dataset
 (produced by 5A_OPT_trajectory_only_carla_with_instance_mapping.py).
