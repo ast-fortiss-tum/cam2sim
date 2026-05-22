@@ -3,7 +3,7 @@ import json
 import torch
 from diffusers import ControlNetModel, StableDiffusionControlNetPipeline
 from huggingface_hub import login, snapshot_download
-from config import (STABLE_DIFF_PROMPT, 
+from utils.config import (STABLE_DIFF_PROMPT, 
                     STABLE_DIFF_STEPS, 
                     SEGMENTATION_COND_SCALE, 
                     MODEL_FOLDER_NAME, 
