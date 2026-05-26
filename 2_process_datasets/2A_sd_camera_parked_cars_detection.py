@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-2A_OPT_camera_parked_cars_detection_with_instances.py
+2A_sd_camera_parked_cars_detection.py
 
 Superset of 2A_camera_parked_cars_detection.py with two additions for the
 Stable Diffusion branch:

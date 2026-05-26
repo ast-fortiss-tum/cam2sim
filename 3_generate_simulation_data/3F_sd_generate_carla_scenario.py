@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-3G_opt_stable_diff.py
+3F_sd_generate_carla_scenario.py
 
 Stable Diffusion branch counterpart of 3F_generate_carla_scenario.py.
 
