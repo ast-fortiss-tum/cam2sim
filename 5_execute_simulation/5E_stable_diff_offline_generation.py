@@ -96,7 +96,7 @@ MAX_FRAMES = None
 # MAX_FRAMES = 100
 
 # Skip frames whose output PNG already exists (idempotent)
-SKIP_EXISTING = True
+SKIP_EXISTING = False
 
 
 # =======================
@@ -125,7 +125,7 @@ TRAJECTORY_PATH = os.path.join(
 
 
 # =======================
-# MODEL PATHS (external SSD)
+# MODEL PATHS 
 # =======================
 
 EXTERNAL_DRIVE = "/media/davidejannussi/ssd space"

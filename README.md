@@ -353,7 +353,7 @@ colmap -h
 
 ## Conda environments
 
-The pipeline uses three separate Conda environments. Each isolates dependencies that would otherwise conflict.
+The pipeline uses four separate Conda environments. Each isolates dependencies that would otherwise conflict.
 
 ### `data_extraction` (main environment)  *[Quick Start already done]*
 
@@ -416,6 +416,32 @@ conda activate nerfstudio
 > ```bash
 > sudo apt install gcc-11 g++-11
 > ```
+
+### `stable_diff` (Stable Diffusion branch)  *(new, not in Quick Start)*
+
+Used by stage 4B (SD training) and stage 5 modes 5E (SD offline generation) and 5F (DAVE-2 closed-loop with SD). Independent from `data_extraction` because diffusers 0.33.1 requires a specific range of `transformers` (4.45-4.49) that conflicts with the pins required by mmdet/mmdet3d/mmcv.
+
+```bash
+conda create -n stable_diff python=3.10 -y
+conda activate stable_diff
+
+pip install -r stable_diff_requirements.txt
+```
+
+Verify:
+
+```bash
+python -c "import torch, diffusers, transformers, peft, accelerate; print('torch', torch.__version__); print('diffusers', diffusers.__version__); print('transformers', transformers.__version__); print('peft', peft.__version__); print('accelerate', accelerate.__version__); print('CUDA', torch.cuda.is_available())"
+```
+
+Expected output:
+- torch 2.7.1+cu118 with CUDA True
+- diffusers 0.33.1
+- transformers 4.46.3
+- peft 0.19.1
+- accelerate 1.13.0
+
+> **Note on CUDA 11.8 vs 12.x.** This environment uses PyTorch built for CUDA 11.8, which is compatible with NVIDIA drivers that support CUDA 12.0 or older. If `torch.cuda.is_available()` returns False after install, your driver may be too old for CUDA 12.x; the `cu118` build is the safest choice across most setups.
 
 ---
 
