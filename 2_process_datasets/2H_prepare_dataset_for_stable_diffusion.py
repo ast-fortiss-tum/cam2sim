@@ -22,8 +22,6 @@ Writes to (project root):
         hf_binary/      (Arrow dataset with columns:
                          image, segmentation, instance, previous, text, frame_id)
 
-Dataset columns match what 5-train_split.py expects:
-    image, segmentation, instance, previous, text
 """
 
 import os
