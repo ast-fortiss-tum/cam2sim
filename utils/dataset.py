@@ -60,7 +60,7 @@ def decode_cityscapes_mask(mask):
 
 def add_temporal_links(dataset):
 
-    print("⏳ Adding 'previous' column for Temporal Consistency...")
+    print(" Adding 'previous' column for Temporal Consistency...")
     for i in range(len(dataset)):
         if i == 0:
             dataset[i]['previous'] = dataset[i]['image']

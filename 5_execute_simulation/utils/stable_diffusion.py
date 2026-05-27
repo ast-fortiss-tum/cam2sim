@@ -86,9 +86,9 @@ def check_essential_files(model_dir: str) -> bool:
 ############# HAS TO BE MOVED IN STABLE DIFF UTILS ####################
 def download_models_and_config(repo_id, local_dir, token):
     if check_essential_files(local_dir):
-        print(f"✅ Models found locally in {local_dir}.")
+        print(f" Models found locally in {local_dir}.")
         return local_dir
-    print(f"⏳ Downloading models from {repo_id}...")
+    print(f" Downloading models from {repo_id}...")
     login(token=token, add_to_git_credential=False)
     # Using snapshot_download logic from your script
     return snapshot_download(
@@ -107,7 +107,7 @@ def load_pipeline_models(model_root, device):
     with open(config_path, "r") as f:
         model_data = json.load(f)
 
-    print("\n⏳ Loading ControlNet Models...")
+    print("\ Loading ControlNet Models...")
     # Load ControlNets
     cnet_seg = ControlNetModel.from_pretrained(os.path.join(model_root, model_data["controlnet_segmentation"]), torch_dtype=torch.float16)
     cnet_temp = ControlNetModel.from_pretrained(os.path.join(model_root, model_data["controlnet_tempconsistency"]), torch_dtype=torch.float16)
@@ -123,7 +123,7 @@ def load_pipeline_models(model_root, device):
 
     # Load LoRA
     lora_path = os.path.join(model_root, model_data["lora_weights"])
-    print(f"⏳ Loading LoRA from: {lora_path}")
+    print(f" Loading LoRA from: {lora_path}")
     if lora_path.endswith(".safetensors"):
         lora_state_dict = {}
         with safe_open(lora_path, framework="pt", device="cpu") as f:
