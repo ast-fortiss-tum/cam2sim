@@ -433,6 +433,15 @@ def main():
             print(f"[WARN] Timeout: no color detected for entry {count}.")
 
         # ---- PHASE 3: teleport to final parking position ----
+        # Use "spawn-and-destroy" probe: try spawning a random blueprint at the
+        # target location first. If CARLA refuses (RuntimeError = collision), the
+        # spot is taken and we destroy the temporary actor in front of the hero.
+        # This prevents parked cars from overlapping each other.
+        #
+        # z values hardcoded as in the old framework (vehicle_data.json z is 0
+        # and doesn't work):
+        #   probe at base_z + 0.05 = 0.25  (slightly above ground)
+        #   final at 0                     (snapped to ground)
         start = entry["start"]
         heading = float(entry["heading"])
         mode = str(entry.get("mode", "")).strip().lower()
@@ -441,19 +450,34 @@ def main():
         if mode == "perpendicular" and random.random() < 0.5:
             veh_heading = (veh_heading + 180.0) % 360.0
 
+        base_z = 0.2
+
+        test_transform = carla.Transform(
+            carla.Location(x=float(start[0]),
+                        y=float(start[1]),
+                        z=base_z + 0.05),
+            carla.Rotation(yaw=veh_heading),
+        )
         final_transform = carla.Transform(
             carla.Location(x=float(start[0]),
-                           y=float(start[1]),
-                           z=float(start[2]) if len(start) > 2 else 0.0),
+                        y=float(start[1]),
+                        z=0.0),
             carla.Rotation(yaw=veh_heading),
         )
 
         try:
+            # Spawn probe: if this raises RuntimeError, the spot is occupied.
+            probe_bp = random.choice(vehicle_library)
+            probe_actor = world.spawn_actor(probe_bp, test_transform)
+            probe_actor.destroy()
+
+            # Spot is free: teleport the real (color-mapped) actor there.
             actor.set_transform(final_transform)
             actor.set_simulate_physics(False)
             spawned_actors_keep.append(actor)
         except RuntimeError as e:
-            print(f"[WARN] Teleport failed entry {count}: {e}")
+            # Spot is occupied: destroy the temporary actor and skip.
+            print(f"[WARN] Spot occupied for entry {count}, skipping: {e}")
             try:
                 actor.destroy()
             except Exception:
