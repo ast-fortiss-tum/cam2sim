@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-5A_trajectory_replay_only_carla_sd.py
+5A_sd_trajectory_only_carla.py
 
 Same as 5A_trajectory_only_carla.py but for the Stable Diffusion branch:
 the instance segmentation maps are remapped to use the real-world bag colors

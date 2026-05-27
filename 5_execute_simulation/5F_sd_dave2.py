@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-5F_stable_diff_dave2.py
+5F_sd_dave2.py
 
 DAVE-2 closed-loop driving with Stable Diffusion rendering, cam2sim layout.
 
