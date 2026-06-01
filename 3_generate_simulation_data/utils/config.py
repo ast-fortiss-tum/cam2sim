@@ -4,8 +4,7 @@
 DEBUG_PRINT = True
 CARLA_INSTALLATION_PATH = "/home/davide/carla"
 #CARLA_INSTALLATION_PATH = "/media/davide/New Volume/CARLA_0.9.15"
-CARLA_GLASS_PATH = "/media/davidejannussi/ssd space/davide/CARLA_0.9.15/CarlaUE4/Content/Carla/Static/Car/GeneralMaterials/Glass.uasset"
-#CARLA_GLASS_PATH = "/media/davide/New Volume/CARLA_0.9.15/CarlaUE4/Content/Carla/Static/Car/GeneralMaterials/Glass.uasset"
+CARLA_GLASS_PATH = "CarlaUE4/Content/Carla/Static/Car/GeneralMaterials/Glass.uasset"
 ASSET_PATH = "assets"
 # -------------------
 # MAP CREATION CONFIGURATION
