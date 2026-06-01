@@ -44,7 +44,7 @@ ENV_SD="stable_diff"          # for the SD-branch step 5 scripts
 ENV_DAVE="dave_2"             # for the DAVE-2 TCP server
 
 # Python scripts (paths relative to PROJECT_ROOT)
-SCRIPT_3C="3_generate_simulation_data/3C_setup_carla.py"
+SCRIPT_3C="3_generate_simulation_data/3C_sd_setup_carla.py"
 SCRIPT_3F_SD="3_generate_simulation_data/3F_sd_generate_carla_scenario.py"
 SCRIPT_5A_SD="5_execute_simulation/5A_sd_trajectory_only_carla.py"
 SCRIPT_5B="5_execute_simulation/5B_dave2_only_carla.py"
