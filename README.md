@@ -417,21 +417,21 @@ conda activate nerfstudio
 > sudo apt install gcc-11 g++-11
 > ```
 
-### `stable_diff` (Stable Diffusion branch)  *(new, not in Quick Start)*
-
+## `stable_diff` (Stable Diffusion branch)  *(new, not in Quick Start)*
 Used by stage 4B (SD training) and stage 5 modes 5E (SD offline generation) and 5F (DAVE-2 closed-loop with SD). Independent from `data_extraction` because diffusers 0.33.1 requires a specific range of `transformers` (4.45-4.49) that conflicts with the pins required by mmdet/mmdet3d/mmcv.
 
 ```bash
 conda create -n stable_diff python=3.10 -y
 conda activate stable_diff
-
 pip install -r stable_diff_requirements.txt
+pip install --force-reinstall --no-deps numpy==1.26.4
 ```
 
-Verify:
+The two-step install is a workaround for a dependency conflict: `opencv-python` 4.13 requires `numpy>=2`, but the rest of the cam2sim pipeline is validated against `numpy==1.26.4`. The first command installs everything (letting pip pick numpy 2.x to satisfy opencv), then the second forces numpy back to 1.26.4 without re-resolving dependencies. Verified to work end-to-end with this combination.
 
+Verify:
 ```bash
-python -c "import torch, diffusers, transformers, peft, accelerate; print('torch', torch.__version__); print('diffusers', diffusers.__version__); print('transformers', transformers.__version__); print('peft', peft.__version__); print('accelerate', accelerate.__version__); print('CUDA', torch.cuda.is_available())"
+python -c "import torch, diffusers, transformers, peft, accelerate, numpy, cv2; print('torch', torch.__version__); print('diffusers', diffusers.__version__); print('transformers', transformers.__version__); print('peft', peft.__version__); print('accelerate', accelerate.__version__); print('numpy', numpy.__version__); print('cv2', cv2.__version__); print('CUDA', torch.cuda.is_available())"
 ```
 
 Expected output:
@@ -440,6 +440,9 @@ Expected output:
 - transformers 4.46.3
 - peft 0.19.1
 - accelerate 1.13.0
+- numpy 1.26.4
+- cv2 4.13.0
+- CUDA True
 
 > **Note on CUDA 11.8 vs 12.x.** This environment uses PyTorch built for CUDA 11.8, which is compatible with NVIDIA drivers that support CUDA 12.0 or older. If `torch.cuda.is_available()` returns False after install, your driver may be too old for CUDA 12.x; the `cu118` build is the safest choice across most setups.
 

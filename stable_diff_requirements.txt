@@ -6,7 +6,6 @@ accelerate==1.13.0
 carla==0.9.15
 datasets==4.8.5
 diffusers==0.33.1
-numpy==1.26.4
 opencv-python==4.13.0.92
 osmnx==2.0.7
 peft==0.19.1

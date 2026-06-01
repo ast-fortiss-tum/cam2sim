@@ -14,7 +14,7 @@ Reads from (project root):
 Writes to (external SSD):
     <EXTERNAL_DRIVE>/cam2sim_sd/
         diffusers_repo/                          (cloned once)
-        cityscapes-controlnet-sd15/              (cloned once)
+        cityscapes-controlnet/                   (downloaded via huggingface_hub)
         huggingface_cache/                       (HF_HOME, SD1.5 weights)
         <BAG>/
             local_data_shards/part_<N>/data/train-00000-of-00001.parquet
@@ -26,7 +26,7 @@ Writes to (external SSD):
                 config.json
 
 Run from project root:
-    python 5_execute_simulation/5E_train_stable_diffusion.py
+    python 4B_stable_diffusion_training/4A_train_stable_diff.py
     # Optional flag:
     #   --force           retrain even if model markers exist
 """
@@ -37,6 +37,7 @@ import os
 import argparse
 import json
 from datasets import load_from_disk
+from huggingface_hub import snapshot_download
 
 
 # ============================================================
@@ -58,19 +59,23 @@ NUM_PARTS = 3                       # Match the 3 GS splits of cam2sim
 RESOLUTION = 512
 PRETRAINED_SD = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 
+# Base ControlNet (pretrained on Cityscapes, fine-tuned per split below)
+CONTROLNET_HF_REPO = "doguilmak/cityscapes-controlnet-sd15"
+CONTROLNET_HF_SUBFOLDER = "full_pipeline/controlnet"
+
 # --- INPUT (inside project root) ---
 LOCAL_BINARY_PATH = os.path.join(
     PROJECT_ROOT,
     "data", "data_for_stable_diffusion", BAG_NAME, "hf_binary",
 )
 
-# --- EXTERNAL SSD (heavy stuff lives here to keep the repo light) ---
-EXTERNAL_DRIVE = "/media/davidejannussi/ssd space"
+# --- EXTERNAL DRIVE (heavy stuff lives here to keep the repo light) ---
+EXTERNAL_DRIVE = "/media/davide/extra2/work"
 CAM2SIM_SD_ROOT = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
 
-# Shared across bags (cloned once, reused)
+# Shared across bags
 DIFFUSERS_DIR = os.path.join(CAM2SIM_SD_ROOT, "diffusers_repo")
-CONTROLNET_DIR = os.path.join(CAM2SIM_SD_ROOT, "cityscapes-controlnet-sd15")
+CONTROLNET_DIR = os.path.join(CAM2SIM_SD_ROOT, "cityscapes-controlnet")
 HF_CACHE_DIR = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
 
 # Per-bag (training outputs and parquet shards)
@@ -78,8 +83,9 @@ BAG_SD_DIR = os.path.join(CAM2SIM_SD_ROOT, BAG_NAME)
 OUTPUT_BASE = os.path.join(BAG_SD_DIR, "SD_Training_Outputs_Split")
 DATA_CACHE_DIR = os.path.join(BAG_SD_DIR, "local_data_shards")
 
-# Path inside the cloned cityscapes-controlnet repo
-CONTROLNET_MODEL_PATH = os.path.join(CONTROLNET_DIR, "full_pipeline/controlnet")
+# Path that train_controlnet.py will load with ControlNetModel.from_pretrained()
+# It needs to point to a folder containing config.json + diffusion_pytorch_model.safetensors
+CONTROLNET_MODEL_PATH = os.path.join(CONTROLNET_DIR, CONTROLNET_HF_SUBFOLDER)
 
 
 # --- ENVIRONMENT VARIABLES ---
@@ -122,9 +128,11 @@ CONTROLNET_MARKERS = [
 
 
 # ============================================================
-# STEP 1: Dependencies (diffusers repo + base controlnet)
+# STEP 1: Dependencies
 # ============================================================
 print("\n>>> CHECKING DEPENDENCIES...")
+
+# 1.1 Clone diffusers repo (just Python source code, no LFS needed)
 if not os.path.exists(DIFFUSERS_DIR):
     print(f"Cloning diffusers repository into {DIFFUSERS_DIR}...")
     subprocess.run(
@@ -132,15 +140,40 @@ if not os.path.exists(DIFFUSERS_DIR):
         check=True,
     )
     subprocess.run(["git", "checkout", "v0.33.1"], cwd=DIFFUSERS_DIR, check=True)
+else:
+    print(f"diffusers repo already present: {DIFFUSERS_DIR}")
 
-if not os.path.exists(CONTROLNET_DIR):
-    print(f"Cloning cityscapes-controlnet-sd15 into {CONTROLNET_DIR}...")
-    subprocess.run(
-        ["git", "clone",
-         "https://huggingface.co/doguilmak/cityscapes-controlnet-sd15",
-         CONTROLNET_DIR],
-        check=True,
+# 1.2 Download base ControlNet weights via huggingface_hub
+# This avoids the git-lfs dependency. snapshot_download fetches actual binary
+# blobs through the HF HTTP API and stores them as a normal directory tree
+# under CONTROLNET_DIR. allow_patterns restricts the download to the subfolder
+# we actually need (~1.4 GB) instead of the full repo.
+def _has_real_weights(path):
+    """True if the controlnet folder has a non-pointer safetensors file."""
+    safetensors = os.path.join(path, "diffusion_pytorch_model.safetensors")
+    if not os.path.exists(safetensors):
+        return False
+    # LFS pointer files are < 1 KB; real weights are ~1.4 GB
+    return os.path.getsize(safetensors) > 1_000_000
+
+if _has_real_weights(CONTROLNET_MODEL_PATH):
+    print(f"ControlNet weights already present at {CONTROLNET_MODEL_PATH}")
+else:
+    print(f"Downloading {CONTROLNET_HF_REPO} into {CONTROLNET_DIR}...")
+    snapshot_download(
+        repo_id=CONTROLNET_HF_REPO,
+        local_dir=CONTROLNET_DIR,
+        local_dir_use_symlinks=False,
+        allow_patterns=[
+            f"{CONTROLNET_HF_SUBFOLDER}/*",
+        ],
     )
+    if not _has_real_weights(CONTROLNET_MODEL_PATH):
+        raise RuntimeError(
+            f"Download finished but no real weights found at "
+            f"{CONTROLNET_MODEL_PATH}. Check the HF repo structure."
+        )
+    print(f"ControlNet downloaded successfully: {CONTROLNET_MODEL_PATH}")
 
 
 # ============================================================
