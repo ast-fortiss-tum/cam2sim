@@ -74,29 +74,12 @@ if SCRIPT_DIR in sys.path:
 
 sys.path.insert(0, SCRIPT_DIR)
 
-
-# =======================
-# LOCAL UTILS IMPORTS
-# =======================
-
-from utils.stable_diffusion import (
-    load_pipeline_models,
-)
-
-# We import NEGATIVE_PROMPT lazily inside the extended generator below,
-# to avoid hard-coupling this script to a particular utils refactor.
-try:
-    from utils.stable_diffusion import NEGATIVE_PROMPT
-except ImportError:
-    NEGATIVE_PROMPT = "blurry, distorted, street without street lines"
-
-
 # =======================
 # HARDCODED CONFIG
 # =======================
 
 BAG_NAME = "reference_bag"
-NUM_PARTS = 3
+NUM_PARTS = 1
 
 GUIDANCE_SCALE = 3.0
 NUM_INFERENCE_STEPS = 50
@@ -143,6 +126,23 @@ MODELS_BASE_DIR = os.path.join(BAG_SD_DIR, "SD_Training_Outputs_Split")
 
 # Use the external drive for HuggingFace cache (so we don't re-download SD1.5)
 os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
+
+# =======================
+# LOCAL UTILS IMPORTS
+# =======================
+
+from utils.stable_diffusion import (
+    load_pipeline_models,
+)
+
+# We import NEGATIVE_PROMPT lazily inside the extended generator below,
+# to avoid hard-coupling this script to a particular utils refactor.
+try:
+    from utils.stable_diffusion import NEGATIVE_PROMPT
+except ImportError:
+    NEGATIVE_PROMPT = "blurry, distorted, street without street lines"
+
+
 
 
 # =======================
