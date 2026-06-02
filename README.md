@@ -1710,7 +1710,7 @@ The exported timestamps are written in seconds.
 
 This folder contains the second step of the data-processing pipeline.
 
-The scripts take the extracted data from step 1 and run computer vision, 3D detection, map-generation, manual-cleanup, and Gaussian Splatting preparation steps. They produce per-dataset detection files, cleaned object lists, OSM-derived map data, and image/mask splits used by later stages of the pipeline.
+The scripts take the extracted data from step 1 and run computer vision, 3D detection, map-generation, manual-cleanup, Gaussian Splatting preparation, and Stable Diffusion dataset preparation steps. They produce per-dataset detection files, cleaned object lists, OSM-derived map data, image/mask splits used by later stages of the pipeline, and HuggingFace Arrow datasets for Stable Diffusion + ControlNet training.
 
 Each script is intended to be run from the project root:
 
@@ -1724,16 +1724,21 @@ For example:
 python 2_process_datasets/2A_camera_parked_cars_detection.py
 ```
 
-Alternatively the script step2.sh runs all scripts in order
+The folder offers two batch entry points:
+
+- `step2.sh`            — runs the Gaussian Splatting branch (2A, 2B, 2C, 2E, 2F, 2G_OPT)
+- `step2_sd.sh`         — runs the Stable Diffusion branch (2A_sd, 2C, 2F, 2G_OPT, 3A, 2H)
+
 ```bash
-bash 2_process_datasets/step2.sh
+bash 2_process_datasets/step2.sh         # GS branch
+bash 2_process_datasets/step2_sd.sh      # SD branch
 ```
 
 ---
 
 ## Purpose
 
-The goal of this step is to convert the raw extracted dataset into processed assets for detection, mapping, simulation, and Gaussian Splatting.
+The goal of this step is to convert the raw extracted dataset into processed assets for detection, mapping, simulation, Gaussian Splatting, and Stable Diffusion training.
 
 The scripts can produce:
 
@@ -1744,6 +1749,22 @@ The scripts can produce:
 - OSM map data for the recorded trajectory area
 - A placeholder `vehicle_data.json` file for CARLA simulation
 - Cropped images, sky masks, and overlapping image splits for Gaussian Splatting training
+- Semantic segmentation maps (SegFormer) used as ground truth in Step 6B
+- Per-frame instance maps where each parked car is painted with its dominant body color
+- A HuggingFace Arrow dataset combining RGB + semantic + instance + previous-frame for SD/ControlNet training
+
+---
+
+## Branches
+
+Two pipelines are supported in this folder, with different goals:
+
+| Branch | Entry point | Goal | Replaces in step 2 |
+|---|---|---|---|
+| Gaussian Splatting | `step2.sh` | Prepare splits and sky masks for GS training | uses standard `2A` |
+| Stable Diffusion | `step2_sd.sh` | Prepare HF dataset with seg + instance + previous frame | uses `2A_sd` instead of `2A`, plus `2H` |
+
+The two branches share `2C` (OSM map), `2F` (semantic maps), `2G_OPT` (sidewalk fix), and the optional `2D` manual cleanup scripts. The SD branch additionally requires `3A` (CARLA trajectory) before `2H`, because `2H` reads `data/data_for_carla/<bag>/trajectory_positions_rear_odom_yaw.json`.
 
 ---
 
@@ -1753,6 +1774,7 @@ The scripts can produce:
 project_root/
 ├── 2_process_datasets/
 │   ├── 2A_camera_parked_cars_detection.py
+│   ├── 2A_sd_camera_parked_cars_detection.py
 │   ├── 2B_lidar_parked_cars_detection.py
 │   ├── 2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py
 │   ├── 2C_create_map_from_coordinates_auto.py
@@ -1761,11 +1783,16 @@ project_root/
 │   ├── 2D_manual_refinment_parked_cars_lidar.py
 │   ├── 2E_prepare_dataset_for_gaussian_splatting.py
 │   ├── 2F_extract_semantic_maps.py
+│   ├── 2G_OPT_fix_sidewalk.sh
+│   ├── 2H_prepare_dataset_for_stable_diffusion.py
+│   ├── step2.sh
+│   ├── step2_sd.sh
 │   └── utils/
 │       ├── fcos3d_config.py
 │       ├── fcos3d.pth
 │       ├── my_pointpillars_config.py
 │       ├── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_*.pth
+│       ├── yolov8n-seg.pt
 │       ├── coordinates.py
 │       ├── map_data.py
 │       ├── save_data.py
@@ -1787,9 +1814,13 @@ project_root/
 │   │       ├── camera_detections/
 │   │       ├── lidar_detections/
 │   │       ├── lidar_refinement/
-│   │       └── maps/
+│   │       ├── maps/
+│   │       └── semantic_maps/
 │   │
-│   └── data_for_gaussian_splatting/
+│   ├── data_for_carla/                       (produced by step 3A; needed by 2H)
+│   ├── data_for_gaussian_splatting/
+│   │   └── <bag_name>/
+│   └── data_for_stable_diffusion/            (produced by 2H)
 │       └── <bag_name>/
 ```
 
@@ -1811,7 +1842,13 @@ The Gaussian Splatting preparation script writes to:
 data/data_for_gaussian_splatting/<bag_name>/
 ```
 
-because that data is intended for an external training pipeline.
+and the Stable Diffusion preparation script writes to:
+
+```text
+data/data_for_stable_diffusion/<bag_name>/
+```
+
+because that data is intended for external training pipelines.
 
 ---
 
@@ -1825,21 +1862,19 @@ Activate it before running any script in this folder:
 conda activate data_extraction
 ```
 
-The scripts use packages for ROS bag processing, numerical computation, computer vision, 3D detection, map processing, visualization, and Gaussian Splatting preparation.
+The scripts use packages for ROS bag processing, numerical computation, computer vision, 3D detection, map processing, visualization, Gaussian Splatting preparation, and HuggingFace dataset packaging.
 
-The camera and LiDAR detection scripts require pretrained model files in:
+Required pretrained models in `2_process_datasets/utils/`:
 
-```text
-2_process_datasets/utils/
-├── fcos3d_config.py
-├── fcos3d.pth
-├── my_pointpillars_config.py
-└── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_*.pth
-```
+| File | Required by |
+|---|---|
+| `fcos3d_config.py`, `fcos3d.pth` | 2A, 2A_sd |
+| `my_pointpillars_config.py`, `hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_*.pth` | 2B, 2B_OPTIONAL |
+| `yolov8n-seg.pt` | 2A_sd (auto-downloaded by `step2_sd.sh`) |
 
 If a required model or config file is missing, the corresponding script will fail at startup with a `FileNotFoundError`.
 
-The map scripts and Gaussian Splatting preparation script do not require the FCOS3D or PointPillars model files.
+The map scripts, the Gaussian Splatting preparation script, `2F`, `2G_OPT`, and `2H` do not require FCOS3D or PointPillars model files.
 
 ---
 
@@ -1855,6 +1890,7 @@ Typical contents include:
 ├── fcos3d.pth
 ├── my_pointpillars_config.py
 ├── hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_*.pth
+├── yolov8n-seg.pt
 ├── coordinates.py
 ├── map_data.py
 ├── save_data.py
@@ -1870,6 +1906,7 @@ The files are used as follows:
 | `fcos3d.pth` | FCOS3D pretrained checkpoint |
 | `my_pointpillars_config.py` | PointPillars configuration for LiDAR-based 3D detection |
 | `hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_*.pth` | PointPillars pretrained checkpoint |
+| `yolov8n-seg.pt` | YOLOv8-seg pretrained checkpoint, used by 2A_sd for instance masks and color extraction |
 | `coordinates.py` | Coordinate conversion utilities |
 | `map_data.py` | OSM/map processing utilities |
 | `save_data.py` | Helpers for writing map and vehicle data |
@@ -1884,10 +1921,11 @@ Do not move or rename files in `utils/` unless the corresponding import paths an
 
 Each script has a configuration section near the top.
 
-The most important value is the dataset name:
+The most important value is the dataset / bag name:
 
 ```python
-DATASET_NAME = "reference_bag"
+DATASET_NAME = "reference_bag"   # used by 2A through 2G
+BAG_NAME     = "reference_bag"   # used by 2A_sd, 2H
 ```
 
 This must match the folder name produced by step 1 inside:
@@ -1971,6 +2009,61 @@ GPU is used automatically if available.
 
 ---
 
+### 2A_sd_camera_parked_cars_detection.py
+
+Superset of `2A_camera_parked_cars_detection.py` for the Stable Diffusion branch. Drop-in replacement: writes to the same `camera_detections/` folder, so the rest of the pipeline that consumes `camera_detections.json` / `unified_clusters.txt` keeps working.
+
+Adds two things on top of the standard 2A:
+
+1. **Per-car dominant color**: each detected cluster gets a dominant RGB color extracted from the car body via YOLOv8-seg pixel masks. The script focuses on the bottom 60% of each mask to avoid windows reflecting the sky.
+2. **Per-frame instance maps**: for every frame in the bag, the script runs YOLOv8-seg, matches each 2D car mask to the nearest 3D cluster (within `INSTANCE_MATCH_DIST` meters in world space), and paints the mask with that cluster's color. The result is a sequence of instance maps where each parked car keeps the same color across frames, which is required as conditional input for the instance ControlNet in 4A.
+
+Default input:
+
+```text
+data/raw_dataset/<bag_name>/images/
+data/raw_dataset/<bag_name>/images_positions.txt
+2_process_datasets/utils/fcos3d.pth
+2_process_datasets/utils/yolov8n-seg.pt
+```
+
+Outputs:
+
+```text
+data/processed_dataset/<bag_name>/camera_detections/
+├── camera_detections.json          (now includes "color": [r, g, b] per car)
+├── unified_clusters.txt            (now includes rgb_color column)
+├── unified_bbox_overlays/
+│   └── bbox_<N:06d>.png
+└── instance_maps/
+    └── frame_<N:06d>.png           (one per frame in the bag)
+```
+
+The instance maps are intentionally produced for **every** frame in the bag (not only the keyframes processed by FCOS3D), because the SD training set in 2H needs an instance map for each RGB frame.
+
+Run:
+
+```bash
+python 2_process_datasets/2A_sd_camera_parked_cars_detection.py
+```
+
+GPU is used automatically if available. Generation of the instance maps is the slowest part of the script (one YOLO inference per frame).
+
+Configuration values worth knowing about (top of the script):
+
+| Variable | Meaning |
+|---|---|
+| `FCOS3D_CONF_THRESH` | Minimum FCOS3D score for a 3D detection to be kept (default 0.28) |
+| `YOLO_CONF_THRESH` | Minimum YOLO score for a 2D mask to be used (default 0.30) |
+| `MAX_DETECTION_RANGE` | Drop 3D detections farther than this many meters from the camera |
+| `INSTANCE_MATCH_DIST` | Maximum world-space distance (meters) to match a YOLO 2D mask to a 3D cluster in the instance-map pass |
+| `MIN_BBOX_HEIGHT_FOR_INSTANCE` | Drop YOLO 2D detections shorter than this many pixels to filter very distant cars |
+| `COLOR_QUANTIZE_STEP`, `TOP_K_COLORS` | Color extraction quantization (10 RGB bins, top 5 colors averaged) |
+
+This script is **only** used by the SD branch. The GS branch uses the standard `2A` instead.
+
+---
+
 ### 2B_lidar_parked_cars_detection.py
 
 Detects parked cars from LiDAR point clouds using PointPillars.
@@ -2011,8 +2104,6 @@ Viewer controls:
 You can also close the viewer window to exit.
 
 ---
-
-
 
 ### 2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py
 
@@ -2241,7 +2332,7 @@ The first run may download SegFormer weights from the Hugging Face Hub and cache
 
 ### 2F_extract_semantic_maps.py
 
-Generates simplified semantic segmentation maps from the recorded RGB images using a pretrained SegFormer model. The output maps are used by Step 6B (`6B_semantic_map_comparision.py`) as ground truth for semantic IoU evaluation against CARLA-replay semantic maps.
+Generates simplified semantic segmentation maps from the recorded RGB images using a pretrained SegFormer model. The output maps are used by Step 6B (`6B_semantic_map_comparision.py`) as ground truth for semantic IoU evaluation against CARLA-replay semantic maps, and by `2H` as input for the segmentation ControlNet.
 
 The script keeps only three classes (road, car, background) and writes one PNG per input image with the corresponding Cityscapes palette colors. All other Cityscapes classes are collapsed into background.
 
@@ -2286,11 +2377,89 @@ Run:
 python 2_process_datasets/2F_extract_semantic_maps.py
 ```
 
-This script must be run before Step 6B if you want to evaluate semantic IoU. If you only need parked-car detections and the OSM map, you can skip it.
+This script must be run before Step 6B if you want to evaluate semantic IoU, and before `2H` if you want to train SD with semantic conditioning.
+
+---
+
+### 2G_OPT_fix_sidewalk.sh
+
+Optional post-processing pass on the semantic maps produced by `2F`. Re-paints sidewalk pixels using simple color thresholding rules to fix common confusion cases (e.g. sidewalk classified as road).
+
+Lanciato automaticamente sia da `step2.sh` (GS branch) sia da `step2_sd.sh` (SD branch), dopo `2F`.
+
+Default input / output (in-place):
+
+```text
+data/processed_dataset/<bag_name>/semantic_maps/*.png
+```
+
+Run standalone:
+
+```bash
+chmod +x 2_process_datasets/2G_OPT_fix_sidewalk.sh
+bash 2_process_datasets/2G_OPT_fix_sidewalk.sh
+```
+
+---
+
+### 2H_prepare_dataset_for_stable_diffusion.py
+
+Builds a HuggingFace Arrow dataset that combines all the conditional inputs needed by the Stable Diffusion + ControlNet training in step 4A. The dataset rows have these columns:
+
+| Column | Type | Source |
+|---|---|---|
+| `image` | RGB image, 512×512 | `data/raw_dataset/<bag>/images/frame_XXXXXX.png` |
+| `segmentation` | RGB semantic map, 512×512 (NEAREST) | `data/processed_dataset/<bag>/semantic_maps/` (from 2F + 2G_OPT) |
+| `instance` | RGB instance map, 512×512 (NEAREST) | `data/processed_dataset/<bag>/camera_detections/instance_maps/` (from 2A_sd) |
+| `previous` | RGB image of the previous frame, 512×512 | computed from `image` (first frame uses itself) |
+| `text` | Caption with hero pose | `data/data_for_carla/<bag>/trajectory_positions_rear_odom_yaw.json` (from 3A) |
+| `frame_id` | int | parsed from the filename |
+
+A frame is included only if **all** of: RGB image, semantic map, instance map, and trajectory entry are present. Frames missing any one are skipped and counted in the report at the end.
+
+Default input:
+
+```text
+data/raw_dataset/<bag_name>/images/
+data/processed_dataset/<bag_name>/semantic_maps/
+data/processed_dataset/<bag_name>/camera_detections/instance_maps/
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+```
+
+Outputs:
+
+```text
+data/data_for_stable_diffusion/<bag_name>/
+├── images/         (RGB resized to 512x512, LANCZOS)
+├── segmentation/   (semantic resized to 512x512, NEAREST)
+├── instance/       (instance resized to 512x512, NEAREST)
+├── previous/       (placeholder; previous-frame pointers live inside the HF dataset)
+└── hf_binary/      (Arrow dataset; load_from_disk into 4A_train_stable_diff.py)
+```
+
+Run:
+
+```bash
+python 2_process_datasets/2H_prepare_dataset_for_stable_diffusion.py
+```
+
+The script is **idempotent at the file level**: if a resized PNG already exists at the target path, it is not recomputed. The Arrow binary (`hf_binary/`) is always rebuilt from scratch — delete it manually if you need to force everything.
+
+Resolution defaults to 512×512 (`TARGET_SIZE`). RGB images use LANCZOS resampling; semantic and instance maps use NEAREST so class colors and per-instance IDs are preserved.
+
+The `text` column uses captions of the form `pos x: 150.56, y: -264.30` derived from the CARLA hero pose in the trajectory JSON, so this script depends on step `3A_transform_coordinates_to_carla.py` having been run first.
+
+---
 
 ## Suggested execution order
 
-A typical workflow is:
+### Gaussian Splatting branch
+
+```bash
+bash 2_process_datasets/step2.sh
+```
+
+or manually:
 
 ```bash
 # 3D detections
@@ -2314,11 +2483,31 @@ python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py
 
 # Semantic maps for Step 6 IoU evaluation (optional unless running 6B)
 python 2_process_datasets/2F_extract_semantic_maps.py
+bash   2_process_datasets/2G_OPT_fix_sidewalk.sh
 ```
 
 If you only need camera-based detections, you can skip the `2B*` scripts and `2D_manual_refinment_parked_cars_lidar.py`.
 
 If you only need LiDAR-based detections, you can skip `2A_camera_parked_cars_detection.py` and `2D_manual_refinment_parked_cars_camera.py`.
+
+### Stable Diffusion branch
+
+```bash
+bash 2_process_datasets/step2_sd.sh
+```
+
+or manually:
+
+```bash
+python 2_process_datasets/2A_sd_camera_parked_cars_detection.py
+python 2_process_datasets/2C_create_map_from_coordinates_auto.py
+python 2_process_datasets/2F_extract_semantic_maps.py
+bash   2_process_datasets/2G_OPT_fix_sidewalk.sh
+python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
+python 2_process_datasets/2H_prepare_dataset_for_stable_diffusion.py
+```
+
+Note that the SD branch reaches into step 3 (`3A`) because `2H` needs the CARLA-transformed trajectory.
 
 ---
 
@@ -2326,25 +2515,29 @@ If you only need LiDAR-based detections, you can skip `2A_camera_parked_cars_det
 
 | Script | Main output |
 |---|---|
-| `2A_camera_parked_cars_detection.py` | `camera_detections/camera_detections.json`, `camera_detections/unified_clusters.txt`, `camera_detections/unified_bbox_overlays/` |
-| `2B_lidar_parked_cars_detection.py` | `lidar_detections/lidar_detections.json`, `lidar_detections/unified_clusters.txt`, `lidar_detections/lidar_bboxes.txt`, `lidar_detections/screenshots/` |
-| `2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py` | `lidar_refinement/detections_raw.json`, `lidar_refinement/ground_truth_refined.json`, `lidar_refinement/final_clusters.txt`, `lidar_refinement/ground_truth_bboxes.txt` |
-| `2C_create_map_from_coordinates_auto.py` | `maps/map.osm`, `maps/vehicle_data.json` |
-| `2C_create_map_from_coordinates_manual.py` | `maps/map.osm`, `maps/vehicle_data.json` |
+| `2A_camera_parked_cars_detection.py` | `camera_detections/{camera_detections.json, unified_clusters.txt, unified_bbox_overlays/}` |
+| `2A_sd_camera_parked_cars_detection.py` | same as 2A, plus `color` field in JSON, `rgb_color` column in clusters, and `camera_detections/instance_maps/frame_<N>.png` |
+| `2B_lidar_parked_cars_detection.py` | `lidar_detections/{lidar_detections.json, unified_clusters.txt, lidar_bboxes.txt, screenshots/}` |
+| `2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py` | `lidar_refinement/{detections_raw.json, ground_truth_refined.json, final_clusters.txt, ground_truth_bboxes.txt}` |
+| `2C_create_map_from_coordinates_auto.py` | `maps/{map.osm, vehicle_data.json}` |
+| `2C_create_map_from_coordinates_manual.py` | `maps/{map.osm, vehicle_data.json}` |
 | `2D_manual_refinment_parked_cars_camera.py` | `camera_detections/unified_clusters_filtered.txt` |
 | `2D_manual_refinment_parked_cars_lidar.py` | `lidar_detections/unified_clusters_filtered.txt` |
 | `2E_prepare_dataset_for_gaussian_splatting.py` | `data/data_for_gaussian_splatting/<bag_name>/` |
-| `2F_extract_semantic_maps.py` | `data/processed_dataset/<bag_name>/semantic_maps/*.png` (SegFormer GT for Step 6B) |
+| `2F_extract_semantic_maps.py` | `data/processed_dataset/<bag_name>/semantic_maps/*.png` (SegFormer GT for Step 6B and input for 2H) |
+| `2G_OPT_fix_sidewalk.sh` | in-place fixes to `data/processed_dataset/<bag_name>/semantic_maps/` |
+| `2H_prepare_dataset_for_stable_diffusion.py` | `data/data_for_stable_diffusion/<bag_name>/{images, segmentation, instance, previous, hf_binary}` |
 
 ---
 
 ## Notes
 
-- Output folders for detection scripts are deleted and recreated at the start of each run. Move or rename old results before rerunning if you want to keep them.
+- Output folders for detection scripts are deleted and recreated at the start of each run. Move or rename old results before rerunning if you want to keep them. This applies to `2A`, `2A_sd`, `2B`, and to the `hf_binary/` produced by `2H`.
 - `SKIP_FRAMES` controls detection density. Lower values process more frames but increase runtime.
-- The camera detection script uses empirical correction constants because the FCOS3D weights were trained on KITTI, while this project uses a different camera setup.
+- The camera detection scripts use empirical correction constants because the FCOS3D weights were trained on KITTI, while this project uses a different camera setup.
 - The map scripts can optionally check whether CARLA is reachable. Set `NO_CARLA = True` near the top of the map scripts to skip this check when CARLA is not running.
 - The Gaussian Splatting script uses hard links when possible to avoid duplicating image files. If hard links are not supported, it falls back to regular file copies.
+- `2H` is the only script that depends on step 3A. If `data/data_for_carla/<bag>/trajectory_positions_rear_odom_yaw.json` is missing, run `python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py` first.
 - Do not edit generated files manually unless you are intentionally refining outputs. Prefer rerunning the relevant script from the project root.
 
 </details>
@@ -2370,10 +2563,14 @@ For example:
 python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
 ```
 
+The folder offers two batch entry points:
 
-Alternatively the script step3.sh runs all scripts in order
+- `step3.sh`            — runs the Gaussian Splatting branch (3A, 3B, 3C, 3F)
+- `step3_sd.sh`         — runs the Stable Diffusion branch (3B_sd, 3C_sd, 3F_sd; 3A is run earlier by `step2_sd.sh`)
+
 ```bash
-bash 3_generate_simulation_data/step3.sh
+bash 3_generate_simulation_data/step3.sh         # GS branch
+bash 3_generate_simulation_data/step3_sd.sh      # SD branch
 ```
 
 ---
@@ -2387,10 +2584,26 @@ The scripts can produce or use:
 - CARLA-coordinate hero trajectory files
 - Rear-axle trajectory files for accurate hero spawning
 - CARLA-ready `vehicle_data.json`
-- Parked-vehicle spawn positions from detected clusters
+- Parked-vehicle spawn positions from detected clusters (with optional per-car RGB color)
 - OpenDRIVE map loading inside CARLA
 - Visual checks for parked cars and trajectory alignment
 - A prepared CARLA world containing the hero vehicle and parked cars
+- An `instance_color_map.json` linking CARLA per-instance segmentation colors to the real-world car colors observed in the bag (used at SD inference time to recolor CARLA instance maps with bag colors before conditioning ControlNet)
+
+---
+
+## Branches
+
+Two pipelines are supported in this folder, with different goals:
+
+| Branch | Entry point | Goal | Differences from standard |
+|---|---|---|---|
+| Gaussian Splatting | `step3.sh` | Spawn hero + parked cars in CARLA for GS replay | Uses standard 3A, 3B, 3C, 3F |
+| Stable Diffusion | `step3_sd.sh` | Same world, plus build the CARLA-instance-color → bag-color mapping needed by the SD instance ControlNet | Uses `3B_sd`, `3C_sd`, `3F_sd`; relies on 3A already produced by `step2_sd.sh` |
+
+`3A`, `3D`, and `3E` are shared between both branches and run from the standard files.
+
+`step3_sd.sh` deliberately omits 3A: `step2_sd.sh` already runs it because `2H_prepare_dataset_for_stable_diffusion.py` needs the CARLA trajectory JSONs.
 
 ---
 
@@ -2401,16 +2614,26 @@ project_root/
 ├── 3_generate_simulation_data/
 │   ├── 3A_transform_coordinates_to_carla.py
 │   ├── 3B_transform_parked_vehicles_to_carla.py
+│   ├── 3B_sd_transform_parked_vehicles_to_carla.py
 │   ├── 3C_setup_carla.py
+│   ├── 3C_sd_setup_carla.py
 │   ├── 3D_visualize_parked_spawn_positions.py
 │   ├── 3E_visualize_trajectory.py
 │   ├── 3F_generate_carla_scenario.py
+│   ├── 3F_sd_generate_carla_scenario.py
+│   ├── step3.sh
+│   ├── step3_sd.sh
 │   └── utils/
 │       ├── carla_simulator.py
 │       ├── config.py
 │       ├── coordinates.py
 │       ├── map_data.py
 │       └── other helper files
+│
+├── assets/
+│   └── Carla/
+│       ├── Glass.uasset                  (custom opaque glass, used by 3C_sd)
+│       └── Glass.uasset.original         (backup of the original CARLA glass, auto-managed)
 │
 ├── data/
 │   ├── raw_dataset/
@@ -2421,6 +2644,8 @@ project_root/
 │   │   └── <bag_name>/
 │   │       ├── lidar_detections/
 │   │       │   └── unified_clusters.txt
+│   │       ├── camera_detections/
+│   │       │   └── unified_clusters.txt   (with rgb_color column, from 2A_sd)
 │   │       └── maps/
 │   │           ├── map.osm
 │   │           ├── map.xodr
@@ -2428,11 +2653,13 @@ project_root/
 │   │
 │   └── data_for_carla/
 │       └── <bag_name>/
+│           ├── camera.json
 │           ├── vehicle_data.json
 │           ├── trajectory_positions.json
 │           ├── trajectory_positions_rear.json
 │           ├── trajectory_positions_odom_yaw.json
-│           └── trajectory_positions_rear_odom_yaw.json
+│           ├── trajectory_positions_rear_odom_yaw.json
+│           └── instance_color_map.json    (only SD branch; from 3F_sd)
 ```
 
 Scripts read input from:
@@ -2469,6 +2696,11 @@ CARLA-related scripts also require:
 - A valid CARLA installation path set in `3_generate_simulation_data/utils/config.py`
 - A generated `map.xodr` file inside `data/processed_dataset/<bag_name>/maps/`
 
+The SD branch additionally requires:
+
+- A custom `Glass.uasset` in `assets/Carla/Glass.uasset` (used by `3C_sd_setup_carla.py` to render car windows as opaque so ControlNet instance maps are clean)
+- `CARLA_GLASS_PATH` and `ASSET_PATH` defined in `utils/config.py`
+
 ---
 
 ## The `utils/` subfolder
@@ -2490,8 +2722,8 @@ The files are used as follows:
 
 | File | Purpose |
 |---|---|
-| `config.py` | CARLA connection settings, CARLA installation path, spawn offsets, hero vehicle type, and other shared constants |
-| `carla_simulator.py` | CARLA helper functions for loading OpenDRIVE maps, setting synchronous mode, filtering vehicle blueprints, and reading XODR projection information |
+| `config.py` | CARLA connection settings, CARLA installation path, spawn offsets, hero vehicle type, asset paths, and other shared constants |
+| `carla_simulator.py` | CARLA helper functions for loading OpenDRIVE maps, setting synchronous mode, filtering vehicle blueprints, spawning sensors, reading XODR projection information, and instance-color sensor utilities used by the SD branch |
 | `coordinates.py` | Coordinate conversion utilities, including odometry / UTM to WGS84 conversion |
 | `map_data.py` | Map and road-edge helper functions used to generate parked-car spawn positions |
 | Other helper files | Additional shared utilities used by the scripts |
@@ -2505,6 +2737,13 @@ CARLA_INSTALLATION_PATH = "..."
 CARLA_IP = "127.0.0.1"
 CARLA_PORT = 2000
 HERO_VEHICLE_TYPE = "vehicle.tesla.model3"
+```
+
+The SD branch additionally uses:
+
+```python
+CARLA_GLASS_PATH = "CarlaUE4/Content/Carla/.../Glass.uasset"   # relative to CARLA_INSTALLATION_PATH
+ASSET_PATH       = "assets"                                    # folder containing the custom Glass.uasset
 ```
 
 Some scripts also use spawn-offset and heading constants from `utils/config.py`, for example:
@@ -2551,11 +2790,11 @@ Before running the scripts, check that:
 2. `data/processed_dataset/<BAG_NAME>/maps/map.osm` exists.
 3. `data/processed_dataset/<BAG_NAME>/maps/map.xodr` exists.
 4. `data/processed_dataset/<BAG_NAME>/maps/vehicle_data.json` exists.
-5. If parked cars are needed, `data/processed_dataset/<BAG_NAME>/lidar_detections/unified_clusters.txt` exists.
+5. If parked cars are needed:
+   - For the GS branch: `data/processed_dataset/<BAG_NAME>/lidar_detections/unified_clusters.txt` exists.
+   - For the SD branch: `data/processed_dataset/<BAG_NAME>/camera_detections/unified_clusters.txt` with `rgb_color` column exists (produced by `2_process_datasets/2A_sd_camera_parked_cars_detection.py`).
 6. `3_generate_simulation_data/utils/config.py` contains the correct CARLA paths and connection settings.
 7. You are running the command from the project root.
-
----
 
 ---
 
@@ -2679,6 +2918,8 @@ data/data_for_carla/<bag_name>/vehicle_data.json
 
 with the initial `hero_car` position and heading.
 
+`3A` is shared between both branches. In the GS branch it is run by `step3.sh`. In the SD branch it is run earlier by `step2_sd.sh`, because `2H_prepare_dataset_for_stable_diffusion.py` needs the trajectory JSONs.
+
 Run:
 
 ```bash
@@ -2735,6 +2976,58 @@ Run:
 python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py
 ```
 
+This script is used by the GS branch. The SD branch uses `3B_sd_transform_parked_vehicles_to_carla.py` instead.
+
+---
+
+### 3B_sd_transform_parked_vehicles_to_carla.py
+
+Stable Diffusion branch counterpart of `3B`. Reads centroids from the camera detections produced by `2A_sd_camera_parked_cars_detection.py` and propagates the per-car RGB color into the spawn entries.
+
+Differences vs `3B`:
+
+- Reads from `camera_detections/unified_clusters.txt` (which includes an `rgb_color` column) instead of `lidar_detections/unified_clusters.txt`.
+- Parses the `rgb_color` column (format `R-G-B`) for each centroid.
+- Writes a `"color": [R, G, B]` field (or `null`) into each entry of `spawn_positions`.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/camera_detections/unified_clusters.txt
+data/processed_dataset/<bag_name>/maps/map.xodr
+data/processed_dataset/<bag_name>/maps/vehicle_data.json    (optional)
+data/data_for_carla/<bag_name>/vehicle_data.json            (optional, preserved if present)
+```
+
+Output:
+
+```text
+data/data_for_carla/<bag_name>/vehicle_data.json
+```
+
+The output schema is the same as `3B`, with the addition of a `color` field per entry of `spawn_positions`:
+
+```text
+{
+  "cluster_id": 17,
+  "side": "left",
+  "street_id": "...",
+  "mode": "parallel",
+  "start": [x, y, 0.0],
+  "end":   [x, y, 0.0],
+  "heading": 87.5,
+  "color": [100, 52, 57]   // or null
+}
+```
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3B_sd_transform_parked_vehicles_to_carla.py
+```
+
+The hero_car entry is preserved if previously written by `3A`. The script never deletes `hero_car`.
+
 ---
 
 ### 3C_setup_carla.py
@@ -2769,6 +3062,48 @@ If CARLA is already running, this script is not needed.
 
 If the CARLA path is missing or invalid, the script raises an error and prints the path that failed.
 
+This script is used by the GS branch. The SD branch uses `3C_sd_setup_carla.py` instead.
+
+---
+
+### 3C_sd_setup_carla.py
+
+Stable Diffusion branch counterpart of `3C`. Launches CARLA at low quality, after swapping CARLA's default `Glass.uasset` with a custom opaque version.
+
+Why this is needed: CARLA's default car windows are transparent and reflective. In semantic and instance segmentation maps used as ControlNet conditioning, transparent windows let the road texture leak through the car silhouette, which confuses the SD model. The custom `Glass.uasset` makes windows render as solid material, so cars appear as clean opaque blobs in conditioning maps.
+
+Workflow:
+
+1. Back up the current `Glass.uasset` of CARLA into `<ASSET_PATH>/Carla/Glass.uasset.original`, if not already backed up. If a backup already exists, that backup is treated as the source of truth (this protects against a previous interrupted run that left CARLA in a modified state).
+2. Overwrite CARLA's `Glass.uasset` with the custom version from `<ASSET_PATH>/Carla/Glass.uasset`.
+3. Launch CARLA with `-quality-level=Low`.
+4. On exit (clean or crash, including Ctrl+C), restore the original `Glass.uasset`.
+
+Default input:
+
+```text
+utils/config.py
+    CARLA_INSTALLATION_PATH
+    CARLA_GLASS_PATH           # relative path of Glass.uasset inside CARLA
+    ASSET_PATH                 # folder containing the custom Glass.uasset
+assets/Carla/Glass.uasset      # custom opaque glass (required)
+```
+
+Side effects in `assets/Carla/`:
+
+```text
+Glass.uasset             (custom glass, committed in the repo)
+Glass.uasset.original    (backup, auto-managed by the script)
+```
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3C_sd_setup_carla.py
+```
+
+If the custom Glass file or any required config value is missing, the script fails before touching CARLA so the installation is never left in a half-modified state.
+
 ---
 
 ### 3D_visualize_parked_spawn_positions.py
@@ -2800,7 +3135,7 @@ Ctrl+C
 
 When interrupted, the script destroys the parked vehicles it spawned.
 
-Use this script to check that parked-car positions and headings look correct before generating the final CARLA scenario.
+Use this script to check that parked-car positions and headings look correct before generating the final CARLA scenario. It works with either the GS or SD `vehicle_data.json`.
 
 ---
 
@@ -2808,7 +3143,7 @@ Use this script to check that parked-car positions and headings look correct bef
 
 Visualizes the converted hero trajectory inside CARLA.
 
-This script loads the OpenDRIVE map, reads the converted trajectory, and spawns static “ghost” hero vehicles along the path. The cars are frozen in place so the trajectory alignment can be inspected visually.
+This script loads the OpenDRIVE map, reads the converted trajectory, and spawns static "ghost" hero vehicles along the path. The cars are frozen in place so the trajectory alignment can be inspected visually.
 
 Default input:
 
@@ -2885,11 +3220,99 @@ USE_SYNCHRONOUS_MODE_DURING_PREP = True
 MAX_PARKED_CARS = None
 ```
 
+This script is used by the GS branch. The SD branch uses `3F_sd_generate_carla_scenario.py` instead.
+
+---
+
+### 3F_sd_generate_carla_scenario.py
+
+Stable Diffusion branch counterpart of `3F`. Same world setup, plus it produces the CARLA-instance-color → bag-color mapping needed by the SD instance ControlNet at inference time.
+
+For each parked car in `spawn_positions` that has a `color` field:
+
+1. Spawn it temporarily 15 m in front of the hero (so the instance segmentation sensor attached to the hero observes it).
+2. Read the instance segmentation sensor frame and pick the new CARLA instance color that just appeared (i.e. the color not present in the baseline calibration set).
+3. Record the mapping `CARLA_instance_color → bag_RGB_color` in `detected_color_map`.
+4. Teleport the car to its final parking position and freeze physics. If the final spot is already occupied (CARLA's `spawn_actor` raises `RuntimeError`), the temporary actor is destroyed and the entry is skipped.
+
+Calibration pass: before the loop, the script ticks the world for a few frames and records every CARLA instance color already present (hero, leftovers). Those colors are excluded from the "new color" detection, so the mapping never misattributes them.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/maps/map.xodr
+data/data_for_carla/<bag_name>/vehicle_data.json                          (with color field, from 3B_sd)
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json    (optional)
+data/data_for_carla/<bag_name>/trajectory_positions_rear.json             (optional fallback)
+```
+
+Output:
+
+```text
+data/data_for_carla/<bag_name>/instance_color_map.json
+```
+
+Format:
+
+```json
+{
+  "(220, 20, 60)": "100,52,57",
+  "(0, 0, 142)":  "210,210,210",
+  ...
+}
+```
+
+- The key is the CARLA instance-segmentation color tuple (R, G, B), serialized as a string because JSON keys must be strings.
+- The value is the corresponding real-world RGB color from the bag, in `R,G,B` string form.
+
+Hero start selection follows the same priority as `3F`:
+
+1. `trajectory_positions_rear_odom_yaw.json`
+2. `trajectory_positions_rear.json`
+3. `hero_car` from `vehicle_data.json`
+
+Important configuration values near the top of the script include:
+
+```python
+IM_WIDTH = 800
+IM_HEIGHT = 503
+SENSOR_FOV = "54.7"
+SIM_FPS = 20
+
+SENSOR_X = 0.762
+SENSOR_Y = -0.015
+SENSOR_Z = 1.21
+SENSOR_PITCH = 0.6
+
+SPAWN_MAX_RETRIES = 100
+COLOR_DETECTION_MAX_ATTEMPTS = 50
+SENSOR_QUEUE_TIMEOUT_S = 5.0
+CALIBRATION_TICKS = 20
+RANDOM_SEED = 42
+MAX_PARKED_CARS = None
+```
+
+Run:
+
+```bash
+python 3_generate_simulation_data/3F_sd_generate_carla_scenario.py
+```
+
+The script requires that `3B_sd` was run first (so `vehicle_data.json` has the `color` field) and that CARLA is running (typically launched by `3C_sd_setup_carla.py`). If `spawn_positions` is empty or no entry has a color, the script aborts with a clear error message.
+
+When done, the script disables synchronous mode and leaves the world alive in CARLA. The next stage (step 5 SD inference) takes over from there.
+
 ---
 
 ## Suggested execution order
 
-A typical workflow is:
+### Gaussian Splatting branch
+
+```bash
+bash 3_generate_simulation_data/step3.sh
+```
+
+or manually:
 
 ```bash
 # Convert trajectory to CARLA coordinates
@@ -2918,6 +3341,33 @@ python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py
 python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py
 ```
 
+### Stable Diffusion branch
+
+```bash
+bash 3_generate_simulation_data/step3_sd.sh
+```
+
+or manually:
+
+```bash
+# 3A is run earlier by step2_sd.sh; do not run it again here.
+
+# Convert camera centroids (with colors) to CARLA spawn positions
+python 3_generate_simulation_data/3B_sd_transform_parked_vehicles_to_carla.py
+
+# Start CARLA with the custom opaque glass (Low quality)
+python 3_generate_simulation_data/3C_sd_setup_carla.py
+
+# Optional visual checks (shared with the GS branch)
+python 3_generate_simulation_data/3D_visualize_parked_spawn_positions.py
+python 3_generate_simulation_data/3E_visualize_trajectory.py
+
+# Build the CARLA-instance-color -> bag-color mapping and freeze the scene
+python 3_generate_simulation_data/3F_sd_generate_carla_scenario.py
+```
+
+`step3_sd.sh` launches `3C_sd_setup_carla.py` in background (so CARLA stays up) before running `3F_sd`. On exit the script restores the original `Glass.uasset` automatically.
+
 ---
 
 ## Output files summary
@@ -2925,11 +3375,14 @@ python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py
 | Script | Main output |
 |---|---|
 | `3A_transform_coordinates_to_carla.py` | `data/data_for_carla/<bag_name>/trajectory_positions*.json`, `vehicle_data.json` with `hero_car` |
-| `3B_transform_parked_vehicles_to_carla.py` | `data/data_for_carla/<bag_name>/vehicle_data.json` with `spawn_positions` |
+| `3B_transform_parked_vehicles_to_carla.py` | `data/data_for_carla/<bag_name>/vehicle_data.json` with `spawn_positions` (no color field) |
+| `3B_sd_transform_parked_vehicles_to_carla.py` | `data/data_for_carla/<bag_name>/vehicle_data.json` with `spawn_positions` including a `color` field per car |
 | `3C_setup_carla.py` | Starts CARLA from `CARLA_INSTALLATION_PATH` |
+| `3C_sd_setup_carla.py` | Starts CARLA at low quality with the custom opaque `Glass.uasset`; auto-backs-up and auto-restores the original on exit |
 | `3D_visualize_parked_spawn_positions.py` | Temporary parked vehicles spawned in CARLA for visual inspection |
 | `3E_visualize_trajectory.py` | Temporary ghost hero vehicles spawned in CARLA for visual inspection |
 | `3F_generate_carla_scenario.py` | CARLA world prepared with map, hero vehicle, and parked vehicles |
+| `3F_sd_generate_carla_scenario.py` | Same world as `3F`, plus `data/data_for_carla/<bag_name>/instance_color_map.json` (CARLA instance color → bag RGB color) |
 
 ---
 
@@ -2937,13 +3390,15 @@ python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py
 
 - The scripts use a hardcoded `BAG_NAME`; change it near the top of each script before running a different dataset.
 - Run the scripts from the project root so relative paths resolve correctly.
-- `3A_transform_coordinates_to_carla.py` should usually be run before `3B_transform_parked_vehicles_to_carla.py`, because it writes the `hero_car` entry that `3B` preserves.
-- `3B_transform_parked_vehicles_to_carla.py` requires `map.xodr`; this file is expected to exist in `data/processed_dataset/<bag_name>/maps/`.
-- `3D_visualize_parked_spawn_positions.py`, `3E_visualize_trajectory.py`, and `3F_generate_carla_scenario.py` require a running CARLA server.
+- `3A_transform_coordinates_to_carla.py` should usually be run before `3B*_transform_parked_vehicles_to_carla.py`, because it writes the `hero_car` entry that `3B` and `3B_sd` preserve.
+- `3B_transform_parked_vehicles_to_carla.py` and `3B_sd_transform_parked_vehicles_to_carla.py` require `map.xodr`; this file is expected to exist in `data/processed_dataset/<bag_name>/maps/`.
+- `3B_sd` requires `data/processed_dataset/<bag>/camera_detections/unified_clusters.txt` with the `rgb_color` column produced by `2A_sd_camera_parked_cars_detection.py`. The standard `2A` does not produce this column.
+- `3D_visualize_parked_spawn_positions.py`, `3E_visualize_trajectory.py`, `3F_generate_carla_scenario.py`, and `3F_sd_generate_carla_scenario.py` require a running CARLA server.
 - The visualization scripts spawn temporary actors and clean them up when interrupted.
-- `3F_generate_carla_scenario.py` is designed to leave the prepared actors alive in CARLA and then exit.
+- `3F_generate_carla_scenario.py` and `3F_sd_generate_carla_scenario.py` are designed to leave the prepared actors alive in CARLA and then exit.
+- `3C_sd_setup_carla.py` modifies CARLA's `Glass.uasset` while running and restores it on exit (including on crash or Ctrl+C). If a previous run was killed in a way that prevented the `finally` cleanup, the next run uses the existing `Glass.uasset.original` backup as the source of truth, so the installation stays recoverable.
+- The SD branch script `step3_sd.sh` deliberately does NOT run `3A`. The `2H` script in step 2 SD needs the CARLA trajectory JSONs, so `3A` is run by `step2_sd.sh` instead, and `step3_sd.sh` picks up from `3B_sd`.
 - If positions look slightly shifted in CARLA, check the offset constants in `utils/config.py` and the manual offset constants near the top of the visualization scripts.
-
 </details>
 
 <details>
@@ -3673,6 +4128,9 @@ The scripts in this folder execute different kinds of simulation runs inside CAR
 - Run the DAVE-2 self-driving model with raw CARLA images
 - Replay the recorded trajectory in CARLA + Gaussian Splatting side by side
 - Run the DAVE-2 self-driving model on Gaussian-Splatted views
+- Replay the recorded trajectory in CARLA producing SD-ready semantic + instance maps (with bag colors)
+- Generate Stable Diffusion frames offline from the SD replay, either with one fixed configuration (best from the thesis) or with a 100-configuration grid search
+- Run the DAVE-2 self-driving model on Stable-Diffusion-rendered views
 
 The scripts are not alternatives to each other — they answer different questions, and you may run any subset depending on what you want to evaluate.
 
@@ -3688,6 +4146,16 @@ For example:
 python 5_execute_simulation/5A_trajectory_only_carla.py
 ```
 
+The folder offers two batch entry points:
+
+- `step5.sh` — runs the Gaussian Splatting branch (modes `5A` / `5B` / `5C` / `5D`)
+- `step5_sd.sh` — runs the Stable Diffusion branch (modes `5A` / `5B` / `5C` / `5D` mapped to the SD scripts; see "Step 5 SD modes" below)
+
+```bash
+bash 5_execute_simulation/step5.sh    --mode 5C    # GS branch
+bash 5_execute_simulation/step5_sd.sh --mode 5C    # SD branch
+```
+
 ---
 
 ## Purpose
@@ -3696,10 +4164,26 @@ The goal of this step is to execute the prepared CARLA scenario in different con
 
 The scripts can produce or use:
 
-- A frame-by-frame replay of the recorded ego-vehicle trajectory inside CARLA
+- A frame-by-frame replay of the recorded ego-vehicle trajectory inside CARLA (GS branch)
 - A closed-loop DAVE-2 driving run on raw CARLA RGB images
 - A frame-by-frame replay with side-by-side CARLA and Gaussian Splatting renders
 - A closed-loop DAVE-2 driving run on Gaussian-Splatted views
+- A frame-by-frame replay producing SD-conditioning maps (instance maps recolored with bag-derived colors via `instance_color_map.json`)
+- Stable Diffusion offline generations from the SD replay, either with one fixed ControlNet schedule or with the 100-configuration grid search used in the thesis
+- A closed-loop DAVE-2 driving run on Stable-Diffusion-rendered views
+
+---
+
+## Branches
+
+Two pipelines are supported in this folder, with different goals:
+
+| Branch | Entry point | Goal | Scripts |
+|---|---|---|---|
+| Gaussian Splatting | `step5.sh` | Replay / drive on GS-rendered views (the original cam2sim pipeline) | 5A, 5B, 5C, 5D |
+| Stable Diffusion | `step5_sd.sh` | Replay / drive / grid-search on Stable Diffusion-rendered views | 5A_sd, 5B, 5E, 5G, 5F_sd |
+
+The two branches share `5B` (DAVE-2 on raw CARLA images, identical for both pipelines) and the common CARLA prerequisites.
 
 ---
 
@@ -3709,13 +4193,20 @@ The scripts can produce or use:
 project_root/
 ├── 5_execute_simulation/
 │   ├── 5A_trajectory_only_carla.py
+│   ├── 5A_sd_trajectory_only_carla.py
 │   ├── 5B_dave2_only_carla.py
 │   ├── 5C_trajectory_replay.py
 │   ├── 5D_dave2.py
+│   ├── 5E_stable_diff_offline_generation.py
+│   ├── 5G_stable_diff_grid_search.py
+│   ├── 5F_sd_dave2.py
+│   ├── step5.sh
+│   ├── step5_sd.sh
 │   └── utils/
 │       ├── carla_simulator.py
 │       ├── config.py
 │       ├── dave2_connection.py
+│       ├── stable_diffusion.py        (loaders + NEGATIVE_PROMPT + realtime generator)
 │       └── other helper files
 │
 ├── system_under_test/
@@ -3725,16 +4216,26 @@ project_root/
 │   └── OPTIONAL.txt
 │
 ├── data/
+│   ├── raw_dataset/
+│   │   └── <bag_name>/
+│   │       └── images/                          (GT real frames; reference for 6D)
+│   │
 │   ├── data_for_carla/
 │   │   └── <bag_name>/
 │   │       ├── camera.json
 │   │       ├── trajectory_positions_rear_odom_yaw.json
-│   │       └── vehicle_data.json
+│   │       ├── vehicle_data.json
+│   │       └── instance_color_map.json          (from 3F_sd; consumed by 5A_sd)
 │   │
 │   ├── results/
-│   │   └── splatfacto_run<N>/      (created by 5D)
-│   │       ├── rgb_gt/
-│   │       ├── generated_gs/
+│   │   ├── splatfacto_run<N>/                   (created by 5D; GS branch)
+│   │   │   ├── rgb_gt/
+│   │   │   ├── generated_gs/
+│   │   │   └── trajectory.json
+│   │   └── sd_run<N>/                           (created by 5F_sd; SD branch)
+│   │       ├── carla_rgb/
+│   │       ├── generated_sd/
+│   │       ├── instance_remapped/
 │   │       └── trajectory.json
 │   │
 │   ├── data_for_gaussian_splatting/
@@ -3746,10 +4247,24 @@ project_root/
 │   │
 │   └── processed_dataset/
 │       └── <bag_name>/
-│           ├── carla_replay_dataset/   (created by 5A)
-│           ├── dave2_runs/             (created by 5B)
+│           ├── carla_replay_dataset/            (created by 5A; GS branch)
+│           ├── carla_replay_dataset_sd/         (created by 5A_sd; SD branch)
+│           ├── dave2_runs/                      (created by 5B)
 │           └── maps/
 │               └── map.xodr
+│
+└── <EXTERNAL_DRIVE>/
+    └── cam2sim_sd/
+        └── <bag_name>/
+            ├── SD_Training_Outputs_Split/       (input for 5E/5G; from Step 4 SD training)
+            │   └── part_<N>/                    (LoRA + ControlNet seg/inst/temp)
+            ├── huggingface_cache/               (SD1.5 + ControlNet base weights, ~9 GB)
+            ├── sd_offline_generation/           (output of 5E; single-config)
+            │   └── frame_XXXXXX.png
+            └── sd_grid_search/                  (output of 5G; one subfolder per config)
+                ├── <config_label>/
+                │   └── frame_XXXXXX.png
+                └── grid_search_info.json
 ```
 
 ---
@@ -3761,12 +4276,18 @@ The Conda environment to use depends on the script:
 | Script | Conda environment | Why |
 |---|---|---|
 | `5A_trajectory_only_carla.py` | `data_extraction` | CARLA only, no GS rendering |
+| `5A_sd_trajectory_only_carla.py` | `data_extraction` | CARLA only, no SD inference; reads `instance_color_map.json` and writes the SD replay dataset |
 | `5B_dave2_only_carla.py` | `data_extraction` | CARLA only, talks to a separate DAVE-2 server |
 | `5C_trajectory_replay.py` | `nerfstudio` | Renders Gaussian Splatting models with `gsplat` |
 | `5D_dave2.py` | `nerfstudio` | Renders Gaussian Splatting models with `gsplat`, talks to DAVE-2 server |
+| `5E_stable_diff_offline_generation.py` | `stable_diff` | Offline SD inference from `carla_replay_dataset_sd/` with one fixed config |
+| `5G_stable_diff_grid_search.py` | `stable_diff` | Offline SD inference from `carla_replay_dataset_sd/` over 100 ControlNet configurations |
+| `5F_sd_dave2.py` | `stable_diff` | Closed-loop DAVE-2 on SD-rendered views; talks to CARLA, SD, and DAVE-2 server |
 | DAVE-2 server (`system_under_test/communicator.py`) | `dave_2` | Loads TensorFlow 2.13 + DAVE-2 model |
 
 > The `nerfstudio` environment is required for any script that loads a `splatfacto` model, because Gaussian Splatting rasterization depends on `gsplat`, which is a CUDA extension installed in that environment. Splatfacto models also require a CUDA-capable GPU with compute capability 7.5 or higher (RTX 20-series or newer).
+>
+> The `stable_diff` environment is required for any script that loads the SD/ControlNet pipeline (`5E`, `5G`, `5F_sd`). It uses `diffusers 0.33.1` + `transformers 4.46.x` + PyTorch CUDA 11.8, which conflict with the `data_extraction` and `nerfstudio` environments. See the top-level README ("Conda environments") for the install procedure.
 
 Always activate the correct environment before running a script:
 
@@ -3782,28 +4303,42 @@ Before running any script in this folder, you need:
 
 1. **CARLA server running**, listening on the IP/port set in `5_execute_simulation/utils/config.py` (defaults: `127.0.0.1:2000`).
 
-2. **The CARLA scenario already prepared** by step 3, that is, you must have run:
+   - GS branch: launched by `3_generate_simulation_data/3C_setup_carla.py`.
+   - SD branch: launched by `3_generate_simulation_data/3C_sd_setup_carla.py` (Low quality, with the custom opaque `Glass.uasset`).
 
+2. **The CARLA scenario already prepared** by step 3:
+
+   - GS branch:
 ```bash
-   python 3_generate_simulation_data/3F_generate_carla_scenario.py
+     python 3_generate_simulation_data/3F_generate_carla_scenario.py
+```
+   - SD branch:
+```bash
+     python 3_generate_simulation_data/3F_sd_generate_carla_scenario.py
 ```
 
-   This script loads the OpenDRIVE map, spawns the parked vehicles and the hero vehicle, and leaves them alive in the CARLA world. All scripts in step 5 reuse the existing hero vehicle and do not load the map themselves.
+     Both scripts load the OpenDRIVE map, spawn the parked vehicles and the hero vehicle, and leave them alive in the CARLA world. All scripts in step 5 reuse the existing hero vehicle and do not load the map themselves. The SD variant additionally produces `data/data_for_carla/<bag>/instance_color_map.json`, required by `5A_sd`.
 
 3. **The data files referenced by the scripts**:
    - `data/processed_dataset/<bag_name>/maps/map.xodr`
    - `data/data_for_carla/<bag_name>/camera.json`
    - `data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json`
    - `data/data_for_carla/<bag_name>/vehicle_data.json`
+   - `data/data_for_carla/<bag_name>/instance_color_map.json` (SD branch only; from `3F_sd`)
 
-4. For Gaussian-Splatting scripts (`5C`, `5D`) only, you also need:
+4. For Gaussian-Splatting scripts (`5C`, `5D`) only:
    - One trained `splatfacto_split_<N>/splatfacto/<timestamp>/config.yml` per split
    - One `utm_to_nerfstudio_transform.json` next to each `config.yml`
    - One `frame_positions_split_<N>_1_of_<FRAME_SKIP>.txt` in `data/data_for_gaussian_splatting/<bag_name>/`
 
    These are produced by step 4.
 
-5. For DAVE-2 scripts (`5B`, `5D`) only, you also need the **DAVE-2 server running** (see "Starting the DAVE-2 server" below).
+5. For Stable-Diffusion scripts (`5E`, `5G`, `5F_sd`) only:
+   - `data/processed_dataset/<bag_name>/carla_replay_dataset_sd/` populated by `5A_sd` (semantic, instance, metadata)
+   - `<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/SD_Training_Outputs_Split/part_<N>/` containing the LoRA + 3 ControlNets (segmentation, instance, temporal) trained by Step 4 SD
+   - `<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/huggingface_cache/` (auto-populated on first run; ~9 GB total: SD1.5 base + Cityscapes ControlNet + TemporalNet)
+
+6. For DAVE-2 scripts (`5B`, `5D`, `5F_sd`) only, you also need the **DAVE-2 server running** (see "Starting the DAVE-2 server" below).
 
 ---
 
@@ -3828,11 +4363,50 @@ HERO_VEHICLE_TYPE = "vehicle.tesla.model3"
 ROTATION_DEGREES
 ```
 
+The SD scripts additionally hardcode the path to the external drive used to host the trained models and the HF cache:
+
+```python
+EXTERNAL_DRIVE   = "/media/davide/extra2/work"
+CAM2SIM_SD_ROOT  = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
+```
+
+Edit these in `5E`, `5G`, and `5F_sd` if your external drive is mounted elsewhere. The cache `os.environ["HF_HOME"]` is set **before** importing `utils.stable_diffusion` so the SD weights are loaded from / cached to the external drive rather than `~/.cache/huggingface/`.
+
+The SD scripts also expose three SD-inference constants near the top, fixed to the values used in the thesis:
+
+```python
+GUIDANCE_SCALE       = 3.0
+NUM_INFERENCE_STEPS  = 50
+FIXED_SEED           = 50
+```
+
+---
+
+## Step 5 SD modes (`step5_sd.sh`)
+
+`step5_sd.sh` orchestrates the SD branch the same way `step5.sh` orchestrates the GS branch, but maps the four mode flags to the SD scripts:
+
+| Mode | What it runs                                                              | DAVE-2 server |
+|------|---------------------------------------------------------------------------|---------------|
+| 5A   | Trajectory replay in CARLA only, producing the SD replay dataset (`5A_sd_trajectory_only_carla.py`) | no  |
+| 5B   | DAVE-2 closed-loop on raw CARLA images (`5B_dave2_only_carla.py`)         | yes |
+| 5C   | Trajectory replay (`5A_sd`) followed by single-config offline SD inference (`5E_stable_diff_offline_generation.py`) | no |
+| 5D   | DAVE-2 closed-loop on Stable Diffusion-rendered views (`5F_sd_dave2.py`)  | yes |
+
+`5G_stable_diff_grid_search.py` is intentionally not wired into `step5_sd.sh`: it is the 100-configuration coarse exploration used to produce data for Step 6D + 6E, and is meant to be run by hand once the SD replay dataset has been created. See the script section below.
+
+```bash
+bash 5_execute_simulation/step5_sd.sh --mode 5A
+bash 5_execute_simulation/step5_sd.sh --mode 5B
+bash 5_execute_simulation/step5_sd.sh --mode 5C
+bash 5_execute_simulation/step5_sd.sh --mode 5D
+```
+
 ---
 
 ## Starting the DAVE-2 server
 
-Scripts `5B_dave2_only_carla.py` and `5D_dave2.py` rely on a separate **DAVE-2 inference server** that listens on a TCP socket. The server runs in its own Conda environment (`dave_2`), because TensorFlow 2.13 requires Python 3.8 and conflicts with the `data_extraction` and `nerfstudio` environments.
+Scripts `5B_dave2_only_carla.py`, `5D_dave2.py`, and `5F_sd_dave2.py` rely on a separate **DAVE-2 inference server** that listens on a TCP socket. The server runs in its own Conda environment (`dave_2`), because TensorFlow 2.13 requires Python 3.8 and conflicts with the `data_extraction`, `nerfstudio`, and `stable_diff` environments.
 
 The server lives in:
 
@@ -3855,15 +4429,11 @@ conda activate data_extraction
 pip install -U gdown   # only if not already installed
 
 cd system_under_test
-
 gdown 1_pJHuvU4386FOYrF_B0ETIZGmShObhIF -O final.h5
-
 cd ..
 ```
 
-Alternatively, download the file manually from this link and place it in `system_under_test/`:
-
-- DAVE-2 weights: <https://drive.google.com/file/d/1_pJHuvU4386FOYrF_B0ETIZGmShObhIF/view?usp=sharing>
+Manual link: <https://drive.google.com/file/d/1_pJHuvU4386FOYrF_B0ETIZGmShObhIF/view?usp=sharing>
 
 Verify:
 
@@ -3873,7 +4443,7 @@ ls -lh system_under_test/final.h5
 
 ### Step 2: start the server
 
-In a **separate terminal**, activate the `dave_2` environment (TensorFlow 2.13 + Python 3.8, defined in the install guide):
+In a **separate terminal**:
 
 ```bash
 conda activate dave_2
@@ -3887,7 +4457,7 @@ When the server is ready, it prints:
 🚗 Dave2 server listening on localhost:5090
 ```
 
-Leave this terminal open during the entire `5B` or `5D` run. The CARLA-side scripts in step 5 connect automatically to `localhost:5090` using `utils/dave2_connection.py`.
+Leave this terminal open during the entire `5B` / `5D` / `5F_sd` run. The CARLA-side scripts connect automatically to `localhost:5090` via `utils/dave2_connection.py`.
 
 To stop the server, press `Ctrl+C` in its terminal.
 
@@ -3895,13 +4465,20 @@ To stop the server, press `Ctrl+C` in its terminal.
 
 ## Scripts
 
-Ensure CARLA is running and the Scenario is loaded. You will need two separate Terminals. Running 3F requires the conda environment data_extraction
-```bash
-python 3_generate_simulation_data/3C_setup_carla.py
-```
+Ensure CARLA is running and the scenario is loaded. You will need two separate terminals before running any step-5 script:
+
+GS branch:
 
 ```bash
+python 3_generate_simulation_data/3C_setup_carla.py
 python 3_generate_simulation_data/3F_generate_carla_scenario.py
+```
+
+SD branch:
+
+```bash
+python 3_generate_simulation_data/3C_sd_setup_carla.py
+python 3_generate_simulation_data/3F_sd_generate_carla_scenario.py
 ```
 
 ### 5A_trajectory_only_carla.py
@@ -3938,11 +4515,54 @@ python 5_execute_simulation/5A_trajectory_only_carla.py
 
 This script is the simplest one and is useful as a sanity check that the prepared CARLA scenario, the camera configuration, and the trajectory are all consistent.
 
+This is the GS branch's replay script. The SD branch uses `5A_sd_trajectory_only_carla.py` instead.
+
+---
+
+### 5A_sd_trajectory_only_carla.py
+
+Stable Diffusion branch counterpart of `5A`. Replays the recorded trajectory in CARLA and produces an SD-ready replay dataset: each instance map is recolored using the CARLA-instance → bag-color mapping built in `3F_sd_generate_carla_scenario.py`, so the instance ControlNet sees colors consistent with what was used during SD training.
+
+Key differences vs `5A`:
+
+- Reads `data/data_for_carla/<bag>/instance_color_map.json` (produced by `3F_sd`) and uses it to remap CARLA's instance-segmentation RGB → the per-car bag RGB colors recorded during training.
+- For any CARLA instance color **not** present in the map (i.e. new objects appearing during inference that were not part of the training set), the script falls back to leaving the color unchanged.
+- Writes to a separate output folder, `carla_replay_dataset_sd/`, so the GS replay dataset (`carla_replay_dataset/`) is not overwritten.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/maps/map.xodr            (loaded by 3F_sd)
+data/data_for_carla/<bag_name>/camera.json
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+data/data_for_carla/<bag_name>/instance_color_map.json
+```
+
+Output:
+
+```text
+data/processed_dataset/<bag_name>/carla_replay_dataset_sd/
+├── rgb/
+├── semantic/
+├── instance/                                              (with bag-colored cars)
+└── data/
+    └── all_frame_data.json
+```
+
+Run:
+
+```bash
+conda activate data_extraction
+python 5_execute_simulation/5A_sd_trajectory_only_carla.py
+```
+
+This script must be run before `5E`, `5G`, or `5F_sd`, because the SD pipeline reads its semantic / instance / metadata inputs from `carla_replay_dataset_sd/`.
+
 ---
 
 ### 5B_dave2_only_carla.py
 
-Runs a closed-loop DAVE-2 driving session inside CARLA using **raw CARLA RGB images** as the input to DAVE-2 (no Gaussian Splatting).
+Runs a closed-loop DAVE-2 driving session inside CARLA using **raw CARLA RGB images** as the input to DAVE-2 (no Gaussian Splatting, no Stable Diffusion).
 
 The script teleports the hero vehicle to the start of the recorded trajectory, applies a stabilization sequence and a launch warmup to the vehicle physics, and then enters a closed-loop control loop where every camera frame is sent to the DAVE-2 server, the predicted steering is applied to the vehicle, and the vehicle keeps moving forward at a constant speed (`DRIVE_SPEED_KMH = 10.0` by default).
 
@@ -3989,7 +4609,7 @@ conda activate data_extraction
 python 5_execute_simulation/5B_dave2_only_carla.py
 ```
 
-This script is useful as the **baseline DAVE-2 closed-loop run** without any neural rendering between the simulator and the model.
+This script is the **baseline DAVE-2 closed-loop run** without any neural rendering between the simulator and the model. It is reused as-is by both `step5.sh --mode 5B` (GS branch) and `step5_sd.sh --mode 5B` (SD branch).
 
 ---
 
@@ -4110,18 +4730,197 @@ Useful CLI arguments:
 | `--output_dir <path>` | Custom output directory for this run (overrides auto-increment) |
 | `--run_id N` | Force a specific run number, e.g. `--run_id 5` → `data/results/splatfacto_run5` |
 
-This script is the **main experiment** of the pipeline: it answers whether a self-driving model trained on real images can drive in a CARLA scenario when the input is reconstructed from the same real images via Gaussian Splatting.
+This script is the **main GS-branch experiment**: it answers whether a self-driving model trained on real images can drive in a CARLA scenario when the input is reconstructed from the same real images via Gaussian Splatting.
+
+---
+
+### 5E_stable_diff_offline_generation.py
+
+Generates Stable Diffusion frames offline from the SD replay dataset produced by `5A_sd`, using **one fixed ControlNet configuration** — the best one identified by the thesis. This is the SD counterpart of "running a single replay", and the script invoked when you call `step5_sd.sh --mode 5C`.
+
+What the script does:
+
+1. Loads SD1.5 + LoRA + 3 ControlNets (segmentation, instance, temporal) from `<EXTERNAL_DRIVE>/cam2sim_sd/<bag>/SD_Training_Outputs_Split/part_<N>/`. The pipeline is loaded **once** before the frame loop, not per-frame.
+2. Reads semantic + instance maps and per-frame metadata from `data/processed_dataset/<bag>/carla_replay_dataset_sd/`.
+3. For each replay frame, picks the trajectory chunk closest to the current ego location, switches to the corresponding `part_<N>` model if needed (with carry-over of the last generated frame for temporal coherence), and generates one SD frame using the realtime generator in `utils/stable_diffusion.py` (best schedule + guess mode + fixed seed from the thesis).
+4. Writes one PNG per frame to the external drive.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/carla_replay_dataset_sd/{semantic,instance,data}
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/SD_Training_Outputs_Split/part_<N>/
+```
+
+Output:
+
+```text
+<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/sd_offline_generation/
+└── frame_XXXXXX.png
+```
+
+Run:
+
+```bash
+conda activate stable_diff
+python 5_execute_simulation/5E_stable_diff_offline_generation.py
+```
+
+Useful CLI arguments:
+
+| Argument | Effect |
+|---|---|
+| `--max-frames N` | Stop after `N` frames (default: all frames in the replay dataset). |
+| `--force` | Re-generate frames whose PNG already exists. By default the script is idempotent at the frame level. |
+
+This script does **not** require CARLA: it consumes the replay dataset produced by `5A_sd`, so once you have run `5A_sd`, you can shut CARLA down and run the SD inference offline.
+
+---
+
+### 5G_stable_diff_grid_search.py
+
+Grid search version of `5E_stable_diff_offline_generation.py`. Generates the same replay dataset with **100 different SD control configurations**, one folder per configuration. This is the coarse parameter exploration described in the thesis as the first stage of the SD evaluation pipeline (100 configs × 10 frames, evaluated with all four metric groups in Step 6).
+
+Each configuration varies:
+
+- `control_start = [seg_start, inst_start, temp_start]`
+- `control_end   = [seg_end,   inst_end,   temp_end]`
+- `guess_mode    = True / False` (ControlNet "guess" mode)
+- `use_fixed_seed = True / False` (fixed seed = 50, or random per call)
+
+Default grid: 25 (start, end) schedules × 4 (guess_mode, fixed_seed) conditions = **100 configurations**. Configurations are labelled to encode all the parameters in the folder name, so the per-config metric reports produced by Step 6D can be parsed back into START / END schedule values by Step 6E.
+
+The pipeline is loaded **once** before the configuration loop, not per-config, and the previous-frame state is reset between configurations (each config is its own independent temporal sequence). Idempotency is enforced at both the configuration and the per-frame level: a config whose folder already contains all expected PNGs is skipped, and within a config any pre-existing PNG is read back from disk to preserve temporal coherence without regenerating it.
+
+Default input:
+
+```text
+data/processed_dataset/<bag_name>/carla_replay_dataset_sd/{semantic,instance,data}
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/SD_Training_Outputs_Split/part_<N>/
+```
+
+Output:
+
+```text
+<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/sd_grid_search/
+├── <config_label>/
+│   └── frame_XXXXXX.png
+└── grid_search_info.json
+```
+
+The `<config_label>` encodes the schedule and condition, e.g.
+
+```text
+A_guessT_seedFixed_cfg00__START_seg_0.0_inst_0.0_temp_0.0__END_seg_0.33_inst_0.66_temp_1.0
+```
+
+Run:
+
+```bash
+conda activate stable_diff
+python 5_execute_simulation/5G_stable_diff_grid_search.py \
+    --max-frames 10
+```
+
+Useful CLI arguments:
+
+| Argument | Effect |
+|---|---|
+| `--max-frames N` | How many replay frames to use per configuration (default: 10, matching the thesis coarse stage). |
+| `--max-configs N` | Only run the first `N` grid configurations. Default: all 100. |
+| `--output-root <path>` | Override the output root (default: `<EXTERNAL_DRIVE>/cam2sim_sd/<bag>/sd_grid_search/`). |
+| `--force` | Re-run configurations whose folder already looks complete. |
+
+The output layout (one subfolder per configuration) is what `6_validation/6D_image_quality_metrics.py` expects in its default (non-flat) mode. Once the grid search is done, evaluate it with:
+
+```bash
+python 6_validation/6D_image_quality_metrics.py \
+    --gt-folder    data/raw_dataset/reference_bag/images \
+    --input-folder <EXTERNAL_DRIVE>/cam2sim_sd/reference_bag/sd_grid_search \
+    --output-folder <EXTERNAL_DRIVE>/cam2sim_sd/reference_bag/sd_grid_search_METRICS \
+    --crop-bottom 45
+```
+
+and then rank the configurations with `6_validation/6E_evaluate_image_metrics_results.py`. See `6_validation/README.md` for details.
+
+`5G` is **not** wired into `step5_sd.sh` because it is meant to be launched by hand after `5A_sd` has produced the SD replay dataset. CARLA is not required during grid search execution.
+
+---
+
+### 5F_sd_dave2.py
+
+Runs a closed-loop DAVE-2 driving session inside CARLA, with DAVE-2 receiving **Stable-Diffusion-rendered views** instead of raw CARLA frames. This is the SD-branch counterpart of `5D_dave2.py`.
+
+What the script does:
+
+1. Spawns the hero vehicle at the first trajectory pose, applies a stabilization sequence + launch warmup (same physics handling as `5B` / `5D`).
+2. At every frame, samples CARLA's semantic + instance segmentation sensors (the instance map is remapped to bag colors using `instance_color_map.json`, same logic as `5A_sd`).
+3. Picks the SD model part whose training trajectory chunk is closest to the current ego location. To avoid rapid flicker between adjacent parts, model switches are gated by a 5-frame hysteresis (i.e. the new part must remain the best choice for 5 consecutive frames before the switch is committed).
+4. Generates the SD frame with the realtime generator (best schedule from the thesis, guess mode + fixed seed), using the previous SD frame as temporal conditioning.
+5. Sends the SD frame to the DAVE-2 server, applies the predicted steering, and ticks the world forward at constant speed.
+
+Termination conditions: same as `5D` (`--max_frames`, low-z fall, stuck-detector, coverage, user quit).
+
+Default input:
+
+```text
+data/data_for_carla/<bag_name>/camera.json
+data/data_for_carla/<bag_name>/trajectory_positions_rear_odom_yaw.json
+data/data_for_carla/<bag_name>/instance_color_map.json
+<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/SD_Training_Outputs_Split/part_<N>/
+```
+
+Output:
+
+```text
+data/results/sd_run<N>/
+├── carla_rgb/            (CARLA ground-truth frames used as reference)
+├── generated_sd/         (SD frames actually fed to DAVE-2)
+├── instance_remapped/    (CARLA instance maps after bag-color remapping)
+└── trajectory.json
+```
+
+Run, in **two separate terminals**:
+
+Terminal 1 (DAVE-2 server):
+
+```bash
+conda activate dave_2
+cd system_under_test
+python communicator.py
+```
+
+Terminal 2 (driving script):
+
+```bash
+conda activate stable_diff
+python 5_execute_simulation/5F_sd_dave2.py
+```
+
+Useful CLI arguments:
+
+| Argument | Effect |
+|---|---|
+| `--max_frames N` | Stop after `N` frames. |
+| `--no_save` | Disable frame saving (trajectory JSON is still written). |
+| `--output_dir <path>` | Custom output directory for this run (overrides auto-increment). |
+| `--run_id N` | Force a specific run number, e.g. `--run_id 5` → `data/results/sd_run5`. |
+
+This script is the **main SD-branch experiment**: it answers whether a self-driving model trained on real images can drive in a CARLA scenario when the input is rendered through Stable Diffusion conditioned on CARLA semantic + instance maps.
 
 ---
 
 ## Suggested execution order
 
-The four scripts are **independent** and serve different purposes. Run any subset depending on what you want to measure.
+The seven scripts are **independent** and serve different purposes. Run any subset depending on what you want to measure.
 
-If you want to run all of them in turn (each preceded by a fresh `3F` to reset the world):
+### Gaussian Splatting branch
 
 ```bash
 # Common prerequisite: CARLA running + scenario prepared
+python 3_generate_simulation_data/3C_setup_carla.py
 python 3_generate_simulation_data/3F_generate_carla_scenario.py
 
 # Trajectory replay in CARLA only
@@ -4141,7 +4940,30 @@ python 5_execute_simulation/5C_trajectory_replay.py
 python 5_execute_simulation/5D_dave2.py
 ```
 
-If a previous run left the world in a strange state (vehicles destroyed, sensors leaked, etc.), re-run `3F_generate_carla_scenario.py` to restore a clean scenario before launching the next script.
+### Stable Diffusion branch
+
+```bash
+# Common prerequisite: CARLA running with the custom Glass.uasset + SD scenario prepared
+python 3_generate_simulation_data/3C_sd_setup_carla.py
+python 3_generate_simulation_data/3F_sd_generate_carla_scenario.py
+
+# 1. Produce the SD replay dataset (bag-colored instance maps + semantic + metadata)
+conda activate data_extraction
+python 5_execute_simulation/5A_sd_trajectory_only_carla.py
+
+# 2. (Optional) single-config offline SD generation (best schedule from the thesis)
+conda activate stable_diff
+python 5_execute_simulation/5E_stable_diff_offline_generation.py
+
+# 3. (Optional) coarse grid search (100 configs x 10 frames) — input for Step 6D/6E
+python 5_execute_simulation/5G_stable_diff_grid_search.py --max-frames 10
+
+# 4. (Optional) closed-loop DAVE-2 on SD-rendered views
+# (DAVE-2 server must be running in another terminal)
+python 5_execute_simulation/5F_sd_dave2.py
+```
+
+If a previous run left the world in a strange state (vehicles destroyed, sensors leaked, etc.), re-run the appropriate `3F` / `3F_sd` script to restore a clean scenario before launching the next step-5 script.
 
 ---
 
@@ -4150,23 +4972,30 @@ If a previous run left the world in a strange state (vehicles destroyed, sensors
 | Script | Main output |
 |---|---|
 | `5A_trajectory_only_carla.py` | `data/processed_dataset/<bag_name>/carla_replay_dataset/{rgb,semantic,instance}/`, `data/all_frame_data.json` |
-| `5B_dave2_only_carla.py` | `data/processed_dataset/<bag_name>/dave2_runs/only_carla_run<RUN_NUMBER>/{rgb,semantic,instance,depth}/`, `data/trajectory.json` |
+| `5A_sd_trajectory_only_carla.py` | `data/processed_dataset/<bag_name>/carla_replay_dataset_sd/{rgb,semantic,instance,data}/` (instance maps recolored with bag colors) |
+| `5B_dave2_only_carla.py` | `data/processed_dataset/<bag_name>/dave2_runs/only_carla_run<RUN_NUMBER>/{rgb,semantic,instance,depth,data}/` |
 | `5C_trajectory_replay.py` | `data/data_for_carla/<bag_name>/replay_results/<bag_name>_replay/{carla,gs,combined}/` |
 | `5D_dave2.py` | `data/results/splatfacto_run<N>/{rgb_gt,generated_gs}/`, `data/results/splatfacto_run<N>/trajectory.json` |
+| `5E_stable_diff_offline_generation.py` | `<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/sd_offline_generation/frame_XXXXXX.png` |
+| `5G_stable_diff_grid_search.py` | `<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/sd_grid_search/<config_label>/frame_XXXXXX.png`, `grid_search_info.json` |
+| `5F_sd_dave2.py` | `data/results/sd_run<N>/{carla_rgb,generated_sd,instance_remapped}/`, `data/results/sd_run<N>/trajectory.json` |
 
 ---
 
 ## Notes
 
-- All four scripts are **independent**. They are not alternatives to each other and you can run any subset.
-- All four scripts require CARLA running and the scenario prepared by `3F_generate_carla_scenario.py`. They reuse the existing hero vehicle and do not load the map themselves.
+- All step-5 scripts are **independent**. They are not alternatives to each other and you can run any subset.
+- GS-branch scripts (`5A`, `5B`, `5C`, `5D`) require CARLA + scenario prepared by `3F_generate_carla_scenario.py`. SD-branch scripts that talk to CARLA (`5A_sd`, `5F_sd`) require CARLA + scenario prepared by `3F_sd_generate_carla_scenario.py` (which uses the custom opaque `Glass.uasset` and produces `instance_color_map.json`). All step-5 scripts reuse the existing hero vehicle and do not load the map themselves.
 - Scripts that use Gaussian Splatting (`5C`, `5D`) must be run from the `nerfstudio` environment because `gsplat` is only installed there.
-- Scripts that use DAVE-2 (`5B`, `5D`) require the DAVE-2 server (`system_under_test/communicator.py`) to be running in a separate terminal, in the `dave_2` environment, with `final.h5` present.
-- The `final.h5` model weights file must be obtained separately and placed inside `system_under_test/`. The DAVE-2 server will fail to start otherwise.
-- `5B` and `5D` use a stabilization sequence and a 100-tick launch warmup before the closed-loop drive starts. This is required to overcome the ackermann controller's startup inertia after teleporting the hero vehicle. Without the warmup, the stuck-detector trips around frame 50 and the run ends prematurely.
-- `5D` spawns the hero vehicle using the road waypoint z (`waypoint.z + 0.10`) instead of the raw trajectory z, because the trajectory's z is the LiDAR/base_link altitude and tends to be a few centimeters below the CARLA road mesh. Spawning at the raw z makes physics expel the car upward, which prevents it from driving forward.
-- All four scripts honor `--max_frames` (or `MAX_FRAMES` in the configuration section) to limit how long they run, which is useful for quick smoke tests.
-- After running `3F_generate_carla_scenario.py`, the parked vehicles and hero remain alive in CARLA between step-5 scripts, so you can launch them back-to-back without re-running `3F` every time.
+- Scripts that use Stable Diffusion (`5E`, `5G`, `5F_sd`) must be run from the `stable_diff` environment because `diffusers 0.33.1` + the pinned `transformers` only live there. `5E` and `5G` do **not** require CARLA; they consume the offline replay dataset produced by `5A_sd`.
+- Scripts that use DAVE-2 (`5B`, `5D`, `5F_sd`) require the DAVE-2 server (`system_under_test/communicator.py`) to be running in a separate terminal, in the `dave_2` environment, with `final.h5` present.
+- `5B`, `5D`, and `5F_sd` use a stabilization sequence and a launch warmup before the closed-loop drive starts. This is required to overcome the ackermann controller's startup inertia after teleporting the hero vehicle. Without the warmup, the stuck-detector trips around frame 50 and the run ends prematurely.
+- `5D` spawns the hero vehicle using the road waypoint z (`waypoint.z + 0.10`) instead of the raw trajectory z, because the trajectory's z is the LiDAR/base_link altitude and tends to be a few centimeters below the CARLA road mesh. Spawning at the raw z makes physics expel the car upward, which prevents it from driving forward. The SD-branch `5F_sd` applies the same correction.
+- `5E` and `5G` set `os.environ["HF_HOME"]` **before** importing `utils.stable_diffusion`, so the SD1.5 base model and the Cityscapes/TemporalNet ControlNets are downloaded to and reused from `<EXTERNAL_DRIVE>/cam2sim_sd/huggingface_cache/` (~9 GB total). If you set `HF_HOME` after importing `diffusers`, the cache ends up under `~/.cache/huggingface/` instead and the weights have to be redownloaded.
+- `5G` is idempotent at both the configuration and the frame level. Re-running it after a partial completion only generates the missing frames; the `grid_search_info.json` summary is flushed periodically so progress is not lost on a crash.
+- `5F_sd` uses a 5-frame hysteresis on SD-model switches, so the active `part_<N>` only changes if the new part remains the best choice for 5 consecutive frames. This prevents flicker on the boundaries between adjacent trajectory chunks.
+- All step-5 scripts honor `--max_frames` (or `MAX_FRAMES` in the configuration section) to limit how long they run, which is useful for quick smoke tests.
+- After running `3F_generate_carla_scenario.py` or `3F_sd_generate_carla_scenario.py`, the parked vehicles and hero remain alive in CARLA between step-5 scripts, so you can launch them back-to-back without re-running `3F` every time.
 
 </details>
 
@@ -4177,11 +5006,13 @@ If a previous run left the world in a strange state (vehicles destroyed, sensors
 
 This folder contains the sixth step of the data-processing pipeline.
 
-The scripts in this folder compare the outputs of the simulation step against ground-truth produced from the real recording, and quantify how close the simulated views and the simulated drives are to the real ones. Each script is **independent** and corresponds to a different evaluation:
+The scripts in this folder compare the outputs of the simulation step against ground-truth produced from the real recording, and quantify how close the simulated views and the simulated drives are to the real ones. Each script is independent and corresponds to a different evaluation:
 
 - Collect everything Step 6 needs into a single self-contained `data/data_for_validation/` directory
 - Compare semantic segmentation maps (real vs CARLA replay)
 - Compute driving-quality metrics (Min-Frechet distance, corridor violation, steering jitter)
+- Compute image-quality metrics on Stable Diffusion generated frames (17 metrics in 4 groups, matching the thesis: Single Image, Vehicle, Distribution, Temporal)
+- Aggregate the image-quality metrics into z-score-based rankings, with optional correlation against human rankings
 - Plot all trajectories on an OpenStreetMap basemap (utility)
 
 The scripts are not alternatives to each other — they answer different questions, and you may run any subset depending on what you want to evaluate.
@@ -4206,9 +5037,11 @@ The goal of this step is to evaluate the simulation against the real recording w
 
 The scripts can produce:
 
-- A self-contained `data/data_for_validation/` directory with all the inputs needed by `6B` and `6C` (simulated drive trajectories, semantic GT, semantic CARLA replays)
+- A self-contained `data/data_for_validation/` directory with all the inputs needed by 6B and 6C (simulated drive trajectories, semantic GT, semantic CARLA replays)
 - Per-frame IoU (Background, Car, Road) and mean IoU between real and simulated semantic maps, plus per-frame visual diagnostics and an aggregated summary
 - Per-run and per-method driving-quality metrics (Min-Frechet, corridor violation, mean excess, steering jitter)
+- Per-config image-quality reports for Stable Diffusion generations (17 metrics: 5 Single Image + 3 Vehicle + 8 Distribution + 4 Temporal), one JSON per configuration
+- Z-score-normalized rankings of SD configurations across the 4 metric groups, plus optional Spearman/Kendall correlation against human evaluator rankings
 - A multi-panel plot of every real-world and simulated trajectory on top of OpenStreetMap, plus a LaTeX-formatted table with completion statistics
 
 ---
@@ -4221,9 +5054,15 @@ project_root/
 │   ├── 6A_copy_data_for_validation.py
 │   ├── 6B_semantic_map_comparision.py
 │   ├── 6C_driving_quality_metrics.py
+│   ├── 6D_image_quality_metrics.py
+│   ├── 6E_evaluate_image_metrics_results.py
 │   └── 6UTIL_plot_all_trajectories.py
 │
 ├── data/
+│   ├── raw_dataset/
+│   │   └── <bag_name>/
+│   │       └── images/                    (real RGB frames; ground truth for 6D)
+│   │
 │   ├── results/
 │   │   └── splatfacto_run<N>/             (Step 5D output; input for 6A)
 │   │       └── trajectory.json
@@ -4251,18 +5090,29 @@ project_root/
 │           └── carla_replay_dataset/
 │               └── semantic/              (source for 6A; from Step 5A)
 │
-└── results/
-    └── semantic/                          (output of 6B)
-        ├── <frame>_iou.json
-        ├── <frame>_vis.png
-        └── summary.json
+├── results/
+│   └── semantic/                          (output of 6B)
+│       ├── <frame>_iou.json
+│       ├── <frame>_vis.png
+│       └── summary.json
+│
+└── <EXTERNAL_DRIVE>/
+    └── cam2sim_sd/
+        └── <bag_name>/
+            ├── sd_grid_search/            (input for 6D; from Step 5 grid search)
+            │   ├── <config_label>/
+            │   │   └── frame_XXXXXX.png
+            │   └── grid_search_info.json
+            └── sd_grid_search_METRICS/    (output of 6D; input for 6E)
+                ├── <config_label>_image_level_report.json
+                └── distribution_summary.csv
 ```
 
 ---
 
 ## Requirements
 
-Use the existing Conda environment named `data_extraction`. All scripts in this folder are pure Python (`numpy`, `Pillow`, `matplotlib`, `pyproj`, `contextily`) and do not need CARLA, Nerfstudio, or the DAVE-2 server to be running.
+Use the existing Conda environment named `data_extraction`. All scripts in this folder are pure Python (numpy, Pillow, matplotlib, pyproj, contextily, torch, transformers, ultralytics, scikit-image, scikit-learn, shapely, pandas, natsort) and do not need CARLA, Nerfstudio, or the DAVE-2 server to be running.
 
 Activate the environment before running any script in this folder:
 
@@ -4276,11 +5126,23 @@ conda activate data_extraction
 pip install contextily
 ```
 
+`6D_image_quality_metrics.py` additionally requires:
+
+```bash
+python -m pip install natsort scikit-image scikit-learn shapely ultralytics
+```
+
+(use `python -m pip` instead of plain `pip` to make sure the install lands in the active conda env). On first run, `6D` also downloads SegFormer-b0 (~15 MB), YOLOv8n (~7 MB), and InceptionV3 (~104 MB) into the standard HuggingFace and torch hub caches; subsequent runs reuse them.
+
+`6E_evaluate_image_metrics_results.py` additionally uses `scipy.stats` (for Spearman / Kendall correlations) but no extra install is needed — `scipy` is already in the env.
+
 ---
 
 ## Inputs from previous steps
 
-The metric scripts (`6B`, `6C`) read all their inputs from a single self-contained directory:
+The metric scripts read their inputs from a few different sources depending on what they evaluate:
+
+**6B and 6C** read all their inputs from a single self-contained directory:
 
 ```text
 data/data_for_validation/
@@ -4292,38 +5154,51 @@ data/data_for_validation/
 
 `6A_copy_data_for_validation.py` populates this directory from the actual sources produced by Step 2 (SegFormer GT) and Step 5 (CARLA replay semantic, simulated drives). Alternatively, you can download the precomputed bundle directly (see the Step 6 README section, "Download the validation data").
 
-The original sources, used by `6A` as input, are:
+The original sources, used by 6A as input, are:
 
-1. **Simulated drives** produced by Step 5D:
-
+1. Simulated drives produced by Step 5D:
 ```text
-data/results/<method>_run<N>/trajectory.json
+   data/results/<method>_run<N>/trajectory.json
 ```
 
-2. **Real semantic maps** produced upstream by SegFormer on the recorded RGB frames (Step 2):
-
+2. Real semantic maps produced upstream by SegFormer on the recorded RGB frames (Step 2):
 ```text
-data/processed_dataset/<bag_name>/semantic_maps/
+   data/processed_dataset/<bag_name>/semantic_maps/
 ```
-
    Each PNG uses only three RGB colors:
-
    - Background: `(0, 0, 0)`
-   - Car:        `(0, 0, 142)`
-   - Road:       `(128, 64, 128)`
+   - Car: `(0, 0, 142)`
+   - Road: `(128, 64, 128)`
 
-3. **Simulated semantic maps** produced by Step 5A:
-
+3. Simulated semantic maps produced by Step 5A:
 ```text
-data/processed_dataset/<bag_name>/carla_replay_dataset/semantic/
+   data/processed_dataset/<bag_name>/carla_replay_dataset/semantic/
 ```
-
    These are 512x512 and named `{frame_id:06d}.png`.
 
-4. **OpenDRIVE map** (used by 6C and 6UTIL):
-
+4. OpenDRIVE map (used by 6C and 6UTIL):
 ```text
-data/processed_dataset/<bag_name>/maps/map.xodr
+   data/processed_dataset/<bag_name>/maps/map.xodr
+```
+
+**6D and 6E** evaluate Stable Diffusion outputs and read from a different location, because SD generations live on the external drive used by the SD branch of the pipeline:
+
+5. Ground-truth real images (used by 6D as the reference set against which SD generations are compared):
+```text
+   data/raw_dataset/<bag_name>/images/*.png
+```
+
+6. SD-generated frames produced by the grid search in Step 5 (one subfolder per configuration):
+```text
+   <EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/sd_grid_search/
+       <config_label>/frame_XXXXXX.png
+```
+   Produced by `5_execute_simulation/5E_stable_diff_offline_generation_grid.py`. Each `<config_label>` encodes the ControlNet schedule, guess mode, and seed setting used for that generation.
+
+7. SD metrics reports produced by `6D` (input for `6E`):
+```text
+   <EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/sd_grid_search_METRICS/
+       <config_label>_image_level_report.json
 ```
 
 If any of these are missing, see the corresponding earlier step, or download the precomputed bundle from the Step 6 README section.
@@ -4338,7 +5213,7 @@ If any of these are missing, see the corresponding earlier step, or download the
 BAG_NAME = "reference_bag"
 ```
 
-This must match the dataset folder used by the previous steps. All source and destination paths in `6A` can also be overridden via CLI arguments (see the `6A` section below).
+This must match the dataset folder used by the previous steps. All source and destination paths in 6A can also be overridden via CLI arguments (see the 6A section below).
 
 `6B_semantic_map_comparision.py` reads everything from `data/data_for_validation/` and has no `BAG_NAME`. The only configuration values it exposes are the resize target, the number of classes, the color tolerance, and the fixed palette:
 
@@ -4356,42 +5231,76 @@ COLOR_TO_CLASS = {
 
 `6C` and `6UTIL` take all paths via command-line arguments and have no hardcoded `BAG_NAME`.
 
+`6D_image_quality_metrics.py` takes all paths via CLI and has no hardcoded `BAG_NAME` either. It exposes a few constants near the top for the SegFormer / YOLO models used internally and a list of subfolders to exclude from evaluation:
+
+```python
+SEGFORMER_MODEL = "nvidia/segformer-b0-finetuned-cityscapes-1024-1024"
+YOLO_MODEL_NAME = "yolov8n.pt"
+VEHICLE_CLASSES = {2: "car", 3: "motorbike", 5: "bus", 7: "truck", 1: "bicycle"}
+MIN_VEHICLE_AREA = 600
+IOU_THRESHOLD    = 0.5
+```
+
+`6E_evaluate_image_metrics_results.py` is configured at the top via two important dictionaries that group the 17 metrics into the same 4 categories used in the thesis:
+
+```python
+METRIC_GROUPS = {
+    "Score_Vehicle":      {"Veh_Recall", "Veh_Precision", "Veh_AvgIoU"},
+    "Score_Distribution": {"FID", "KID_mean", "IS_mean", "MMD_RBF",
+                            "PRDC_Precision", "PRDC_Recall",
+                            "PRDC_Density", "PRDC_Coverage",
+                            "Precision", "Recall", "Density", "Coverage"},
+    "Score_SingleImage":  {"PSNR", "SSIM", "MSE", "SegScore", "CPL"},
+    "Score_Temporal":     {"Temp_SSIM", "Temp_PSNR", "Temp_MSE", "Temp_CPL"},
+}
+```
+
+For each metric the script knows whether higher or lower values are better:
+
+```python
+HIGHER_IS_BETTER = {"PSNR", "SSIM", "SegScore", "Veh_Recall", "Veh_Precision",
+                    "Veh_AvgIoU", "IS_mean", "PRDC_Precision", "PRDC_Recall",
+                    "PRDC_Density", "PRDC_Coverage", "Precision", "Recall",
+                    "Density", "Coverage", "Temp_SSIM", "Temp_PSNR"}
+LOWER_IS_BETTER  = {"MSE", "FID", "KID_mean", "MMD_RBF", "CPL",
+                    "Temp_MSE", "Temp_CPL"}
+```
+
+The z-score is negated for lower-is-better metrics so that a higher value always means better performance, matching the convention used in the thesis.
+
 ---
 
 ## Scripts
 
 ### 6A_copy_data_for_validation.py
 
-Collects everything Step 6 needs into `data/data_for_validation/` so that `6B` and `6C` can read all their inputs from a single, self-contained directory.
+Collects everything Step 6 needs into `data/data_for_validation/` so that 6B and 6C can read all their inputs from a single, self-contained directory.
 
-The script does **not** compute any metric and does **not** modify any source file: it only copies files (and renames the trajectory JSONs).
+The script does not compute any metric and does not modify any source file: it only copies files (and renames the trajectory JSONs).
 
 What this script copies:
 
-1. **Simulated drive trajectories** produced by Step 5D:
-
+1. Simulated drive trajectories produced by Step 5D:
 ```text
-data/results/<method>_run<N>/trajectory.json
-    ->  data/data_for_validation/GS_trajectories/<method>_run<N>_trajectory.json
+   data/results/<method>_run<N>/trajectory.json
+       ->  data/data_for_validation/GS_trajectories/<method>_run<N>_trajectory.json
 ```
 
-2. **Real-world semantic maps** (SegFormer GT) produced by Step 2A:
-
+2. Real-world semantic maps (SegFormer GT) produced by Step 2A:
 ```text
-data/processed_dataset/<BAG>/semantic_maps/*.png
-    ->  data/data_for_validation/semantic/*.png
+   data/processed_dataset/<BAG>/semantic_maps/*.png
+       ->  data/data_for_validation/semantic/*.png
 ```
 
-3. **Simulated semantic maps** (CARLA replay PRED) produced by Step 5A:
-
+3. Simulated semantic maps (CARLA replay PRED) produced by Step 5A:
 ```text
-data/processed_dataset/<BAG>/carla_replay_dataset/semantic/*.png
-    ->  data/data_for_validation/semantic_carla/*.png
+   data/processed_dataset/<BAG>/carla_replay_dataset/semantic/*.png
+       ->  data/data_for_validation/semantic_carla/*.png
 ```
 
 Behavior:
 
-- Existing files in the destination directories are **left untouched**. A copy with the same name will overwrite the previous file.
+- Existing files in the destination directories are left untouched. A copy with the same name will overwrite the previous file.
 - Trajectory JSONs are validated before copying (must be a non-empty JSON list of dicts with `x`/`y` fields). Invalid files are reported and skipped.
 - PNGs are copied flat, preserving the source filename.
 - Pass `--dry_run` to see what would happen without writing.
@@ -4441,7 +5350,7 @@ Skip this script if `data/data_for_validation/` is already populated (e.g. you d
 
 ### 6B_semantic_map_comparision.py
 
-Compares the real semantic maps against the simulated semantic maps frame by frame and computes per-class IoU. Inputs are read from `data/data_for_validation/semantic/` (GT) and `data/data_for_validation/semantic_carla/` (PRED), which are populated by `6A`.
+Compares the real semantic maps against the simulated semantic maps frame by frame and computes per-class IoU. Inputs are read from `data/data_for_validation/semantic/` (GT) and `data/data_for_validation/semantic_carla/` (PRED), which are populated by 6A.
 
 What the script does:
 
@@ -4495,9 +5404,9 @@ Computes driving-quality metrics for the simulated drives within a common scenar
 What the script does:
 
 1. Loads every `trajectory<N>.csv` in `--rw_dir` and converts UTM coordinates to the CARLA frame using the OpenDRIVE projection parameters from `--map_xodr`.
-2. Loads every `<prefix>_run<N>_trajectory.json` from each directory passed via `--sim_dirs label=path` (the `label` is used for display only; the `<prefix>` becomes the "method" name in the output).
+2. Loads every `<prefix>_run<N>_trajectory.json` from each directory passed via `--sim_dirs label=path` (the label is used for display only; the `<prefix>` becomes the "method" name in the output).
 3. Either loads a precomputed `scenario_segment.json` from `--segment`, or rebuilds it from the real-world CSVs when `--recompute_segment` is set.
-4. Filters out simulated runs whose completion is below `--completion_threshold` (default `0.95`) of the scenario segment. Failed runs are listed but excluded from the averages.
+4. Filters out simulated runs whose completion is below `--completion_threshold` (default 0.95) of the scenario segment. Failed runs are listed but excluded from the averages.
 5. Builds the lateral corridor from the envelope of all real-world runs at the scenario segment.
 6. For every successful simulated run, computes the Min-Frechet distance against each real-world run, the corridor violation rate, the mean excess, and the conditional excess (mean excess restricted to points outside the corridor).
 7. Computes steering jitter (standard deviation of the steering rate within the segment) for both real-world and simulated runs.
@@ -4556,8 +5465,159 @@ Useful CLI arguments:
 | `--sim_dirs <label>=<path> ...` | One or more sim directories. The label is for display only (required) |
 | `--segment <path>` | Precomputed `scenario_segment.json`. Required unless `--recompute_segment` is set |
 | `--recompute_segment` | Recompute the segment from the real-world CSVs and overwrite `<rw_dir>/scenario_segment.json` |
-| `--completion_threshold <float>` | Minimum completion to be considered successful (default: `0.95`) |
-| `--frechet_max_pts <int>` | Max points for Frechet computation (default: `500`) |
+| `--completion_threshold <float>` | Minimum completion to be considered successful (default: 0.95) |
+| `--frechet_max_pts <int>` | Max points for Frechet computation (default: 500) |
+
+---
+
+### 6D_image_quality_metrics.py
+
+Computes per-image image-quality metrics on Stable Diffusion generated frames, matching the 17 metrics used in the thesis. Each metric falls in one of four groups:
+
+- **Single Image** (real vs generated, paired per frame): MSE, PSNR, SSIM, CPL, SegScore.
+- **Vehicle Consistency** (YOLO detections, paired per frame): Veh_Recall, Veh_Precision, Veh_AvgIoU.
+- **Distribution** (statistics over the full set, InceptionV3 features): FID, KID, IS, MMD-RBF, PRDC Precision, PRDC Recall, PRDC Density, PRDC Coverage.
+- **Temporal Consistency** (consecutive frames inside one generated set): Temp_SSIM, Temp_PSNR, Temp_MSE, Temp_CPL.
+
+What the script does:
+
+1. Iterates over the subfolders inside `--input-folder` (one per SD configuration), or operates on a single folder when `--flat` is set.
+2. For each configuration, matches generated frames to the ground-truth real images in `--gt-folder` by filename, optionally crops `--crop-bottom` pixels off the bottom of both (useful to remove the ego-vehicle hood: 45 px works for the cam2sim bag), and computes the eight image-level metrics.
+3. Aggregates the image-level metrics into per-folder averages, and additionally computes their cross-frame standard deviations into a `distribution_stdev_metrics` block.
+4. Computes the eight distribution-level metrics by extracting InceptionV3 features over the full GT set and the full generated set for that configuration.
+5. Computes the four temporal-consistency metrics over every consecutive pair `(frame_i, frame_{i+1})` inside the generated folder. Pairs with `MSE == 0` (duplicate / identical frames) are skipped from the pixel-level averages.
+6. Writes one JSON report per configuration and a single global CSV with the distribution metrics for every configuration.
+7. The script is idempotent: if `<config>_image_level_report.json` already exists in the output folder, that configuration is skipped on subsequent runs.
+
+Default input (typical SD grid-search layout):
+
+```text
+data/raw_dataset/<bag_name>/images/*.png                                (GT)
+<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/sd_grid_search/<config_label>/*.png   (one subfolder per config)
+```
+
+Output:
+
+```text
+<EXTERNAL_DRIVE>/cam2sim_sd/<bag_name>/sd_grid_search_METRICS/
+├── <config_label>_image_level_report.json     (one per configuration)
+└── distribution_summary.csv                   (one row per configuration, distribution-level only)
+```
+
+Per-config JSON schema:
+
+```text
+{
+  "job_name": "<config_label>",
+  "total_gt_images": int,
+  "total_gen_images": int,
+  "matched_images_compared": int,
+  "average_metrics": { MSE, PSNR, SSIM, CPL, SegScore,
+                       Veh_Recall, Veh_Precision, Veh_AvgIoU,
+                       FID, KID_mean, IS_mean, MMD_RBF,
+                       PRDC_Precision, PRDC_Recall, PRDC_Density, PRDC_Coverage,
+                       Temp_SSIM, Temp_PSNR, Temp_MSE, Temp_CPL },
+  "distribution_stdev_metrics": { stdev_<metric> ... },
+  "distribution_metrics":       { full distribution block },
+  "temporal_metrics":           { Temp_*, Temp_num_pairs },
+  "image_metrics":              { <filename>: { per-image metric dict } }
+}
+```
+
+Run (typical, against the grid search produced by Step 5):
+
+```bash
+conda activate data_extraction
+python 6_validation/6D_image_quality_metrics.py \
+    --gt-folder    data/raw_dataset/reference_bag/images \
+    --input-folder /media/davide/extra2/work/cam2sim_sd/reference_bag/sd_grid_search \
+    --output-folder /media/davide/extra2/work/cam2sim_sd/reference_bag/sd_grid_search_METRICS \
+    --crop-bottom 45
+```
+
+`--crop-bottom 45` removes the bottom 45 pixels from both the GT and the generated images before comparison. This is the value used in the thesis for the cam2sim reference bag, to crop out the ego-vehicle hood. Change it for other bags.
+
+Useful CLI arguments:
+
+| Argument | Effect |
+|---|---|
+| `--gt-folder` / `-g` (required) | Path to the ground-truth (real) images folder. |
+| `--input-folder` / `-i` (required) | Path to the generated images folder. By default contains one subfolder per configuration. |
+| `--output-folder` / `-o` (required) | Where the per-config JSON reports and the distribution CSV are written. |
+| `--flat` | Treat `--input-folder` as a single configuration (no subfolder iteration). |
+| `--job-name` | Override the report basename in flat mode (default: input folder basename). |
+| `--target-resolution WxH` | Resize both GT and generated images to this size before comparison. Default: no resize. |
+| `--crop-bottom N` | Crop N pixels from the bottom of both GT and generated images before comparison (default: 0). |
+| `--exclude-subfolders ...` | Subfolder names to skip in non-flat mode (default: `old depth canny seg baseline`). |
+| `--skip-segformer` | Skip SegFormer-based metrics (CPL, SegScore, Temp_CPL). |
+| `--skip-yolo` | Skip YOLO-based vehicle consistency metrics. |
+| `--skip-distribution` | Skip distribution-level metrics (FID / KID / IS / MMD / PRDC). |
+| `--skip-temporal` | Skip temporal-consistency metrics. |
+
+The thesis distinguishes between the *coarse* parameter exploration (100 configs × 10 frames each, evaluated with all 4 metric groups) and the *focused* parameter exploration (50 configs × 384 frames each, evaluated with all groups except Distribution because the sample size is too small for FID/KID to be meaningful, following Chong & Forsyth 2020 and Jayasumana et al. 2024). To reproduce the focused stage, add `--skip-distribution` to the command above.
+
+---
+
+### 6E_evaluate_image_metrics_results.py
+
+Aggregates the per-configuration JSON reports produced by `6D_image_quality_metrics.py` into a single ranking of SD configurations, using the same z-score-based aggregation described in the thesis.
+
+What the script does:
+
+1. Scans the folder passed as positional argument for `*_image_level_report.json` files (the output of `6D`).
+2. Parses each report and merges its `average_metrics` and `temporal_metrics` blocks into a single per-config row.
+3. Optionally parses the START / END ControlNet schedule values out of the report filename (e.g. `START_seg_0.0_inst_0.0_temp_0.33__END_seg_1.0_inst_1.0_temp_0.66`) so they can be plotted alongside the scores. Disable with `--no-params`.
+4. Computes the z-score of every numeric column across all configurations: `z = (x - mean) / std`. The z-score is negated for metrics where lower-is-better (MSE, FID, KID, MMD, CPL, Temp_MSE, Temp_CPL), so a higher z always means better.
+5. Aggregates the per-metric z-scores into 4 per-group means matching the thesis: `Score_SingleImage`, `Score_Vehicle`, `Score_Distribution`, `Score_Temporal`. The overall ranking is the mean across all metrics: `Score_Overall`.
+6. Sorts the configurations by `Score_Overall` (descending) and prints the top 10 to stdout, plus the top 5 by `Score_Vehicle` and by `Score_Temporal` separately.
+7. Optionally loads a human-ranking CSV via `--human <path>` (columns: `rank,config,human_score`), matches each entry to a metric report, computes Spearman and Kendall correlations between every numeric metric and the human score, and prints the strongest correlators. This is what produced the human-vs-automated correlation tables in the thesis.
+8. If `--csv` is provided, writes the full sorted table to disk and also dumps a `_top25.txt` file with the top 25 configuration names (useful as input for the focused-stage selection).
+9. Produces a bar chart with one bar per metric group per configuration, color-coded consistently across the four groups. If a human-rankings CSV was supplied, the human rank for each configuration is overlaid in red. Saved as `metrics_plot.png` and displayed unless `--no-plot` is given.
+
+Default input:
+
+```text
+<output-folder of 6D>/*_image_level_report.json
+```
+
+Output (depending on flags):
+
+```text
+metrics_plot.png                                        (always, unless --no-plot)
+<csv_path>.csv                                          (if --csv)
+<csv_path>_top25.txt                                    (if --csv)
+<csv_path>_correlation.csv  or correlation_results.csv  (if --human)
+```
+
+Run (typical, after `6D`):
+
+```bash
+conda activate data_extraction
+python 6_validation/6E_evaluate_image_metrics_results.py \
+    /media/davide/extra2/work/cam2sim_sd/reference_bag/sd_grid_search_METRICS \
+    --csv /media/davide/extra2/work/cam2sim_sd/reference_bag/grid_results.csv
+```
+
+With a human-rankings file:
+
+```bash
+python 6_validation/6E_evaluate_image_metrics_results.py \
+    /media/davide/extra2/work/cam2sim_sd/reference_bag/sd_grid_search_METRICS \
+    --csv /media/davide/extra2/work/cam2sim_sd/reference_bag/grid_results.csv \
+    --human /media/davide/extra2/work/cam2sim_sd/reference_bag/human_rankings.csv
+```
+
+Useful CLI arguments:
+
+| Argument | Effect |
+|---|---|
+| `folder` (positional, required) | Folder containing the per-config JSON reports produced by `6D`. |
+| `--csv <path>` | Write the full sorted table to this CSV and dump the top-25 config names to a sibling `.txt` file. |
+| `--no-plot` | Do not open the matplotlib window or write `metrics_plot.png`. |
+| `--no-params` | Do not parse START/END ControlNet values from the filenames into extra columns. |
+| `--human <path>` | Load human ranking CSV (`rank,config,human_score`), compute Spearman/Kendall vs each metric, overlay human ranks on the bar chart. |
+
+Note on small sample sizes: when `6D` was run on the focused stage (50 configs × 384 frames) without distribution metrics, the JSON reports do not contain a `Score_Distribution` block. `6E` handles this transparently: the empty group is dropped from the plot and from `Score_Overall`.
 
 ---
 
@@ -4565,7 +5625,7 @@ Useful CLI arguments:
 
 Plots all real-world and simulated drive trajectories against the scenario segment on an OpenStreetMap basemap, and prints a LaTeX-formatted summary table with completion statistics for real vs simulated runs.
 
-This script is **a visualization utility**, not a metric script: it does not write any file, it only opens an interactive matplotlib window and prints LaTeX to stdout. Use it to visually inspect the simulated runs against the real-world reference and to generate the system-level evaluation table.
+This script is a visualization utility, not a metric script: it does not write any file, it only opens an interactive matplotlib window and prints LaTeX to stdout. Use it to visually inspect the simulated runs against the real-world reference and to generate the system-level evaluation table.
 
 What the script does:
 
@@ -4574,7 +5634,7 @@ What the script does:
 3. Loads every simulated trajectory `splatfacto_run<N>_trajectory.json` from `data/data_for_validation/GS_trajectories/`. These are produced by `6A_copy_data_for_validation.py` starting from `data/results/splatfacto_run<N>/trajectory.json`.
 4. Projects each trajectory onto the reference path to compute its completion percentage with respect to the scenario segment.
 5. Plots all runs on a single OSM basemap subplot: real-world runs in blue, simulated runs in orange, scenario segment as a thick translucent green band with green/red start/end markers.
-6. Prints a LaTeX `table` environment with fail rate and completion rate (avg–max–min) for both `Real` and `3DGS` domains.
+6. Prints a LaTeX table environment with fail rate and completion rate (avg–max–min) for both Real and 3DGS domains.
 
 All paths are hardcoded relative to the project root, in line with the other scripts in `6_validation/`. No CLI arguments.
 
@@ -4609,8 +5669,8 @@ To tune behaviour, edit the constants at the top of the file:
 | Constant | Effect |
 |---|---|
 | `BAG_NAME` | Bag name used to resolve the XODR path (default: `reference_bag`) |
-| `MAP_BUFFER_M` | Map buffer in meters around the trajectories (default: `100`) |
-| `FAIL_THRESHOLD_PCT` | Completion percentage below which a run is considered failed (default: `95`) |
+| `MAP_BUFFER_M` | Map buffer in meters around the trajectories (default: 100) |
+| `FAIL_THRESHOLD_PCT` | Completion percentage below which a run is considered failed (default: 95) |
 | `RW_COLOR`, `SIM_COLOR` | Plot colors for real-world and simulated runs |
 | `LINE_STYLES` | Line style cycle (`-`, `--`, `:`) used to distinguish run numbers |
 
@@ -4618,7 +5678,7 @@ To tune behaviour, edit the constants at the top of the file:
 
 ## Suggested execution order
 
-The scripts are **independent**. Run any subset depending on what you want to measure.
+The scripts are independent. Run any subset depending on what you want to measure.
 
 A typical workflow that produces new drives in Step 5D and then evaluates them is:
 
@@ -4645,12 +5705,34 @@ python 6_validation/6C_driving_quality_metrics.py \
 python 6_validation/6B_semantic_map_comparision.py
 
 # 4. (Optional) Visual inspection on OSM
-python 6_validation/6UTIL_plot_all_trajectories.py \
-    --map_xodr data/processed_dataset/reference_bag/maps/map.xodr \
-    --segment  data/data_for_validation/real_world_trajectories/scenario_segment.json \
-    --rw_dir   data/data_for_validation/real_world_trajectories \
-    --sim_dirs splatfacto=data/data_for_validation/GS_trajectories
+python 6_validation/6UTIL_plot_all_trajectories.py
 ```
+
+A typical SD-evaluation workflow that takes the output of the Step 5 grid search and produces a ranked CSV (the basis of the figures in the thesis) is:
+
+```bash
+conda activate data_extraction
+
+# 5. Compute the 17 image-quality metrics for every SD configuration produced by 5_execute_simulation/5E_stable_diff_offline_generation_grid.py
+python 6_validation/6D_image_quality_metrics.py \
+    --gt-folder    data/raw_dataset/reference_bag/images \
+    --input-folder /media/davide/extra2/work/cam2sim_sd/reference_bag/sd_grid_search \
+    --output-folder /media/davide/extra2/work/cam2sim_sd/reference_bag/sd_grid_search_METRICS \
+    --crop-bottom 45
+
+# 6. Aggregate the 6D JSON reports into a single ranking with z-score normalization and plots
+python 6_validation/6E_evaluate_image_metrics_results.py \
+    /media/davide/extra2/work/cam2sim_sd/reference_bag/sd_grid_search_METRICS \
+    --csv /media/davide/extra2/work/cam2sim_sd/reference_bag/grid_results.csv
+
+# 6b. (optional) With a human-rankings file for correlation analysis
+python 6_validation/6E_evaluate_image_metrics_results.py \
+    /media/davide/extra2/work/cam2sim_sd/reference_bag/sd_grid_search_METRICS \
+    --csv /media/davide/extra2/work/cam2sim_sd/reference_bag/grid_results.csv \
+    --human /media/davide/extra2/work/cam2sim_sd/reference_bag/human_rankings.csv
+```
+
+`6D` and `6E` are independent of `6A`/`6B`/`6C`/`6UTIL` and read from a completely different location (the external drive used by the SD branch). You can run only the SD half of the validation, or only the GS half, or both.
 
 ---
 
@@ -4661,14 +5743,16 @@ python 6_validation/6UTIL_plot_all_trajectories.py \
 | `6A_copy_data_for_validation.py` | `data/data_for_validation/GS_trajectories/<method>_run<N>_trajectory.json`, `data/data_for_validation/semantic/*.png`, `data/data_for_validation/semantic_carla/*.png` |
 | `6B_semantic_map_comparision.py` | `results/semantic/<frame>_iou.json`, `results/semantic/<frame>_vis.png`, `results/semantic/summary.json` |
 | `6C_driving_quality_metrics.py` | `data/data_for_validation/real_world_trajectories/drive_quality_results.json` |
+| `6D_image_quality_metrics.py` | `<output-folder>/<config_label>_image_level_report.json` (one per configuration), `<output-folder>/distribution_summary.csv` |
+| `6E_evaluate_image_metrics_results.py` | `metrics_plot.png`, optional `<csv_path>.csv` + `<csv_path>_top25.txt` + `<csv_path>_correlation.csv` |
 | `6UTIL_plot_all_trajectories.py` | (no files; interactive matplotlib window + LaTeX on stdout) |
 
 ---
 
 ## Notes
 
-- All four scripts are **independent**. They are not alternatives to each other and you can run any subset.
-- All four scripts run inside the `data_extraction` Conda environment and do not need CARLA, Nerfstudio, or the DAVE-2 server to be running.
+- All scripts in this folder are independent. They are not alternatives to each other and you can run any subset.
+- All scripts run inside the `data_extraction` Conda environment and do not need CARLA, Nerfstudio, or the DAVE-2 server to be running.
 - `6A` does not delete anything from the destination directories. Files already there are left untouched, but a copy with the same name as an existing file will overwrite it. Use `--dry_run` to preview without writing, and `--skip_trajectories` / `--skip_semantic_gt` / `--skip_semantic_carla` to disable individual sub-copies.
 - `6B` reads its inputs from `data/data_for_validation/semantic/` and `data/data_for_validation/semantic_carla/`, not from `processed_dataset/`. If those directories are missing, run `6A` first or download the precomputed bundle.
 - `6B` is resumable: any frame that already has a `<frame>_iou.json` is skipped on subsequent runs. Use `--force` to recompute from scratch, or `--summary_only` to only re-aggregate the existing JSONs into `summary.json`.
@@ -4677,7 +5761,12 @@ python 6_validation/6UTIL_plot_all_trajectories.py \
 - `6C` projects every trajectory onto the same arc-length-parameterized reference path before computing metrics. Trajectories are trimmed to the scenario segment defined in `scenario_segment.json` before Min-Frechet and corridor metrics are computed.
 - `6C` reports both unconditional mean excess (averaged over every point in the segment, including points inside the corridor) and conditional excess (mean restricted to points outside the corridor). The paper reports the unconditional value.
 - Steering jitter is computed differently for real-world and simulated runs because the data sources have different timing properties: real-world uses true timestamps with a max gap filter of 0.25 s, while simulated runs use a fixed effective dt of `3/30 s` with a subsample of 3 to match the DAVE-2 prediction rate.
+- `6D` is idempotent: a configuration whose JSON report already exists in `--output-folder` is skipped on subsequent runs. To force recomputation, delete the existing JSON.
+- `6D` downloads the SegFormer-b0 cityscapes model, YOLOv8n, and InceptionV3 the first time it runs (~ 130 MB total). They are cached in the standard HuggingFace and torch hub directories and reused on later runs.
+- `6D` matches GT to generated frames by filename, so the generated subfolders must use the same naming convention as the GT (`frame_XXXXXX.png`). The script reports how many frames matched, how many were GT-only, and how many were generated-only.
+- `--crop-bottom 45` in `6D` is the value used in the thesis for the cam2sim reference bag, to remove the ego-vehicle hood from both GT and generated frames before comparison. Adjust for other bags or other camera mounts.
+- `6E` recognizes both `Score_Distribution` and missing distribution metrics. If `6D` was run with `--skip-distribution`, the corresponding group is simply omitted from `Score_Overall` and from the bar chart.
+- `6E`'s human-correlation analysis expects a CSV with columns `rank,config,human_score`. The `config` column must match the JSON filenames produced by `6D`, optionally without the `_image_level_report` suffix. Mismatches are reported and skipped.
 - `6UTIL` does not write any file. It is intended for visual inspection and for generating LaTeX snippets to include in a paper; the metric JSONs that the paper relies on are produced by `6C`.
 - `6UTIL` reads the real-world trajectories in the legacy `<condition><N>_trajectory.txt` format with a 5-column header `# FrameID, Timestamp, X, Y, Yaw`. If your real-world data is in the new CSV format used by `6C`, the file matching inside `6UTIL` will silently produce no real-world plots; either reuse the legacy txt files for this script or adapt the loader.
-
 </details>

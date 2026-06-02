@@ -150,7 +150,7 @@ def get_device():
 def get_image_filenames(folder: str) -> List[str]:
     """Returns sorted list of image filenames in a folder."""
     if not os.path.isdir(folder):
-        print(f"⚠️ Folder does not exist: {folder}")
+        print(f" Folder does not exist: {folder}")
         return []
     return sorted([
         f for f in os.listdir(folder) 
@@ -171,11 +171,11 @@ def get_matched_filenames(gt_folder: str, gen_folder: str) -> List[str]:
     gt_only = gt_files - gen_files
     gen_only = gen_files - gt_files
     
-    print(f"  📊 GT images: {len(gt_files)} | Generated images: {len(gen_files)} | Matched: {len(matched)}")
+    print(f"   GT images: {len(gt_files)} | Generated images: {len(gen_files)} | Matched: {len(matched)}")
     if gt_only:
-        print(f"  ⚠️  {len(gt_only)} GT images have no match in generated folder (skipped)")
+        print(f"    {len(gt_only)} GT images have no match in generated folder (skipped)")
     if gen_only:
-        print(f"  ⚠️  {len(gen_only)} generated images have no match in GT folder (skipped)")
+        print(f"    {len(gen_only)} generated images have no match in GT folder (skipped)")
     
     return matched
 
@@ -185,16 +185,16 @@ def get_matched_filenames(gt_folder: str, gen_folder: str) -> List[str]:
 def get_segformer_model():
     """Initializes and returns the SegFormer model and its image processor."""
     device = get_device()
-    print(f"\n⏳ Initializing SegFormer model on device: {device}...")
+    print(f"\n Initializing SegFormer model on device: {device}...")
     try:
         image_processor = SegformerImageProcessor.from_pretrained(SEGFORMER_MODEL)
         model = SegformerForSemanticSegmentation.from_pretrained(SEGFORMER_MODEL)
         model.eval().to(device)
-        print("✅ SegFormer Model Initialized.")
+        print(" SegFormer Model Initialized.")
         return model, image_processor
     except Exception as e:
         print(f"Error initializing SegFormer model ({SEGFORMER_MODEL}): {e}")
-        print("⚠️ CPL and SegScore metrics will fail.")
+        print(" CPL and SegScore metrics will fail.")
         return None, None
 
 def decode_cityscapes_mask(predicted_mask):
@@ -245,12 +245,12 @@ def load_yolo_model():
     """Loads the YOLO model (assuming Ultralytics dependency)."""
     try:
         from ultralytics import YOLO
-        print(f"\n⏳ Loading YOLO model: {YOLO_MODEL_NAME}...")
+        print(f"\n Loading YOLO model: {YOLO_MODEL_NAME}...")
         model = YOLO(YOLO_MODEL_NAME)
-        print("✅ YOLO Model Loaded.")
+        print(" YOLO Model Loaded.")
         return model
     except ImportError:
-        print("🛑 Ultralytics YOLO not installed. Vehicle Consistency will be skipped.")
+        print(" Ultralytics YOLO not installed. Vehicle Consistency will be skipped.")
         return None
     except Exception as e:
         print(f"Error loading YOLO model: {e}")
@@ -492,7 +492,7 @@ def calculate_single_metrics_all(
         return metrics
     
     except Exception as e:
-        print(f"  ❌ Error processing {os.path.basename(image_a_path)}: {e}")
+        print(f"   Error processing {os.path.basename(image_a_path)}: {e}")
         return {k: -4 for k in metrics.keys()}
 
 
@@ -831,19 +831,19 @@ def process_single_folder(
     json_output_path = os.path.join(output_dir, f"{job_name}_image_level_report.json")
 
     if os.path.exists(json_output_path):
-        print(f"  ⏭️ JSON report already exists. Skipping computation.")
+        print(f"   JSON report already exists. Skipping computation.")
         try:
             with open(json_output_path, 'r') as f:
                 existing_data = json.load(f)
                 return existing_data.get('distribution_metrics', {})
         except Exception as e:
-            print(f"  ⚠️ Could not load existing JSON: {e}")
+            print(f"   Could not load existing JSON: {e}")
             return {}
 
     # --- Match filenames ---
     matched_filenames = get_matched_filenames(gt_folder, gen_folder)
     if not matched_filenames:
-        print(f"  ⚠️ No matching filenames found. Skipping.")
+        print(f"   No matching filenames found. Skipping.")
         return {}
 
     # --- A. Image-Level Metrics ---
@@ -933,7 +933,7 @@ def process_single_folder(
 
     with open(json_output_path, 'w') as f:
         json.dump(image_level_report, f, indent=4, cls=NpEncoder)
-    print(f"  ✅ Report saved: {json_output_path}")
+    print(f"   Report saved: {json_output_path}")
     print("-" * 50)
 
     return dist_metrics
@@ -959,13 +959,13 @@ def process_folders(args):
 
     # --- Validate GT folder ---
     if not os.path.isdir(gt_folder):
-        print(f"🛑 Ground truth folder not found: {gt_folder}")
+        print(f" Ground truth folder not found: {gt_folder}")
         return 1
 
     gt_all_files = get_image_filenames(gt_folder)
-    print(f"✅ Ground truth folder: {gt_folder} ({len(gt_all_files)} images)")
+    print(f" Ground truth folder: {gt_folder} ({len(gt_all_files)} images)")
     if not gt_all_files:
-        print(f"🛑 No images found in ground truth folder. Stopping.")
+        print(f" No images found in ground truth folder. Stopping.")
         return 1
 
     # Initialize models (conditionally)
@@ -984,7 +984,7 @@ def process_folders(args):
     if args.flat:
         # ── FLAT MODE: input_folder IS the generated images folder directly ──
         if not os.path.isdir(input_folder):
-            print(f"🛑 Input folder not found: {input_folder}")
+            print(f" Input folder not found: {input_folder}")
             return 1
 
         job_name = args.job_name or os.path.basename(os.path.normpath(input_folder))
@@ -1005,7 +1005,7 @@ def process_folders(args):
         ]
 
         if not subfolders_b:
-            print(f"🛑 No subfolders found in {input_folder}")
+            print(f" No subfolders found in {input_folder}")
             return 1
 
         for subfolder_name in natsorted(subfolders_b):
@@ -1023,9 +1023,9 @@ def process_folders(args):
         df_dist = pd.DataFrame(distribution_results_list)
         csv_path_dist = os.path.join(output_dir, "distribution_summary.csv")
         df_dist.to_csv(csv_path_dist, index=False)
-        print(f"\n✅ Distribution Summary saved to {csv_path_dist}")
+        print(f"\n Distribution Summary saved to {csv_path_dist}")
 
-    print("\n✅ All processing complete.")
+    print("\n All processing complete.")
     return 0
 
 

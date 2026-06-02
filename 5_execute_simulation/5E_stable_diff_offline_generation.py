@@ -5,7 +5,7 @@
 5E_stable_diff_offline_generation.py
 
 Offline Stable Diffusion generation on top of the CARLA replay dataset
-(produced by 5A_OPT_trajectory_only_carla_with_instance_mapping.py).
+(produced by 5A_sd_trajectory_only_carla.py).
 
 For each frame:
   - selects the model part (LoRA + 3 ControlNets) based on hero position

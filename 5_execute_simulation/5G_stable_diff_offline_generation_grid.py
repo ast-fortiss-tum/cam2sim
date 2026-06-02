@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-5G_stable_diff_grid_search.py
+5G_stable_diff_offline_generation_grid.py
 
 Grid search version of 5E_stable_diff_offline_generation.py.
 
