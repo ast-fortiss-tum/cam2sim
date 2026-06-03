@@ -15,21 +15,40 @@ Writes to (project root):
 """
 
 import os
+import argparse
 import cv2
 import numpy as np
 from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # --------------------- USER SETTINGS ---------------------
-bag_path = Path('data/raw_ros_data/reference_bag.bag')
-cam_topic  = "/gmsl_camera/front_narrow/image_raw" 
+DEFAULT_BAG_NAME  = "reference_bag.bag"
+DEFAULT_CAM_TOPIC = "/gmsl_camera/front_narrow/image_raw"
 
-bag_name = bag_path.stem
-dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
-images_dir = os.path.join(dataset_dir, "images")
+parser = argparse.ArgumentParser(
+    description="Extract RGB frames from a ROS bag camera topic to PNG files."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+parser.add_argument("--cam-topic", default=DEFAULT_CAM_TOPIC)
+args = parser.parse_args()
 
-os.makedirs(images_dir, exist_ok=True)
+bag_name  = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem  = Path(bag_name).stem          # e.g. "reference_bag"
+cam_topic = args.cam_topic
 
+bag_path = Path("data") / "raw_ros_data" / bag_name
+if not bag_path.is_file():
+    raise FileNotFoundError(f"Bag file not found: {bag_path}")
+
+dataset_dir = Path("data") / "raw_dataset" / bag_stem
+images_dir  = dataset_dir / "images"
+images_dir.mkdir(parents=True, exist_ok=True)
+
+print(f"Bag:              {bag_path}")
 print(f"Output directory: {dataset_dir}")
 # --------------------------------------------------------
 

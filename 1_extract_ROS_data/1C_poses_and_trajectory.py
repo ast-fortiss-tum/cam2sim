@@ -19,22 +19,41 @@ Writes to (project root):
 import os
 import math
 import csv
+import argparse
 from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # ---------------- CONFIG ----------------
-bag_path = Path("data/raw_ros_data/reference_bag.bag")
-odom_topic = "/odom"
+DEFAULT_BAG_NAME   = "reference_bag.bag"
+DEFAULT_ODOM_TOPIC = "/odom"
 
-bag_name = bag_path.stem
+parser = argparse.ArgumentParser(
+    description="Extract full odometry and a simplified trajectory from a ROS bag."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+parser.add_argument("--odom-topic", default=DEFAULT_ODOM_TOPIC)
+args = parser.parse_args()
 
-dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
-os.makedirs(dataset_dir, exist_ok=True)
+bag_name   = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem   = Path(bag_name).stem          # e.g. "reference_bag"
+odom_topic = args.odom_topic
 
-odom_path = os.path.join(dataset_dir, "odometry.csv")
-traj_path = os.path.join(dataset_dir, "trajectory.csv")
+bag_path = Path("data") / "raw_ros_data" / bag_name
+if not bag_path.is_file():
+    raise FileNotFoundError(f"Bag file not found: {bag_path}")
 
-print(f"Output: {dataset_dir}")
+dataset_dir = Path("data") / "raw_dataset" / bag_stem
+dataset_dir.mkdir(parents=True, exist_ok=True)
+
+odom_path = dataset_dir / "odometry.csv"
+traj_path = dataset_dir / "trajectory.csv"
+
+print(f"Bag:              {bag_path}")
+print(f"Output directory: {dataset_dir}")
 # ----------------------------------------
 
 

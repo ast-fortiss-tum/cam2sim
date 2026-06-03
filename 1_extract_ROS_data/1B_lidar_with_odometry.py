@@ -17,25 +17,44 @@ Writes to (project root):
 
 import os
 import math
+import argparse
 import numpy as np
 from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # ---------------- CONFIG ----------------
-bag_path = Path('data/raw_ros_data/reference_bag.bag')
-lidar_topic = '/velodyne_points'
-odom_topic = '/odom'
+DEFAULT_BAG_NAME    = "reference_bag.bag"
+DEFAULT_LIDAR_TOPIC = "/velodyne_points"
+DEFAULT_ODOM_TOPIC  = "/odom"
 
-bag_name = bag_path.stem
+parser = argparse.ArgumentParser(
+    description="Extract synchronized LiDAR point clouds and odometry poses from a ROS bag."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+parser.add_argument("--lidar-topic", default=DEFAULT_LIDAR_TOPIC)
+parser.add_argument("--odom-topic",  default=DEFAULT_ODOM_TOPIC)
+args = parser.parse_args()
 
-dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
-pc_dir = os.path.join(dataset_dir, "point_clouds")
+bag_name    = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem    = Path(bag_name).stem          # e.g. "reference_bag"
+lidar_topic = args.lidar_topic
+odom_topic  = args.odom_topic
 
-lidar_sync_path = os.path.join(dataset_dir, "lidar_positions.txt")
+bag_path = Path("data") / "raw_ros_data" / bag_name
+if not bag_path.is_file():
+    raise FileNotFoundError(f"Bag file not found: {bag_path}")
 
-os.makedirs(pc_dir, exist_ok=True)
+dataset_dir     = Path("data") / "raw_dataset" / bag_stem
+pc_dir          = dataset_dir / "point_clouds"
+lidar_sync_path = dataset_dir / "lidar_positions.txt"
+pc_dir.mkdir(parents=True, exist_ok=True)
 
-print(f"Output: {dataset_dir}")
+print(f"Bag:              {bag_path}")
+print(f"Output directory: {dataset_dir}")
 # ---------------------------------------
 
 

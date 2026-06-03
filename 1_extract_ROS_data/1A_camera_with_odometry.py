@@ -17,26 +17,46 @@ Writes to (project root):
 
 import os
 import math
+import argparse
 import numpy as np
 import cv2
 from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # --------------------- USER SETTINGS ---------------------
-bag_path = Path('data/raw_ros_data/reference_bag.bag')
-odom_topic = "/odom"
-cam_topic  = "/gmsl_camera/front_narrow/image_raw" 
+DEFAULT_BAG_NAME = "reference_bag.bag"
+DEFAULT_ODOM_TOPIC = "/odom"
+DEFAULT_CAM_TOPIC  = "/gmsl_camera/front_narrow/image_raw"
 
-bag_name = bag_path.stem 
+parser = argparse.ArgumentParser(
+    description="Extract synchronized RGB frames and odometry poses from a ROS bag."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+parser.add_argument("--odom-topic", default=DEFAULT_ODOM_TOPIC)
+parser.add_argument("--cam-topic",  default=DEFAULT_CAM_TOPIC)
+args = parser.parse_args()
 
-dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
-images_dir  = os.path.join(dataset_dir, "images")
+bag_name   = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem   = Path(bag_name).stem          # e.g. "reference_bag"
+odom_topic = args.odom_topic
+cam_topic  = args.cam_topic
 
-os.makedirs(images_dir, exist_ok=True)
+bag_path = Path("data") / "raw_ros_data" / bag_name
+if not bag_path.is_file():
+    raise FileNotFoundError(f"Bag file not found: {bag_path}")
 
-camera_sync_path = os.path.join(dataset_dir, "images_positions.txt")
+dataset_dir = Path("data") / "raw_dataset" / bag_stem
+images_dir  = dataset_dir / "images"
+images_dir.mkdir(parents=True, exist_ok=True)
 
-print(f"Output directory set to: {dataset_dir}")
+camera_sync_path = dataset_dir / "images_positions.txt"
+
+print(f"Bag:              {bag_path}")
+print(f"Output directory: {dataset_dir}")
 # --------------------------------------------------------
 
 

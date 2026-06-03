@@ -15,20 +15,42 @@ Writes to (project root):
 """
 
 
+import os
+import argparse
 import numpy as np
 from pathlib import Path
 from rosbags.highlevel import AnyReader
-import os
 
 # ---------------- CONFIG ----------------
-bag_path = Path('data/raw_ros_data/reference_bag.bag')
-topic = '/cmd/steering_target'
+DEFAULT_BAG_NAME = "reference_bag.bag"
+DEFAULT_TOPIC    = "/cmd/steering_target"
 
-bag_name = bag_path.stem
-dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
-os.makedirs(dataset_dir, exist_ok=True)
+parser = argparse.ArgumentParser(
+    description="Extract steering target / model-output values from a ROS bag."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+parser.add_argument("--topic", default=DEFAULT_TOPIC)
+args = parser.parse_args()
 
-output_path = os.path.join(dataset_dir, "steering_predictions.txt")
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
+topic    = args.topic
+
+bag_path = Path("data") / "raw_ros_data" / bag_name
+if not bag_path.is_file():
+    raise FileNotFoundError(f"Bag file not found: {bag_path}")
+
+dataset_dir = Path("data") / "raw_dataset" / bag_stem
+dataset_dir.mkdir(parents=True, exist_ok=True)
+
+output_path = dataset_dir / "steering_predictions.txt"
+
+print(f"Bag:              {bag_path}")
+print(f"Output directory: {dataset_dir}")
 # ---------------------------------------
 
 

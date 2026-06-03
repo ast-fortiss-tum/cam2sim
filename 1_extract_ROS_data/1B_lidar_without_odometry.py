@@ -15,23 +15,40 @@ Writes to (project root):
 """
 
 import os
+import argparse
 import numpy as np
 from pathlib import Path
 from rosbags.highlevel import AnyReader
 
 # ---------------- CONFIG ----------------
-bag_path = Path('data/raw_ros_data/reference_bag.bag')
-lidar_topic = '/velodyne_points'
+DEFAULT_BAG_NAME    = "reference_bag.bag"
+DEFAULT_LIDAR_TOPIC = "/velodyne_points"
 
-bag_name = bag_path.stem
+parser = argparse.ArgumentParser(
+    description="Extract LiDAR point clouds from a ROS bag (no odometry sync)."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+parser.add_argument("--lidar-topic", default=DEFAULT_LIDAR_TOPIC)
+args = parser.parse_args()
 
-dataset_dir = os.path.join(os.getcwd(), "data", "raw_dataset", bag_name)
-pc_dir = os.path.join(dataset_dir, "point_clouds")
+bag_name    = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem    = Path(bag_name).stem          # e.g. "reference_bag"
+lidar_topic = args.lidar_topic
 
+bag_path = Path("data") / "raw_ros_data" / bag_name
+if not bag_path.is_file():
+    raise FileNotFoundError(f"Bag file not found: {bag_path}")
 
-os.makedirs(pc_dir, exist_ok=True)
+dataset_dir = Path("data") / "raw_dataset" / bag_stem
+pc_dir      = dataset_dir / "point_clouds"
+pc_dir.mkdir(parents=True, exist_ok=True)
 
-print(f"Output: {dataset_dir}")
+print(f"Bag:              {bag_path}")
+print(f"Output directory: {dataset_dir}")
 # ---------------------------------------
 
 
