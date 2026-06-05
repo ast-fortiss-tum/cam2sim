@@ -82,6 +82,55 @@ OUTPUT_JSON     = OUTPUT_DIR / "camera_detections.json"
 OUTPUT_CLUSTERS = OUTPUT_DIR / "unified_clusters.txt"
 OUTPUT_BBOX_DIR = OUTPUT_DIR / "unified_bbox_overlays"
 
+DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+# Detection settings
+FCOS3D_CONF_THRESH = 0.28
+MAX_DETECTION_RANGE = 50.0
+
+# Position corrections for KITTI-trained model on different camera
+# Depth: z_corrected = z * DEPTH_SCALE - DEPTH_OFFSET
+DEPTH_SCALE = 0.85
+DEPTH_OFFSET = 2.2
+
+# X scale: if cars are shifted outward on both sides, reduce this
+X_SCALE = 0.84
+X_OFFSET = 0.0
+
+# Y correction
+Y_OFFSET = 0.0
+
+# Tracking settings
+TRACK_MATCH_DIST = 2.0
+TRACK_MAX_AGE = 15
+TRACK_MIN_HITS = 4
+
+# Clustering settings
+CLUSTER_DIST_STAGE1 = 1.8
+CLUSTER_DIST_STAGE2 = 2.5
+
+# Frame processing
+SKIP_FRAMES = 5
+
+# Camera intrinsics
+CAM_INTRINSICS = np.array([
+    [772.906855, 0.0, 424.980372],
+    [0.0, 777.596896, 258.452509],
+    [0.0, 0.0, 1.0],
+], dtype=np.float32)
+
+CLASS_NAMES = [
+    "car",
+    "truck",
+    "trailer",
+    "bus",
+    "construction_vehicle",
+    "bicycle",
+    "motorcycle",
+    "pedestrian",
+    "traffic_cone",
+    "barrier",
+]
 # ==========================================
 # WORLD TRACKER
 # ==========================================

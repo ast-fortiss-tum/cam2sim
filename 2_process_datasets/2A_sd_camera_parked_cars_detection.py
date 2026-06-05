@@ -57,28 +57,44 @@ from ultralytics import YOLO
 # CONFIGURATION
 # ==========================================
 
-DATASET_NAME = "reference_bag"
+DEFAULT_BAG_NAME = "reference_bag.bag"
 
-EXTRACTED_ROOT = "data/raw_dataset"
-DATASET_DIR = os.path.join(EXTRACTED_ROOT, DATASET_NAME)
+parser = argparse.ArgumentParser(
+    description="Parked car detection + color extraction + instance maps "
+                "from RGB frames (Stable Diffusion branch)."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
 
-DATA_DIR = DATASET_DIR
-POSES_FILE = os.path.join(DATASET_DIR, "images_positions.txt")
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
 
-PROCESSED_ROOT = "data/processed_dataset"
-OUTPUT_DATASET_DIR = os.path.join(PROCESSED_ROOT, DATASET_NAME)
+# Input folders from step 1
+EXTRACTED_ROOT = Path("data") / "raw_dataset"
+DATASET_DIR    = EXTRACTED_ROOT / bag_stem
+
+DATA_DIR   = DATASET_DIR
+POSES_FILE = DATASET_DIR / "images_positions.txt"
+
+# Output folders for step 2
+PROCESSED_ROOT     = Path("data") / "processed_dataset"
+OUTPUT_DATASET_DIR = PROCESSED_ROOT / bag_stem
 
 # Same folder as the standard 2A — this script is a superset
-OUTPUT_DIR = os.path.join(OUTPUT_DATASET_DIR, "camera_detections")
+OUTPUT_DIR = OUTPUT_DATASET_DIR / "camera_detections"
 
-FCOS3D_CONFIG = "2_process_datasets/utils/fcos3d_config.py"
-FCOS3D_CHECKPOINT = "2_process_datasets/utils/fcos3d.pth"
-YOLO_SEG_MODEL = "2_process_datasets/utils/yolov8n-seg.pt"
+FCOS3D_CONFIG     = Path("2_process_datasets/utils/fcos3d_config.py")
+FCOS3D_CHECKPOINT = Path("2_process_datasets/utils/fcos3d.pth")
+YOLO_SEG_MODEL    = Path("2_process_datasets/utils/yolov8n-seg.pt")
 
-OUTPUT_JSON = os.path.join(OUTPUT_DIR, "camera_detections.json")
-OUTPUT_CLUSTERS = os.path.join(OUTPUT_DIR, "unified_clusters.txt")
-OUTPUT_BBOX_DIR = os.path.join(OUTPUT_DIR, "unified_bbox_overlays")
-OUTPUT_MAPS_DIR = os.path.join(OUTPUT_DIR, "instance_maps")
+OUTPUT_JSON     = OUTPUT_DIR / "camera_detections.json"
+OUTPUT_CLUSTERS = OUTPUT_DIR / "unified_clusters.txt"
+OUTPUT_BBOX_DIR = OUTPUT_DIR / "unified_bbox_overlays"
+OUTPUT_MAPS_DIR = OUTPUT_DIR / "instance_maps"
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -127,7 +143,6 @@ CLASS_NAMES = [
     "car", "truck", "trailer", "bus", "construction_vehicle",
     "bicycle", "motorcycle", "pedestrian", "traffic_cone", "barrier",
 ]
-
 
 # ==========================================
 # WORLD TRACKER

@@ -31,3 +31,4 @@ data/data_for_validation/semantic/
 data/data_for_validation/semantic_carla/
 data/data_for_stable_diffusion/*
 *.bag
+data/raw_dataset/*/
