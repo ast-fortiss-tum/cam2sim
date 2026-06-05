@@ -29,7 +29,8 @@ from collections import defaultdict
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import splprep, splev
 from scipy.spatial import cKDTree
-
+import argparse
+from pathlib import Path
 # FCOS3D imports
 from mmengine.config import Config
 from mmengine.runner import load_checkpoint
@@ -43,81 +44,43 @@ from mmdet3d.structures import CameraInstance3DBoxes
 # CONFIGURATION
 # ==========================================
 
-# Dataset name must match the folder name inside data/raw_dataset/
-DATASET_NAME = "reference_bag"
+# Dataset name (with .bag extension): must match an existing bag in step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
 
-# Input folder from step 1: ROS extraction
-EXTRACTED_ROOT = "data/raw_dataset"
-DATASET_DIR = os.path.join(EXTRACTED_ROOT, DATASET_NAME)
+parser = argparse.ArgumentParser(
+    description="Parked car detection from RGB frames using FCOS3D + tracking + clustering."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
 
-DATA_DIR = DATASET_DIR
-POSES_FILE = os.path.join(DATASET_DIR, "images_positions.txt")
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
 
-# Output folder for step 2: processed datasets
-PROCESSED_ROOT = "data/processed_dataset"
-OUTPUT_DATASET_DIR = os.path.join(PROCESSED_ROOT, DATASET_NAME)
+# Input folders from step 1: ROS extraction
+EXTRACTED_ROOT = Path("data") / "raw_dataset"
+DATASET_DIR    = EXTRACTED_ROOT / bag_stem
+
+DATA_DIR   = DATASET_DIR
+POSES_FILE = DATASET_DIR / "images_positions.txt"
+
+# Output folders for step 2: processed datasets
+PROCESSED_ROOT     = Path("data") / "processed_dataset"
+OUTPUT_DATASET_DIR = PROCESSED_ROOT / bag_stem
 
 # All camera detection outputs are saved here
-OUTPUT_DIR = os.path.join(OUTPUT_DATASET_DIR, "camera_detections")
+OUTPUT_DIR = OUTPUT_DATASET_DIR / "camera_detections"
 
-FCOS3D_CONFIG = "2_process_datasets/utils/fcos3d_config.py"
-FCOS3D_CHECKPOINT = "2_process_datasets/utils/fcos3d.pth"
+FCOS3D_CONFIG     = Path("2_process_datasets/utils/fcos3d_config.py")
+FCOS3D_CHECKPOINT = Path("2_process_datasets/utils/fcos3d.pth")
 
 # Output files
-OUTPUT_JSON = os.path.join(OUTPUT_DIR, "camera_detections.json")
-OUTPUT_CLUSTERS = os.path.join(OUTPUT_DIR, "unified_clusters.txt")
-OUTPUT_BBOX_DIR = os.path.join(OUTPUT_DIR, "unified_bbox_overlays")
-
-DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
-
-# Detection settings
-FCOS3D_CONF_THRESH = 0.28
-MAX_DETECTION_RANGE = 50.0
-
-# Position corrections for KITTI-trained model on different camera
-# Depth: z_corrected = z * DEPTH_SCALE - DEPTH_OFFSET
-DEPTH_SCALE = 0.85
-DEPTH_OFFSET = 2.2
-
-# X scale: if cars are shifted outward on both sides, reduce this
-X_SCALE = 0.84
-X_OFFSET = 0.0
-
-# Y correction
-Y_OFFSET = 0.0
-
-# Tracking settings
-TRACK_MATCH_DIST = 2.0
-TRACK_MAX_AGE = 15
-TRACK_MIN_HITS = 4
-
-# Clustering settings
-CLUSTER_DIST_STAGE1 = 1.8
-CLUSTER_DIST_STAGE2 = 2.5
-
-# Frame processing
-SKIP_FRAMES = 5
-
-# Camera intrinsics
-CAM_INTRINSICS = np.array([
-    [772.906855, 0.0, 424.980372],
-    [0.0, 777.596896, 258.452509],
-    [0.0, 0.0, 1.0],
-], dtype=np.float32)
-
-CLASS_NAMES = [
-    "car",
-    "truck",
-    "trailer",
-    "bus",
-    "construction_vehicle",
-    "bicycle",
-    "motorcycle",
-    "pedestrian",
-    "traffic_cone",
-    "barrier",
-]
-
+OUTPUT_JSON     = OUTPUT_DIR / "camera_detections.json"
+OUTPUT_CLUSTERS = OUTPUT_DIR / "unified_clusters.txt"
+OUTPUT_BBOX_DIR = OUTPUT_DIR / "unified_bbox_overlays"
 
 # ==========================================
 # WORLD TRACKER
