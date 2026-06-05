@@ -674,7 +674,8 @@ def main():
     print("UNIFIED PARKED CAR DETECTION PIPELINE")
     print("=" * 70)
 
-    print(f"\nDataset name: {DATASET_NAME}")
+    print(f"\nBag:           {bag_name}")
+    print(f"Bag stem:      {bag_stem}")
     print(f"Input dataset: {DATASET_DIR}")
     print(f"Output folder: {OUTPUT_DIR}")
     print(f"Device: {DEVICE}")
@@ -959,8 +960,8 @@ def main():
 
     json_data = {
         "source": "camera",
-        "dataset_name": DATASET_NAME,
-        "input_dataset": DATASET_DIR,
+        "dataset_name": bag_stem,
+        "input_dataset": str(DATASET_DIR),
         "global_origin": origin.tolist(),
         "cars": [],
     }

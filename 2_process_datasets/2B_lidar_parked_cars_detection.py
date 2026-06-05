@@ -24,6 +24,8 @@ Writes to (project root):
 import os
 import json
 import shutil
+import argparse
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import open3d as o3d
@@ -39,31 +41,44 @@ from mmdet3d.apis import init_model, inference_detector
 # 1. CONFIGURATION
 # ==========================================
 
-# Dataset name must match the folder name inside data/raw_dataset/
-DATASET_NAME = "reference_bag"
+# Dataset name (with .bag extension): must match an existing bag in step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
 
-# Input folder from step 1: ROS extraction
-EXTRACTED_ROOT = "data/raw_dataset"
-DATASET_DIR = os.path.join(EXTRACTED_ROOT, DATASET_NAME)
+parser = argparse.ArgumentParser(
+    description="Parked car detection from LiDAR point clouds using PointPillars + clustering."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
 
-ODOMETRY_FILE = os.path.join(DATASET_DIR, "odometry.csv")
-LIDAR_POSITIONS_FILE = os.path.join(DATASET_DIR, "lidar_positions.txt")
-POINT_CLOUD_DIR = os.path.join(DATASET_DIR, "point_clouds")
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
+
+# Input folders from step 1: ROS extraction
+EXTRACTED_ROOT = Path("data") / "raw_dataset"
+DATASET_DIR    = EXTRACTED_ROOT / bag_stem
+
+ODOMETRY_FILE        = DATASET_DIR / "odometry.csv"
+LIDAR_POSITIONS_FILE = DATASET_DIR / "lidar_positions.txt"
+POINT_CLOUD_DIR      = DATASET_DIR / "point_clouds"
 
 # Output folder for step 2: processed datasets
-PROCESSED_ROOT = "data/processed_dataset"
-OUTPUT_DATASET_DIR = os.path.join(PROCESSED_ROOT, DATASET_NAME)
-OUTPUT_DIR = os.path.join(OUTPUT_DATASET_DIR, "lidar_detections")
+PROCESSED_ROOT     = Path("data") / "processed_dataset"
+OUTPUT_DATASET_DIR = PROCESSED_ROOT / bag_stem
+OUTPUT_DIR         = OUTPUT_DATASET_DIR / "lidar_detections"
 
-OUTPUT_JSON = os.path.join(OUTPUT_DIR, "lidar_detections.json")
-OUTPUT_TXT = os.path.join(OUTPUT_DIR, "unified_clusters.txt")
-OUTPUT_BB_TXT = os.path.join(OUTPUT_DIR, "lidar_bboxes.txt")
-OUTPUT_SCREENSHOT_DIR = os.path.join(OUTPUT_DIR, "screenshots")
-TEMP_BIN_FILE = os.path.join(OUTPUT_DIR, "_temp_calc.bin")
+OUTPUT_JSON           = OUTPUT_DIR / "lidar_detections.json"
+OUTPUT_TXT            = OUTPUT_DIR / "unified_clusters.txt"
+OUTPUT_BB_TXT         = OUTPUT_DIR / "lidar_bboxes.txt"
+OUTPUT_SCREENSHOT_DIR = OUTPUT_DIR / "screenshots"
+TEMP_BIN_FILE         = OUTPUT_DIR / "_temp_calc.bin"
 
 # Model files
-CONFIG_FILE = "2_process_datasets/utils/my_pointpillars_config.py"
-CHECKPOINT_FILE = (
+CONFIG_FILE = Path("2_process_datasets/utils/my_pointpillars_config.py")
+CHECKPOINT_FILE = Path(
     "2_process_datasets/utils/"
     "hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth"
 )
@@ -396,8 +411,8 @@ def save_detections_json(cars, global_origin, filepath):
     """Save detections with full bounding-box info to JSON."""
     data = {
         "source": "lidar",
-        "dataset_name": DATASET_NAME,
-        "input_dataset": DATASET_DIR,
+        "dataset_name": bag_stem,
+        "input_dataset": str(DATASET_DIR),  
         "global_origin": global_origin.tolist(),
         "cars": [],
     }
@@ -501,7 +516,8 @@ def main():
     print("LIDAR PARKED CAR DETECTION PIPELINE")
     print("=" * 70)
 
-    print(f"Dataset name: {DATASET_NAME}")
+    print(f"Bag:           {bag_name}")
+    print(f"Bag stem:      {bag_stem}")
     print(f"Input dataset: {DATASET_DIR}")
     print(f"Output folder: {OUTPUT_DIR}")
     print(f"Device: {DEVICE}")
