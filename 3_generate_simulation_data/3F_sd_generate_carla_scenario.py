@@ -38,6 +38,8 @@ import sys
 import json
 import random
 import gc
+import argparse
+from pathlib import Path
 from queue import Empty
 
 import carla
@@ -62,18 +64,33 @@ sys.path.insert(0, SCRIPT_DIR)
 
 
 # =======================
-# HARDCODED CONFIG
+# CONFIGURATION
 # =======================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+parser = argparse.ArgumentParser(
+    description="Spawn the CARLA scene and build the instance-color mapping "
+                "for the Stable Diffusion branch."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
+
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
 
 MAP_FOLDER = os.path.join(
-    PROJECT_ROOT, "data", "processed_dataset", BAG_NAME, "maps",
+    PROJECT_ROOT, "data", "processed_dataset", bag_stem, "maps",
 )
 XODR_FILE = os.path.join(MAP_FOLDER, "map.xodr")
 
 CARLA_DATA_FOLDER = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME,
+    PROJECT_ROOT, "data", "data_for_carla", bag_stem,
 )
 VEHICLE_DATA_PATH = os.path.join(CARLA_DATA_FOLDER, "vehicle_data.json")
 TRAJECTORY_ODOM_REAR_PATH = os.path.join(
@@ -225,7 +242,8 @@ def main():
     print("GENERATE CARLA SCENARIO WITH INSTANCE-COLOR MAPPING (SD branch)")
     print("=" * 80)
     print(f"[INFO] Project root:        {PROJECT_ROOT}")
-    print(f"[INFO] Bag name:            {BAG_NAME}")
+    print(f"[INFO] Bag:                 {bag_name}")
+    print(f"[INFO] Bag stem:            {bag_stem}")
     print(f"[INFO] XODR file:           {XODR_FILE}")
     print(f"[INFO] Vehicle data:        {VEHICLE_DATA_PATH}")
     print(f"[INFO] Output map:          {INSTANCE_MAP_OUTPUT}")

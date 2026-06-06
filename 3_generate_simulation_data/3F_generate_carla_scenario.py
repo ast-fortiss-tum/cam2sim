@@ -20,9 +20,10 @@ import sys
 import json
 import random
 import gc
+import argparse
+from pathlib import Path
 
 import carla
-
 
 # =======================
 # PATH SETUP
@@ -49,18 +50,30 @@ sys.path.insert(0, SCRIPT_DIR)
 
 
 # =======================
-# HARDCODED CONFIG
+# CONFIGURATION
 # =======================
 
-# Change this to select another bag.
-# No command-line parameters are used.
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+parser = argparse.ArgumentParser(
+    description="Load the OpenDRIVE map in CARLA and spawn the hero + parked cars."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
+
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
 
 MAP_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
     "processed_dataset",
-    BAG_NAME,
+    bag_stem,
     "maps",
 )
 
@@ -73,7 +86,7 @@ CARLA_DATA_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
     "data_for_carla",
-    BAG_NAME,
+    bag_stem,
 )
 
 VEHICLE_DATA_PATH = os.path.join(
@@ -135,7 +148,6 @@ MOVE_SPECTATOR_TO_HERO = True
 SPECTATOR_BACK_DISTANCE = -10.0
 SPECTATOR_HEIGHT = 8.0
 SPECTATOR_PITCH = -25.0
-
 
 # =======================
 # LOCAL UTILS IMPORTS
@@ -578,7 +590,8 @@ def main():
     print(f"[INFO] Project root:          {PROJECT_ROOT}")
     print(f"[INFO] Script folder:         {SCRIPT_DIR}")
     print(f"[INFO] Local utils:           {LOCAL_UTILS_DIR}")
-    print(f"[INFO] Bag name:              {BAG_NAME}")
+    print(f"[INFO] Bag:                   {bag_name}")
+    print(f"[INFO] Bag stem:              {bag_stem}")
     print(f"[INFO] Map folder:            {MAP_FOLDER}")
     print(f"[INFO] XODR file:             {XODR_FILE}")
     print(f"[INFO] CARLA data folder:     {CARLA_DATA_FOLDER}")
