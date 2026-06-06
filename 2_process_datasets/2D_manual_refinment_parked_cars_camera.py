@@ -19,6 +19,8 @@ Writes to (project root):
 import os
 import sys
 import math
+import argparse
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
@@ -62,28 +64,41 @@ from utils.coordinates import (
 # CONFIGURATION
 # =======================
 
-# Dataset name must match the folder in data/raw_dataset/
-DATASET_NAME = "reference_bag"
+# Bag / dataset name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
 
-# Map name must match the folder created by the map-download script.
-MAP_NAME = DATASET_NAME
+parser = argparse.ArgumentParser(
+    description="Interactive GUI to clean parked-car centroids (camera detections) "
+                "over an OSM basemap."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
+
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
+
+# Map name matches the bag stem (the map-download script uses the same folder).
+MAP_NAME = bag_stem
 
 # Input/output roots.
 EXTRACTED_ROOT = os.path.join("data", "raw_dataset")
 GENERATED_ROOT = os.path.join("data", "processed_dataset")
 MAP_ROOT = os.path.join("data", "processed_dataset", MAP_NAME, "maps")
 
-
 # Input files.
 TRAJECTORY_PATH = os.path.join(
     EXTRACTED_ROOT,
-    DATASET_NAME,
+    bag_stem,
     "trajectory.csv",
 )
 
 CENTROID_FILE = os.path.join(
     GENERATED_ROOT,
-    DATASET_NAME,
+    bag_stem,
     "camera_detections",
     "unified_clusters.txt",
 )
@@ -94,7 +109,7 @@ GROUND_TRUTH_FILE = None
 # Example:
 # GROUND_TRUTH_FILE = os.path.join(
 #     GENERATED_ROOT,
-#     DATASET_NAME,
+#     bag_stem,
 #     "lidar_refinement",
 #     "final_clusters.txt",
 # )
@@ -103,7 +118,7 @@ GROUND_TRUTH_FILE = None
 # If the file does not exist, zero shift and zero yaw are used.
 SHIFT_FILE = os.path.join(
     EXTRACTED_ROOT,
-    DATASET_NAME,
+    bag_stem,
     "shift.txt",
 )
 
@@ -120,7 +135,6 @@ BAR_LENGTH = 4.0
 # Coordinate transformers.
 TRANSFORMER_TO_4326 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
 TRANSFORMER_WGS84_TO_UTM = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
-
 
 # =======================
 # MATH HELPERS
@@ -405,8 +419,9 @@ def calculate_bar_segments(cx, cy, tx, ty, orientations, length):
 print("=" * 70)
 print("INTERACTIVE CLUSTER CLEANER")
 print("=" * 70)
-print(f"Dataset name: {DATASET_NAME}")
-print(f"Map name: {MAP_NAME}")
+print(f"Bag:          {bag_name}")
+print(f"Bag stem:     {bag_stem}")
+print(f"Map name:     {MAP_NAME}")
 print(f"Map folder: {os.path.abspath(MAP_FOLDER)}")
 print(f"Trajectory: {os.path.abspath(TRAJECTORY_PATH)}")
 print(f"Centroids: {os.path.abspath(CENTROID_FILE)}")

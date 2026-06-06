@@ -19,7 +19,9 @@ Writes to (project root):
 """
 
 
+import argparse
 import json
+from pathlib import Path
 import os
 import sys
 import time
@@ -106,14 +108,27 @@ from utils.plotting import create_plot, show_plot, get_output
 # CONFIGURATION
 # =======================
 
-# Bag / dataset name.
-DATASET_NAME = "reference_bag"
+# Bag / dataset name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+parser = argparse.ArgumentParser(
+    description="Generate OSM map data and vehicle metadata around the first trajectory pose."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
+
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
 
 # Input trajectory file.
 TRAJECTORY_FILE = project_path(
     "data",
     "raw_dataset",
-    DATASET_NAME,
+    bag_stem,
     "trajectory.csv",
 )
 
@@ -124,11 +139,11 @@ UTM_EPSG = 32632
 
 # Output folder.
 # Everything for this bag is saved under:
-# data/processed_dataset/<DATASET_NAME>/maps/
+# data/processed_dataset/<bag_stem>/maps/
 MAP_OUTPUT_ROOT = project_path(
     "data",
     "processed_dataset",
-    DATASET_NAME,
+    bag_stem,
     "maps",
 )
 
@@ -435,8 +450,8 @@ def normalize_vehicle_data_schema(vehicle_data, dist):
 
 def main():
     # 1. Validate config
-    if not DATASET_NAME or not isinstance(DATASET_NAME, str):
-        raise ValueError("DATASET_NAME must be a non-empty string.")
+    if not bag_stem or not isinstance(bag_stem, str):
+        raise ValueError("bag_stem must be a non-empty string.")
 
     if MODE not in {"manual", "auto"}:
         raise ValueError("MODE must be either 'manual' or 'auto'.")
@@ -459,7 +474,8 @@ def main():
     print(f"Project root: {PROJECT_ROOT}")
     print(f"Script folder: {SCRIPT_DIR}")
     print(f"Local utils: {LOCAL_UTILS_DIR}")
-    print(f"Map name: {DATASET_NAME}")
+    print(f"Bag:             {bag_name}")
+    print(f"Bag stem:        {bag_stem}")
     print(f"Trajectory file: {TRAJECTORY_FILE}")
     print(f"UTM EPSG: {UTM_EPSG}")
     print(f"UTM easting: {first_pose['x']}")
@@ -561,7 +577,7 @@ def main():
             print("Parking areas will be injected later from cluster data.")
             print("Click the start position and then close the window.")
 
-        plot_title = osm_query_address if osm_query_address is not None else DATASET_NAME
+        plot_title = osm_query_address if osm_query_address is not None else bag_stem
 
         create_plot(buildings, edges, plot_title)
         show_plot()

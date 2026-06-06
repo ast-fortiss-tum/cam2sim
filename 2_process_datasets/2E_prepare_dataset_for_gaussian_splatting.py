@@ -24,7 +24,8 @@ Writes to (project root):
 import os
 import sys
 import shutil
-
+import argparse
+from pathlib import Path
 import torch
 import numpy as np
 from PIL import Image
@@ -52,19 +53,34 @@ sys.path.insert(0, SCRIPT_DIR)
 
 
 # =======================
-# HARDCODED CONFIGURATION
+# CONFIGURATION
 # =======================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+parser = argparse.ArgumentParser(
+    description="Prepare cropped images and overlapping splits for Gaussian Splatting, "
+                "with per-frame sky masks generated via SegFormer."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
+
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
 
 SOURCE_IMAGES_FOLDER = os.path.join(
-    PROJECT_ROOT, "data", "raw_dataset", BAG_NAME, "images",
+    PROJECT_ROOT, "data", "raw_dataset", bag_stem, "images",
 )
 SOURCE_POSITIONS_FILE = os.path.join(
-    PROJECT_ROOT, "data", "raw_dataset", BAG_NAME, "images_positions.txt",
+    PROJECT_ROOT, "data", "raw_dataset", bag_stem, "images_positions.txt",
 )
 OUTPUT_ROOT = os.path.join(
-    PROJECT_ROOT, "data", "data_for_gaussian_splatting", BAG_NAME,
+    PROJECT_ROOT, "data", "data_for_gaussian_splatting", bag_stem,
 )
 
 CROP_BOTTOM = 45
@@ -78,7 +94,6 @@ OVERWRITE_EXISTING = True
 
 # Sky-mask model (same as thesis)
 SKY_MASK_MODEL_NAME = "nvidia/segformer-b1-finetuned-cityscapes-1024-1024"
-
 
 # =======================
 # SKY MASK
@@ -241,7 +256,8 @@ def process_frames():
     print("GAUSSIAN SPLATTING IMAGE PREPARATION (thesis-replicating, WITH sky masks)")
     print("=" * 80)
     print(f"[INFO] Project root:            {PROJECT_ROOT}")
-    print(f"[INFO] Bag name:                {BAG_NAME}")
+    print(f"[INFO] Bag:                     {bag_name}")
+    print(f"[INFO] Bag stem:                {bag_stem}")
     print(f"[INFO] Source images:           {SOURCE_IMAGES_FOLDER}")
     print(f"[INFO] Source positions:        {SOURCE_POSITIONS_FILE}")
     print(f"[INFO] Output root:             {OUTPUT_ROOT}")

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 2H_prepare_dataset_for_stable_diffusion.py
 
@@ -10,7 +9,7 @@ training, using the cam2sim project layout.
 Reads from (project root):
     data/raw_dataset/<BAG>/images/frame_XXXXXX.png
     data/processed_dataset/<BAG>/semantic_maps/frame_XXXXXX.png   (from 2F)
-    data/processed_dataset/<BAG>/camera_detections/instance_maps/frame_XXXXXX.png  (from 2A_OPT)
+    data/processed_dataset/<BAG>/camera_detections/instance_maps/frame_XXXXXX.png  (from 2A_sd)
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
 
 Writes to (project root):
@@ -21,7 +20,6 @@ Writes to (project root):
         previous/       (previous-frame RGB, 512x512)
         hf_binary/      (Arrow dataset with columns:
                          image, segmentation, instance, previous, text, frame_id)
-
 """
 
 import os
@@ -29,6 +27,9 @@ import re
 import json
 import shutil
 import glob
+import argparse
+from pathlib import Path
+
 from PIL import Image
 from tqdm import tqdm
 from datasets import Dataset, Image as HFImage
@@ -38,16 +39,31 @@ from datasets import Dataset, Image as HFImage
 # CONFIGURATION
 # ============================================================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+parser = argparse.ArgumentParser(
+    description="Build a HuggingFace dataset (Arrow binary) for Stable Diffusion / "
+                "ControlNet training from the cam2sim outputs."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
+
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
 
 # Inputs (cam2sim layout)
-RAW_IMAGES_DIR = f"data/raw_dataset/{BAG_NAME}/images"
-SEG_MAPS_DIR = f"data/processed_dataset/{BAG_NAME}/semantic_maps"
-INSTANCE_MAPS_DIR = f"data/processed_dataset/{BAG_NAME}/camera_detections/instance_maps"
-COORD_JSON = f"data/data_for_carla/{BAG_NAME}/trajectory_positions_rear_odom_yaw.json"
+RAW_IMAGES_DIR    = f"data/raw_dataset/{bag_stem}/images"
+SEG_MAPS_DIR      = f"data/processed_dataset/{bag_stem}/semantic_maps"
+INSTANCE_MAPS_DIR = f"data/processed_dataset/{bag_stem}/camera_detections/instance_maps"
+COORD_JSON        = f"data/data_for_carla/{bag_stem}/trajectory_positions_rear_odom_yaw.json"
 
 # Output
-OUTPUT_DIR = f"data/data_for_stable_diffusion/{BAG_NAME}"
+OUTPUT_DIR    = f"data/data_for_stable_diffusion/{bag_stem}"
 HF_BINARY_DIR = os.path.join(OUTPUT_DIR, "hf_binary")
 
 TARGET_SIZE = (512, 512)
@@ -73,11 +89,13 @@ def resize_and_save(src_path, dst_path, mode="rgb"):
         return  # idempotent
 
     img = Image.open(src_path)
+
     if mode == "rgb":
         img = img.convert("RGB").resize(TARGET_SIZE, Image.LANCZOS)
     else:
         # NEAREST so class colors / instance IDs are preserved
         img = img.resize(TARGET_SIZE, Image.NEAREST)
+
     img.save(dst_path)
 
 
@@ -88,11 +106,13 @@ def add_temporal_links(entries):
     is never None).
     """
     entries.sort(key=lambda e: e["frame_id"])
+
     for i, e in enumerate(entries):
         if i == 0:
             e["previous"] = e["image"]
         else:
             e["previous"] = entries[i - 1]["image"]
+
     return entries
 
 
@@ -109,13 +129,14 @@ def main():
     for path, label in [
         (RAW_IMAGES_DIR, "raw RGB images"),
         (SEG_MAPS_DIR, "semantic maps (from 2F)"),
-        (INSTANCE_MAPS_DIR, "instance maps (from 2A_OPT)"),
+        (INSTANCE_MAPS_DIR, "instance maps (from 2A_sd)"),
         (COORD_JSON, "trajectory JSON"),
     ]:
         if not os.path.exists(path):
             raise FileNotFoundError(f"[INPUT MISSING] {label}: {path}")
 
-    print(f"\nBag:               {BAG_NAME}")
+    print(f"\nBag:               {bag_name}")
+    print(f"Bag stem:          {bag_stem}")
     print(f"RGB images:        {RAW_IMAGES_DIR}")
     print(f"Semantic maps:     {SEG_MAPS_DIR}")
     print(f"Instance maps:     {INSTANCE_MAPS_DIR}")
@@ -124,8 +145,8 @@ def main():
     print(f"Resolution:        {TARGET_SIZE}")
 
     # Create output directories
-    out_img = os.path.join(OUTPUT_DIR, "images")
-    out_seg = os.path.join(OUTPUT_DIR, "segmentation")
+    out_img  = os.path.join(OUTPUT_DIR, "images")
+    out_seg  = os.path.join(OUTPUT_DIR, "segmentation")
     out_inst = os.path.join(OUTPUT_DIR, "instance")
     out_prev = os.path.join(OUTPUT_DIR, "previous")  # symlinks, populated later
 
@@ -134,6 +155,7 @@ def main():
 
     # ---------- Load coordinate captions ----------
     print(f"\n[1/5] Loading coordinates from trajectory JSON...")
+
     with open(COORD_JSON, "r") as f:
         traj = json.load(f)
 
@@ -150,13 +172,14 @@ def main():
 
     # ---------- Collect frames that have ALL the required inputs ----------
     print(f"\n[2/5] Matching frames with all required inputs...")
+
     rgb_files = sorted(glob.glob(os.path.join(RAW_IMAGES_DIR, "*.png")))
     print(f"   RGB frames found: {len(rgb_files)}")
 
     entries = []
     n_skip_coords = 0
-    n_skip_seg = 0
-    n_skip_inst = 0
+    n_skip_seg    = 0
+    n_skip_inst   = 0
 
     for rgb_path in tqdm(rgb_files, desc="Matching"):
         fname = os.path.basename(rgb_path)
@@ -179,13 +202,13 @@ def main():
 
         entries.append({
             "frame_id": fid,
-            "src_rgb": rgb_path,
-            "src_seg": seg_path,
+            "src_rgb":  rgb_path,
+            "src_seg":  seg_path,
             "src_inst": inst_path,
-            "fname": fname,
+            "fname":    fname,
         })
 
-    print(f"   Matched frames:   {len(entries)}")
+    print(f"   Matched frames:         {len(entries)}")
     print(f"   Skipped (no coords):    {n_skip_coords}")
     print(f"   Skipped (no semantic):  {n_skip_seg}")
     print(f"   Skipped (no instance):  {n_skip_inst}")
@@ -195,20 +218,22 @@ def main():
 
     # ---------- Resize and copy to output folders ----------
     print(f"\n[3/5] Resizing to {TARGET_SIZE} and copying...")
+
     for e in tqdm(entries, desc="Resizing"):
         fname = e["fname"]
-        dst_rgb = os.path.join(out_img, fname)
-        dst_seg = os.path.join(out_seg, fname)
+
+        dst_rgb  = os.path.join(out_img,  fname)
+        dst_seg  = os.path.join(out_seg,  fname)
         dst_inst = os.path.join(out_inst, fname)
 
-        resize_and_save(e["src_rgb"], dst_rgb, mode="rgb")
-        resize_and_save(e["src_seg"], dst_seg, mode="mask")
+        resize_and_save(e["src_rgb"],  dst_rgb,  mode="rgb")
+        resize_and_save(e["src_seg"],  dst_seg,  mode="mask")
         resize_and_save(e["src_inst"], dst_inst, mode="mask")
 
-        e["image"] = os.path.abspath(dst_rgb)
+        e["image"]        = os.path.abspath(dst_rgb)
         e["segmentation"] = os.path.abspath(dst_seg)
-        e["instance"] = os.path.abspath(dst_inst)
-        e["text"] = coords_map[e["frame_id"]]
+        e["instance"]     = os.path.abspath(dst_inst)
+        e["text"]         = coords_map[e["frame_id"]]
 
     # ---------- Add temporal links (previous frame) ----------
     print(f"\n[4/5] Adding temporal links (previous-frame RGB)...")
@@ -216,24 +241,25 @@ def main():
 
     # ---------- Build HuggingFace dataset ----------
     print(f"\n[5/5] Building HuggingFace Arrow dataset...")
+
     final_list = []
     for e in entries:
         final_list.append({
-            "image": e["image"],
+            "image":        e["image"],
             "segmentation": e["segmentation"],
-            "instance": e["instance"],
-            "previous": e["previous"],
-            "text": e["text"],
-            "frame_id": e["frame_id"],
+            "instance":     e["instance"],
+            "previous":     e["previous"],
+            "text":         e["text"],
+            "frame_id":     e["frame_id"],
         })
 
     ds = Dataset.from_list(final_list)
 
     # Cast file-path columns to HFImage so the binary embeds pixel data
-    ds = ds.cast_column("image", HFImage())
+    ds = ds.cast_column("image",        HFImage())
     ds = ds.cast_column("segmentation", HFImage())
-    ds = ds.cast_column("instance", HFImage())
-    ds = ds.cast_column("previous", HFImage())
+    ds = ds.cast_column("instance",     HFImage())
+    ds = ds.cast_column("previous",     HFImage())
 
     print(f"   Dataset rows:    {len(ds)}")
     print(f"   Dataset columns: {ds.column_names}")
@@ -241,6 +267,7 @@ def main():
     # Wipe old binary if present, then save
     if os.path.exists(HF_BINARY_DIR):
         shutil.rmtree(HF_BINARY_DIR)
+
     ds.save_to_disk(HF_BINARY_DIR)
 
     print("\n" + "=" * 70)

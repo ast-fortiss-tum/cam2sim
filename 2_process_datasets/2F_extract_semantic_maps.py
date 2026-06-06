@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 """
 2F_extract_semantic_maps.py
 
@@ -11,29 +10,45 @@ Reads from (project root):
 
 Writes to (project root):
     data/processed_dataset/<BAG>/
-        semantic_maps/ 
+        semantic_maps/
 """
 
 import os
 import glob
+import argparse
+from pathlib import Path
+
 from tqdm import tqdm
 from PIL import Image
 import torch
 import numpy as np
-
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
+
 
 # ================= CONFIG =================
 
-DATASET_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
 
-INPUT_DIR = f"data/raw_dataset/{DATASET_NAME}/images"
+parser = argparse.ArgumentParser(
+    description="Extract reduced semantic segmentation maps (road, car, background) "
+                "from RGB frames using SegFormer (Cityscapes)."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
 
-OUTPUT_ROOT = f"data/processed_dataset/{DATASET_NAME}"
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
+
+INPUT_DIR = f"data/raw_dataset/{bag_stem}/images"
+OUTPUT_ROOT = f"data/processed_dataset/{bag_stem}"
 OUTPUT_DIR = os.path.join(OUTPUT_ROOT, "semantic_maps")
 
 SEGFORMER_MODEL = "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"
-
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Cityscapes IDs
@@ -71,6 +86,12 @@ def create_semantic_maps():
     print("=" * 60)
     print("REDUCED SEMANTIC MAP GENERATION")
     print("=" * 60)
+    print(f"Bag:        {bag_name}")
+    print(f"Bag stem:   {bag_stem}")
+    print(f"Input dir:  {INPUT_DIR}")
+    print(f"Output dir: {OUTPUT_DIR}")
+    print(f"Device:     {DEVICE}")
+    print("=" * 60)
 
     if not os.path.exists(INPUT_DIR):
         raise FileNotFoundError(f"Input folder not found: {INPUT_DIR}")
@@ -89,7 +110,6 @@ def create_semantic_maps():
     processor = SegformerImageProcessor.from_pretrained(SEGFORMER_MODEL)
     model = SegformerForSemanticSegmentation.from_pretrained(SEGFORMER_MODEL)
     model.to(DEVICE).eval()
-
     print(f"Using device: {DEVICE}")
 
     # Process
@@ -101,21 +121,18 @@ def create_semantic_maps():
             continue
 
         image = Image.open(img_path).convert("RGB")
-
         inputs = processor(images=image, return_tensors="pt")
         inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
 
         with torch.no_grad():
             outputs = model(**inputs)
             logits = outputs.logits
-
             upsampled = torch.nn.functional.interpolate(
                 logits,
                 size=image.size[::-1],
                 mode="bilinear",
-                align_corners=False
+                align_corners=False,
             )
-
             pred = upsampled.argmax(1)[0].cpu().numpy()
 
         seg_img = decode_reduced_mask(pred)

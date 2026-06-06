@@ -13,17 +13,19 @@ Reads from (project root):
 
 Writes to (project root):
     data/data_for_carla/<BAG>/
-        vehicle_data.json 
-        trajectory_positions.json 
-        trajectory_positions_rear.json 
-        trajectory_positions_odom_yaw.json 
-        trajectory_positions_rear_odom_yaw.json 
+        vehicle_data.json
+        trajectory_positions.json
+        trajectory_positions_rear.json
+        trajectory_positions_odom_yaw.json
+        trajectory_positions_rear_odom_yaw.json
 """
 
 import os
 import sys
 import json
 import math
+import argparse
+from pathlib import Path
 import numpy as np
 from pyproj import Transformer
 
@@ -50,18 +52,30 @@ sys.path.insert(0, SCRIPT_DIR)
 
 
 # ==========================================
-# HARDCODED INPUTS / OUTPUTS
+# CONFIGURATION
 # ==========================================
 
-# Change this to select another bag.
-# No command-line parameters are used.
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+parser = argparse.ArgumentParser(
+    description="Convert UTM trajectory + odom yaw into CARLA-frame trajectories."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
+
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
 
 POSITIONS_FILE = os.path.join(
     PROJECT_ROOT,
     "data",
     "raw_dataset",
-    BAG_NAME,
+    bag_stem,
     "images_positions.txt",
 )
 
@@ -70,7 +84,7 @@ MAP_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
     "processed_dataset",
-    BAG_NAME,
+    bag_stem,
     "maps",
 )
 
@@ -79,7 +93,7 @@ OUTPUT_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
     "data_for_carla",
-    BAG_NAME,
+    bag_stem,
 )
 
 # Optional source vehicle_data.json from map-generation step.
@@ -104,7 +118,7 @@ from utils.carla_simulator import get_xodr_projection_params
 
 
 # ==========================================
-# CONFIGURATION
+# PARAMETERS
 # ==========================================
 
 MAP_DIST = 200
@@ -114,8 +128,6 @@ REAR_OFFSET = -1.393
 LOOKAHEAD = 5
 
 OUTPUT_Z = 0.0
-
-
 # ==========================================
 # DATA LOADING
 # ==========================================
@@ -471,7 +483,8 @@ def main():
     print(f"[INFO] Script folder:              {SCRIPT_DIR}")
     print(f"[INFO] Local utils:                {LOCAL_UTILS_DIR}")
     print(f"[INFO] Project root:               {PROJECT_ROOT}")
-    print(f"[INFO] Bag name:                   {BAG_NAME}")
+    print(f"[INFO] Bag:                        {bag_name}")
+    print(f"[INFO] Bag stem:                   {bag_stem}")
     print(f"[INFO] Map folder:                 {MAP_FOLDER}")
     print(f"[INFO] Positions file:             {POSITIONS_FILE}")
     print(f"[INFO] Final CARLA output folder:  {OUTPUT_FOLDER}")

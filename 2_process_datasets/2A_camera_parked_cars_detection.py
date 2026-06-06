@@ -74,8 +74,8 @@ OUTPUT_DATASET_DIR = PROCESSED_ROOT / bag_stem
 # All camera detection outputs are saved here
 OUTPUT_DIR = OUTPUT_DATASET_DIR / "camera_detections"
 
-FCOS3D_CONFIG     = Path("2_process_datasets/utils/fcos3d_config.py")
-FCOS3D_CHECKPOINT = Path("2_process_datasets/utils/fcos3d.pth")
+FCOS3D_CONFIG = "2_process_datasets/utils/fcos3d_config.py"
+FCOS3D_CHECKPOINT = "2_process_datasets/utils/fcos3d.pth"
 
 # Output files
 OUTPUT_JSON     = OUTPUT_DIR / "camera_detections.json"

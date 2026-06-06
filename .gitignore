@@ -32,3 +32,5 @@ data/data_for_validation/semantic_carla/
 data/data_for_stable_diffusion/*
 *.bag
 data/raw_dataset/*/
+data/processed_dataset/*/
+data/data_for_gaussian_splatting/*/

@@ -77,8 +77,8 @@ OUTPUT_SCREENSHOT_DIR = OUTPUT_DIR / "screenshots"
 TEMP_BIN_FILE         = OUTPUT_DIR / "_temp_calc.bin"
 
 # Model files
-CONFIG_FILE = Path("2_process_datasets/utils/my_pointpillars_config.py")
-CHECKPOINT_FILE = Path(
+CONFIG_FILE = "2_process_datasets/utils/my_pointpillars_config.py"
+CHECKPOINT_FILE = (
     "2_process_datasets/utils/"
     "hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth"
 )
@@ -1092,7 +1092,7 @@ def main():
 
         T_total = T_dynamic @ T_static_chain
 
-        result, _ = inference_detector(model, TEMP_BIN_FILE)
+        result, _ = inference_detector(model, str(TEMP_BIN_FILE))
 
         pred = result.pred_instances_3d
         bboxes = pred.bboxes_3d.tensor.cpu().numpy()

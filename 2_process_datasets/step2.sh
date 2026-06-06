@@ -1,7 +1,32 @@
 #!/bin/bash
+#
+# step2.sh
+#
+# Step 2 - Gaussian Splatting branch
+# Runs the GS-specific data processing pipeline (2A + 2B + 2C + 2E + 2F + 2G).
+#
+# Prerequisites (run BEFORE this script):
+#   - Step 1 (1_extract_ROS_data/step1.sh <bag_name.bag>)
 
-# Parse flags
+set -e
+
+# ---------- Parse args ----------
+
 REFINEMENT=false
+BAG_NAME=""
+
+usage() {
+    echo "Usage: $0 <bag_name.bag> [-r|--refinement]"
+    echo ""
+    echo "Arguments:"
+    echo "  <bag_name.bag>      Bag filename including .bag extension"
+    echo ""
+    echo "Options:"
+    echo "  -r, --refinement    Use 2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py"
+    echo "                      instead of 2B_lidar_parked_cars_detection.py"
+    echo "  -h, --help          Show this help message"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -r|--refinement)
@@ -9,23 +34,42 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            echo "Usage: $0 [-r|--refinement]"
-            echo ""
-            echo "Options:"
-            echo "  -r, --refinement   Use 2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py"
-            echo "                     instead of 2B_lidar_parked_cars_detection.py"
-            echo "  -h, --help         Show this help message"
+            usage
             exit 0
             ;;
-        *)
+        -*)
             echo "Unknown option: $1"
-            echo "Run '$0 --help' for usage."
+            usage
             exit 1
+            ;;
+        *)
+            if [ -z "$BAG_NAME" ]; then
+                BAG_NAME="$1"
+            else
+                echo "ERROR: Unexpected extra argument: $1"
+                usage
+                exit 1
+            fi
+            shift
             ;;
     esac
 done
 
-# Pick the 2B variant based on the flag
+if [ -z "$BAG_NAME" ]; then
+    echo "ERROR: Missing bag name."
+    usage
+    exit 1
+fi
+
+BAG_STEM="${BAG_NAME%.bag}"
+
+echo "=========================================="
+echo "Step 2 (GS branch) for bag: $BAG_NAME"
+echo "Refinement mode: $REFINEMENT"
+echo "=========================================="
+
+# ---------- Pick 2B variant ----------
+
 if [ "$REFINEMENT" = true ]; then
     SCRIPT_2B="2_process_datasets/2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py"
     echo "[INFO] Refinement mode: using 2B_OPTIONAL_lidar_parked_cars_detection_with_refinement.py"
@@ -33,6 +77,23 @@ else
     SCRIPT_2B="2_process_datasets/2B_lidar_parked_cars_detection.py"
     echo "[INFO] Standard mode: using 2B_lidar_parked_cars_detection.py"
 fi
+
+# ---------- Model downloads (infrastructure, not bag-specific) ----------
+
+FCOS3D_FILE="2_process_datasets/utils/fcos3d.pth"
+POINTPILLARS_FILE="2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth"
+
+if [ ! -f "$FCOS3D_FILE" ]; then
+    echo "Downloading FCOS3D"
+    gdown 1JIKRFQQI9CmQARk21Q619TPkdS49Voel -O "$FCOS3D_FILE"
+fi
+
+if [ ! -f "$POINTPILLARS_FILE" ]; then
+    echo "Downloading PointPillars"
+    gdown 1AGOR8C0tDUsWSSWTEc0fA7kysIE9-iol -O "$POINTPILLARS_FILE"
+fi
+
+# ---------- Run 2A, 2B, 2C, 2E, 2F ----------
 
 SCRIPTS=(
     "2_process_datasets/2A_camera_parked_cars_detection.py"
@@ -42,30 +103,20 @@ SCRIPTS=(
     "2_process_datasets/2F_extract_semantic_maps.py"
 )
 
-PTH_FILE_1="2_process_datasets/utils/fcos3d.pth"
-PTH_FILE_2="2_process_datasets/utils/hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth"
-
-if [ ! -f "$PTH_FILE_1" ]; then
-    echo "Downloading FCOS3D"
-    gdown 1JIKRFQQI9CmQARk21Q619TPkdS49Voel -O "$PTH_FILE_1"
-fi
-
-if [ ! -f "$PTH_FILE_2" ]; then
-    echo "Downloading PointPillars"
-    gdown 1AGOR8C0tDUsWSSWTEc0fA7kysIE9-iol -O "$PTH_FILE_2"
-fi
-
 for SCRIPT in "${SCRIPTS[@]}"; do
-    echo "Running Script $SCRIPT"
-    python3 "$SCRIPT"
-    if [ $? -ne 0 ]; then
-        echo "Error in $SCRIPT. Aborting."
-        exit 1
-    fi
+    echo ""
+    echo "--- Running $SCRIPT ---"
+    python3 "$SCRIPT" --bag-name "$BAG_NAME"
 done
 
-chmod +x 2_process_datasets/2G_OPT_fix_sidewalk.sh
-bash 2_process_datasets/2G_OPT_fix_sidewalk.sh
+# ---------- 2G: sidewalk fix on OpenDRIVE map ----------
 
 echo ""
-echo "All Scripts for Step 2 completed successfully"
+echo "--- Running 2G_OPT_fix_sidewalk.sh ---"
+chmod +x 2_process_datasets/2G_OPT_fix_sidewalk.sh
+bash 2_process_datasets/2G_OPT_fix_sidewalk.sh "$BAG_NAME"
+
+echo ""
+echo "=========================================="
+echo "Step 2 (GS branch) completed for $BAG_NAME"
+echo "=========================================="

@@ -89,9 +89,9 @@ OUTPUT_DATASET_DIR = PROCESSED_ROOT / bag_stem
 # Same folder as the standard 2A — this script is a superset
 OUTPUT_DIR = OUTPUT_DATASET_DIR / "camera_detections"
 
-FCOS3D_CONFIG     = Path("2_process_datasets/utils/fcos3d_config.py")
-FCOS3D_CHECKPOINT = Path("2_process_datasets/utils/fcos3d.pth")
-YOLO_SEG_MODEL    = Path("2_process_datasets/utils/yolov8n-seg.pt")
+FCOS3D_CONFIG = "2_process_datasets/utils/fcos3d_config.py"
+FCOS3D_CHECKPOINT = "2_process_datasets/utils/fcos3d.pth"
+YOLO_SEG_MODEL = "2_process_datasets/utils/yolov8n-seg.pt"
 
 OUTPUT_JSON     = OUTPUT_DIR / "camera_detections.json"
 OUTPUT_CLUSTERS = OUTPUT_DIR / "unified_clusters.txt"

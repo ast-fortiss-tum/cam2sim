@@ -17,7 +17,9 @@ Writes to (project root):
         vehicle_data.json ( hero_car + spawn positions)
 """
 
+import argparse
 import json
+from pathlib import Path
 import os
 import sys
 
@@ -98,19 +100,32 @@ from utils.plotting import create_plot, show_plot, get_output
 # CONFIGURATION
 # =======================
 
+# Bag / map name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+parser = argparse.ArgumentParser(
+    description="Generate OSM map data with hero_car position selected via GUI."
+)
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
+)
+args = parser.parse_args()
+
+bag_name = args.bag_name                # e.g. "reference_bag.bag"
+bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
+
 # Address used to fetch the OSM map.
 ADDRESS = "Guerickestraße, Alte Heide, Munich"
 
-# Bag / map name.
-MAP_NAME = "reference_bag"
-
 # Output folder.
 # Everything for this bag is saved under:
-# data/processed_dataset/<MAP_NAME>/maps/
+# data/processed_dataset/<bag_stem>/maps/
 MAP_OUTPUT_ROOT = project_path(
     "data",
     "processed_dataset",
-    MAP_NAME,
+    bag_stem,
     "maps",
 )
 
@@ -292,9 +307,9 @@ def normalize_vehicle_data_schema(output_json, existing_vehicle_data, dist):
 # =======================
 
 def main():
-    # 1. Validate config
-    if not MAP_NAME or not isinstance(MAP_NAME, str):
-        raise ValueError("MAP_NAME must be a non-empty string.")
+# 1. Validate config
+    if not bag_stem or not isinstance(bag_stem, str):
+        raise ValueError("bag_stem must be a non-empty string.")
 
     if MODE not in {"manual", "auto"}:
         raise ValueError("MODE must be either 'manual' or 'auto'.")
@@ -308,8 +323,9 @@ def main():
     print(f"Project root: {PROJECT_ROOT}")
     print(f"Script folder: {SCRIPT_DIR}")
     print(f"Local utils: {LOCAL_UTILS_DIR}")
-    print(f"Address: {ADDRESS}")
-    print(f"Map name: {MAP_NAME}")
+    print(f"Address:  {ADDRESS}")
+    print(f"Bag:      {bag_name}")
+    print(f"Bag stem: {bag_stem}")
     print(f"Distance: {DIST}")
     print(f"Mode: {MODE}")
     print(f"No CARLA: {NO_CARLA}")
