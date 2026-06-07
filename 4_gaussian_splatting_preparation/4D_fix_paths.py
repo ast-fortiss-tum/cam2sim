@@ -4,13 +4,15 @@
 """
 4D_fix_paths.py
 
-Rewrite absolute paths embedded by Nerfstudio inside splatfacto config.yml files.
+Rewrite absolute paths embedded by Nerfstudio inside config.yml files
+for splatfacto / splatfacto-big / nerfacto / nerfacto-big runs.
 
 Reads from (project root):
-    data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_*/splatfacto/*/config.yml
+    data/data_for_gaussian_splatting/<BAG>/outputs/<METHOD>_split_*/<METHOD>/*/config.yml
+    where METHOD in {splatfacto, splatfacto-big, nerfacto, nerfacto-big}.
 
 Writes to (project root):
-    same config.yml files, updated in place (originals saved as <config>.yml.bak)
+    same config.yml files, updated in place (originals saved as <config>.yml.bak).
 
 CLI flags:
     --dry_run             print what would change without writing
@@ -26,8 +28,15 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-GS_CONFIGS_GLOB = (
-    "data/data_for_gaussian_splatting/*/outputs/splatfacto_split_*/splatfacto/*/config.yml"
+# Methods supported by 4B. For each one, Nerfstudio writes config.yml under:
+#   data/data_for_gaussian_splatting/<BAG>/outputs/<METHOD>_split_<N>/<METHOD>/<TIMESTAMP>/config.yml
+SUPPORTED_METHODS = ("splatfacto", "splatfacto-big", "nerfacto", "nerfacto-big")
+
+# Build one glob per method. Note: the experiment folder and the inner method
+# folder use the EXACT method name, including the "-big" suffix.
+GS_CONFIGS_GLOBS = tuple(
+    f"data/data_for_gaussian_splatting/*/outputs/{m}_split_*/{m}/*/config.yml"
+    for m in SUPPORTED_METHODS
 )
 
 
@@ -185,10 +194,23 @@ def rewrite_config(config_path: Path, new_project_root: Path, dry_run: bool):
     return True
 
 
+def collect_configs(project_root: Path):
+    """
+    Discover config.yml files across all supported methods.
+    Deduplicate (in case globs overlap) and return a sorted list of Paths.
+    """
+    found = set()
+    for glob_pat in GS_CONFIGS_GLOBS:
+        for p in project_root.glob(glob_pat):
+            found.add(p.resolve())
+    return sorted(found)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fix absolute paths embedded by Nerfstudio in config.yml "
-                    "files after unzipping data.zip on a new machine."
+                    "files after unzipping data.zip on a new machine. "
+                    f"Scans methods: {', '.join(SUPPORTED_METHODS)}."
     )
     parser.add_argument(
         "--dry_run", action="store_true",
@@ -205,14 +227,31 @@ def main():
         else PROJECT_ROOT
 
     print(f"[INFO] Project root: {project_root}")
+    print(f"[INFO] Methods scanned: {', '.join(SUPPORTED_METHODS)}")
 
-    configs = sorted(project_root.glob(GS_CONFIGS_GLOB))
+    configs = collect_configs(project_root)
     if not configs:
-        print(f"[ERROR] No config.yml found under "
-              f"{project_root}/{GS_CONFIGS_GLOB}")
+        print(f"[ERROR] No config.yml found under {project_root} for any of:")
+        for g in GS_CONFIGS_GLOBS:
+            print(f"        {g}")
         sys.exit(1)
 
     print(f"[INFO] Found {len(configs)} config.yml file(s)")
+
+    # Per-method count for the summary banner.
+    # Check methods by descending name length so "splatfacto-big" is
+    # checked BEFORE "splatfacto" — otherwise a -big config would be
+    # mis-counted as the base method (substring false positive).
+    per_method = {m: 0 for m in SUPPORTED_METHODS}
+    methods_by_length = sorted(SUPPORTED_METHODS, key=len, reverse=True)
+    for cfg in configs:
+        for m in methods_by_length:
+            if f"/{m}_split_" in str(cfg):
+                per_method[m] += 1
+                break
+    for m in SUPPORTED_METHODS:
+        if per_method[m] > 0:
+            print(f"        - {m}: {per_method[m]}")
 
     n_changed = 0
     for cfg in configs:

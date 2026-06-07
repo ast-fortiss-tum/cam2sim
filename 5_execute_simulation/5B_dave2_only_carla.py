@@ -6,17 +6,16 @@
 Run DAVE-2 in an already-prepared CARLA world.
 
 Reads from (project root):
+    data/data_for_carla/camera.json                        (shared)
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
-    data/data_for_carla/<BAG>/camera.json
 
 Writes to:
-    data/processed_dataset/<BAG>/dave2_runs/only_carla_run<RUN_NUMBER>
+    data/processed_dataset/<BAG>/dave2_runs/only_carla_run<N>
         data/trajectory.json
-        depth/ (CARLA depth maps)
+        depth/    (CARLA depth maps)
         instance/ (CARLA instance maps)
-        rgb/ (CARLA rgb frames)
+        rgb/      (CARLA rgb frames)
         semantic/ (CARLA semantic maps)
-  
 """
 
 import os
@@ -24,6 +23,9 @@ import sys
 import json
 import math
 import time
+import re
+import argparse
+from pathlib import Path
 from queue import Empty
 
 import carla
@@ -80,42 +82,16 @@ from utils.dave2_connection import (
 
 
 # =======================
-# HARDCODED CONFIG
+# CONFIG (non bag-dependent)
 # =======================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
 
-CARLA_DATA_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "data_for_carla",
-    BAG_NAME,
-)
+# Note: bag-dependent paths (CARLA_DATA_FOLDER, TRAJECTORY_PATH, ...) are
+# built in main() after argparse parses --bag-name.
 
-CAMERA_JSON_PATH = os.path.join(
-    CARLA_DATA_FOLDER,
-    "camera.json",
-)
-
-TRAJECTORY_PATH = os.path.join(
-    CARLA_DATA_FOLDER,
-    "trajectory_positions_rear_odom_yaw.json",
-)
-
-OUTPUT_ROOT = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "processed_dataset",
-    BAG_NAME,
-    "dave2_runs",
-)
-
-RUN_NUMBER = 1
-
-OUTPUT_FOLDER = os.path.join(
-    OUTPUT_ROOT,
-    f"only_carla_run{RUN_NUMBER}",
-)
+RUN_PREFIX = "only_carla_run"
 
 IM_WIDTH = 800
 IM_HEIGHT = 503
@@ -254,7 +230,30 @@ def load_camera_data(path):
     return camera_data
 
 
-def create_output_folders():
+def next_run_folder(base_dir, prefix=RUN_PREFIX, forced_id=None):
+    """
+    Pick the next free <prefix><N> folder inside base_dir.
+    If forced_id is given, use that number explicitly.
+    """
+    os.makedirs(base_dir, exist_ok=True)
+    if forced_id is not None:
+        return os.path.join(base_dir, f"{prefix}{int(forced_id)}")
+
+    existing = []
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+    for entry in os.listdir(base_dir):
+        full = os.path.join(base_dir, entry)
+        if not os.path.isdir(full):
+            continue
+        m = pattern.match(entry)
+        if m:
+            existing.append(int(m.group(1)))
+
+    next_n = max(existing) + 1 if existing else 1
+    return os.path.join(base_dir, f"{prefix}{next_n}")
+
+
+def create_output_folders(output_folder):
     for subdir in [
         "rgb",
         "semantic",
@@ -262,7 +261,7 @@ def create_output_folders():
         "depth",
         "data",
     ]:
-        os.makedirs(os.path.join(OUTPUT_FOLDER, subdir), exist_ok=True)
+        os.makedirs(os.path.join(output_folder, subdir), exist_ok=True)
 
 
 def clean_semantic_and_instance(sem_pil, inst_pil, min_area=MIN_PIXEL_AREA):
@@ -346,13 +345,14 @@ def save_data(
     final_seg,
     final_inst,
     final_depth,
+    output_folder,
 ):
     filename = f"{frame_id:06d}"
 
-    final_rgb.save(os.path.join(OUTPUT_FOLDER, "rgb", f"{filename}.png"))
-    final_seg.save(os.path.join(OUTPUT_FOLDER, "semantic", f"{filename}.png"))
-    final_inst.save(os.path.join(OUTPUT_FOLDER, "instance", f"{filename}.png"))
-    final_depth.save(os.path.join(OUTPUT_FOLDER, "depth", f"{filename}.png"))
+    final_rgb.save(os.path.join(output_folder, "rgb", f"{filename}.png"))
+    final_seg.save(os.path.join(output_folder, "semantic", f"{filename}.png"))
+    final_inst.save(os.path.join(output_folder, "instance", f"{filename}.png"))
+    final_depth.save(os.path.join(output_folder, "depth", f"{filename}.png"))
 
 
 def drain_queues(*queues):
@@ -553,28 +553,80 @@ def pil_to_pygame_surface(pil_image):
 # =======================
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="DAVE-2 only-CARLA driving (cam2sim)"
+    )
+    parser.add_argument(
+        "--bag-name",
+        default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+        help="Bag filename including .bag extension "
+             "(default: env BAG_NAME or 'reference_bag.bag').",
+    )
+    parser.add_argument(
+        "--run-id",
+        type=int,
+        default=None,
+        help="Force a specific run number for the output folder "
+             "(default: auto-pick next free integer).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Custom output dir. If omitted, auto-picks "
+             "data/processed_dataset/<bag>/dave2_runs/only_carla_run<N>.",
+    )
+    args = parser.parse_args()
+
+    bag_name = args.bag_name               # e.g. "reference_bag.bag"
+    bag_stem = Path(bag_name).stem         # e.g. "reference_bag"
+
+    # Build bag-dependent paths now that we know the bag.
+    carla_data_folder = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem
+    )
+    camera_json_path = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", "camera.json"
+    )
+    trajectory_path = os.path.join(
+        carla_data_folder, "trajectory_positions_rear_odom_yaw.json"
+    )
+    output_root = os.path.join(
+        PROJECT_ROOT, "data", "processed_dataset", bag_stem, "dave2_runs"
+    )
+
+    if args.output_dir:
+        output_folder = args.output_dir
+    else:
+        output_folder = next_run_folder(
+            output_root,
+            prefix=RUN_PREFIX,
+            forced_id=args.run_id,
+        )
+
     print("=" * 80)
     print("DAVE-2 ONLY-CARLA DRIVING")
     print("=" * 80)
     print(f"[INFO] Project root:       {PROJECT_ROOT}")
     print(f"[INFO] Script folder:      {SCRIPT_DIR}")
     print(f"[INFO] Local utils:        {LOCAL_UTILS_DIR}")
-    print(f"[INFO] Bag name:           {BAG_NAME}")
-    print(f"[INFO] Camera json:        {CAMERA_JSON_PATH}")
-    print(f"[INFO] Trajectory path:    {TRAJECTORY_PATH}")
-    print(f"[INFO] Output folder:      {OUTPUT_FOLDER}")
+    print(f"[INFO] Bag:                {bag_name}")
+    print(f"[INFO] Bag stem:           {bag_stem}")
+    print(f"[INFO] Camera json:        {camera_json_path}  (shared)")
+    print(f"[INFO] Trajectory path:    {trajectory_path}")
+    print(f"[INFO] Output folder:      {output_folder}")
     print(f"[INFO] CARLA:              {CARLA_IP}:{CARLA_PORT}")
     print("=" * 80)
 
-    if not os.path.exists(CAMERA_JSON_PATH):
-        raise FileNotFoundError(f"camera.json not found: {CAMERA_JSON_PATH}")
+    if not os.path.exists(camera_json_path):
+        raise FileNotFoundError(f"camera.json not found: {camera_json_path}")
 
-    if not os.path.exists(TRAJECTORY_PATH):
-        raise FileNotFoundError(f"Trajectory file not found: {TRAJECTORY_PATH}")
+    if not os.path.exists(trajectory_path):
+        raise FileNotFoundError(f"Trajectory file not found: {trajectory_path}")
 
-    create_output_folders()
+    create_output_folders(output_folder)
 
-    camera_data = load_camera_data(CAMERA_JSON_PATH)
+    camera_data = load_camera_data(camera_json_path)
 
     fov = float(camera_data["camera"]["fov"])
     fov_str = str(fov)
@@ -582,13 +634,13 @@ def main():
     target_size = int(camera_data["size"]["x"])
     target_res = (target_size, target_size)
 
-    full_trajectory = load_json_file(TRAJECTORY_PATH)
+    full_trajectory = load_json_file(trajectory_path)
 
     if MAX_FRAMES is not None and MAX_FRAMES > 0:
         full_trajectory = full_trajectory[:MAX_FRAMES]
 
     if not full_trajectory:
-        raise RuntimeError(f"Trajectory is empty: {TRAJECTORY_PATH}")
+        raise RuntimeError(f"Trajectory is empty: {trajectory_path}")
 
     print(f"[INFO] Loaded trajectory frames: {len(full_trajectory)}")
     print(f"[INFO] Target size: {target_size}")
@@ -879,6 +931,7 @@ def main():
                     final_seg=final_seg,
                     final_inst=final_inst,
                     final_depth=final_depth,
+                    output_folder=output_folder,
                 )
 
     except KeyboardInterrupt:
@@ -904,7 +957,7 @@ def main():
                     pass
 
         if trajectory_log:
-            traj_file = os.path.join(OUTPUT_FOLDER, "data", "trajectory.json")
+            traj_file = os.path.join(output_folder, "data", "trajectory.json")
 
             with open(traj_file, "w") as f:
                 json.dump(trajectory_log, f, indent=2)
