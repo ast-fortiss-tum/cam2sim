@@ -7,8 +7,15 @@
 #
 # Prerequisites (run BEFORE this script):
 #   - Step 1 (1_extract_ROS_data/step1.sh <bag_name.bag>)
+#   - Conda env: data_extraction
 
 set -e
+
+# ---------- Conda init ----------
+# Required for `conda activate` to work in non-interactive scripts.
+CONDA_BASE="$(conda info --base)"
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
 
 # ---------- Parse args ----------
 
@@ -68,6 +75,11 @@ echo "Step 2 (GS branch) for bag: $BAG_NAME"
 echo "Refinement mode: $REFINEMENT"
 echo "=========================================="
 
+# ---------- Activate data_extraction env ----------
+echo ""
+echo "--- Activating conda env: data_extraction ---"
+conda activate data_extraction
+
 # ---------- Pick 2B variant ----------
 
 if [ "$REFINEMENT" = true ]; then
@@ -115,6 +127,10 @@ echo ""
 echo "--- Running 2G_OPT_fix_sidewalk.sh ---"
 chmod +x 2_process_datasets/2G_OPT_fix_sidewalk.sh
 bash 2_process_datasets/2G_OPT_fix_sidewalk.sh "$BAG_NAME"
+
+# ---------- Done ----------
+
+conda deactivate
 
 echo ""
 echo "=========================================="
