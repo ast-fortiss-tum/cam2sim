@@ -90,29 +90,14 @@ from utils.carla_simulator import (
 #  CONFIG
 # =============================================================================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
 
-XODR_FILE = os.path.join(
-    PROJECT_ROOT, "data", "processed_dataset", BAG_NAME, "maps", "map.xodr"
-)
-TRAJECTORY_FILE = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME,
-    "trajectory_positions_rear_odom_yaw.json"
-)
-CAMERA_CONFIG_FILE = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME, "camera.json"
-)
-GS_DATA_ROOT = os.path.join(
-    PROJECT_ROOT, "data", "data_for_gaussian_splatting", BAG_NAME
-)
-GS_OUTPUTS_DIR = os.path.join(GS_DATA_ROOT, "outputs")
-DEFAULT_OUTPUT_DIR = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME, "replay_results"
-)
+# Note: bag-dependent paths (XODR_FILE, TRAJECTORY_FILE, ...) are built
+# in main() after argparse parses --bag-name. We only define constants here.
 
 IM_WIDTH = 800
 IM_HEIGHT = 503
-
 
 # =============================================================================
 #  SLIDER (calibration GUI)
@@ -445,38 +430,38 @@ def render_gs(pipeline, c2w, width, height, fov):
 #  SPLIT DETECTION (cam2sim layout)
 # =============================================================================
 
-def auto_detect_splits():
+def auto_detect_splits(gs_outputs_dir, gs_data_root):
     """
     Look for splatfacto splits in:
-        data/data_for_gaussian_splatting/<BAG>/outputs/splatfacto_split_<N>/splatfacto/<TS>/config.yml
- 
+        <gs_outputs_dir>/splatfacto_split_<N>/splatfacto/<TS>/config.yml
+
     For each split also resolves:
         - utm_to_nerfstudio_transform.json  (next to config.yml)
-        - frame_positions_split_<N>_*.txt   (in GS_DATA_ROOT)
+        - frame_positions_split_<N>_*.txt   (in gs_data_root)
     """
     splits = []
- 
-    if not os.path.isdir(GS_OUTPUTS_DIR):
-        print(f"[WARN] Outputs folder not found: {GS_OUTPUTS_DIR}")
+
+    if not os.path.isdir(gs_outputs_dir):
+        print(f"[WARN] Outputs folder not found: {gs_outputs_dir}")
         return splits
- 
+
     split_dirs = sorted([
-        d for d in os.listdir(GS_OUTPUTS_DIR)
-        if os.path.isdir(os.path.join(GS_OUTPUTS_DIR, d))
+        d for d in os.listdir(gs_outputs_dir)
+        if os.path.isdir(os.path.join(gs_outputs_dir, d))
         and d.startswith("splatfacto_split_")
     ])
- 
+
     for split_dir in split_dirs:
         match = re.match(r"splatfacto_split_(\d+)", split_dir)
         if not match:
             continue
         split_num = int(match.group(1))
- 
-        splatfacto_dir = os.path.join(GS_OUTPUTS_DIR, split_dir, "splatfacto")
+
+        splatfacto_dir = os.path.join(gs_outputs_dir, split_dir, "splatfacto")
         if not os.path.isdir(splatfacto_dir):
             print(f"[WARN] Missing 'splatfacto' subfolder in {split_dir}")
             continue
- 
+
         runs = sorted([
             d for d in os.listdir(splatfacto_dir)
             if os.path.isdir(os.path.join(splatfacto_dir, d))
@@ -484,12 +469,12 @@ def auto_detect_splits():
         if not runs:
             print(f"[WARN] No runs found in {splatfacto_dir}")
             continue
- 
+
         run_name = runs[-1]
         run_dir = os.path.join(splatfacto_dir, run_name)
         config_path = os.path.join(run_dir, "config.yml")
         utm_transform_path = os.path.join(run_dir, "utm_to_nerfstudio_transform.json")
- 
+
         if not os.path.exists(config_path):
             print(f"[WARN] No config.yml in {run_dir}")
             continue
@@ -497,30 +482,30 @@ def auto_detect_splits():
             print(f"[WARN] No utm_to_nerfstudio_transform.json in {run_dir}")
             print(f"       Run 4C_utm_yaw_to_nerfstudio.py for split {split_num} first.")
             continue
- 
+
         # Find frame_positions_split_<N>_*.txt
         frame_positions = None
-        for fname in os.listdir(GS_DATA_ROOT):
+        for fname in os.listdir(gs_data_root):
             if (fname.startswith(f"frame_positions_split_{split_num}_")
                     and fname.endswith(".txt")):
-                frame_positions = os.path.join(GS_DATA_ROOT, fname)
+                frame_positions = os.path.join(gs_data_root, fname)
                 break
- 
+
         if frame_positions is None:
             print(f"[WARN] No frame_positions_split_{split_num}_*.txt found "
-                  f"in {GS_DATA_ROOT}")
- 
+                  f"in {gs_data_root}")
+
         splits.append({
             "name": f"split_{split_num}",
             "split_num": split_num,
             "gs_config": config_path,
             "utm_transform": utm_transform_path,
             "frame_positions": frame_positions,
-            "data_root": GS_DATA_ROOT,
+            "data_root": gs_data_root,
             "run_name": run_name,
         })
         print(f"[INFO] Found split_{split_num} (run={run_name})")
- 
+
     splits.sort(key=lambda s: s["split_num"])
     return splits
  
@@ -652,6 +637,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Replay with Nerfstudio-trained GS (multi-split, cam2sim layout)"
     )
+    parser.add_argument(
+        "--bag-name",
+        default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+        help="Bag filename including .bag extension "
+             "(default: env BAG_NAME or 'reference_bag.bag').",
+    )
     parser.add_argument("--only_carla", action="store_true",
                         help="Run without GS model")
     parser.add_argument("--only_split", type=int, default=None,
@@ -664,25 +655,76 @@ def main():
                         help="Skip Phase 1 free camera calibration (default: True)")
     parser.add_argument("--no_save", action="store_true",
                         help="Disable frame saving")
-    parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR,
-                        help="Output directory for saved frames")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Output directory for saved frames "
+                             "(default: <PROJECT_ROOT>/data/data_for_carla/<bag>/replay_results)")
+
+
     args = parser.parse_args()
+
+    bag_name = args.bag_name               # e.g. "reference_bag.bag"
+    bag_stem = Path(bag_name).stem         # e.g. "reference_bag"
+
+    # Build bag-dependent paths now that we know the bag.
+    xodr_file = os.path.join(
+        PROJECT_ROOT, "data", "processed_dataset", bag_stem, "maps", "map.xodr"
+    )
+    trajectory_file = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem,
+        "trajectory_positions_rear_odom_yaw.json"
+    )
+    # Camera config resolution: per-bag override -> shared default.
+    # In most cases the same physical camera is used for every bag (same
+    # vehicle, same sensor), so we keep a shared default in
+    # data/data_for_carla/camera.json and let any bag override it
+    # by placing its own camera.json under data/data_for_carla/<bag>/.
+    per_bag_camera_config = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem, "camera.json"
+    )
+    shared_camera_config = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", "camera.json"
+    )
+
+    if os.path.exists(per_bag_camera_config):
+        camera_config_file = per_bag_camera_config
+        camera_config_source = f"per-bag ({bag_stem})"
+    elif os.path.exists(shared_camera_config):
+        camera_config_file = shared_camera_config
+        camera_config_source = "shared default"
+    else:
+        raise FileNotFoundError(
+            f"No camera.json found. Looked in:\n"
+            f"  {per_bag_camera_config}\n"
+            f"  {shared_camera_config}"
+        )
+    gs_data_root = os.path.join(
+        PROJECT_ROOT, "data", "data_for_gaussian_splatting", bag_stem
+    )
+    gs_outputs_dir = os.path.join(gs_data_root, "outputs")
+    default_output_dir = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem, "replay_results"
+    )
+
+    # If user did not override --output_dir, use the default built from bag_stem.
+    if args.output_dir is None:
+        args.output_dir = default_output_dir
 
     print("=" * 80)
     print("REPLAY: CARLA + Gaussian Splatting (multi-split)")
     print("=" * 80)
     print(f"[INFO] Project root:    {PROJECT_ROOT}")
-    print(f"[INFO] Bag name:        {BAG_NAME}")
-    print(f"[INFO] XODR file:       {XODR_FILE}")
-    print(f"[INFO] Trajectory:      {TRAJECTORY_FILE}")
-    print(f"[INFO] Camera config:   {CAMERA_CONFIG_FILE}")
-    print(f"[INFO] GS data root:    {GS_DATA_ROOT}")
+    print(f"[INFO] Bag:             {bag_name}")
+    print(f"[INFO] Bag stem:        {bag_stem}")
+    print(f"[INFO] XODR file:       {xodr_file}")
+    print(f"[INFO] Trajectory:      {trajectory_file}")
+    print(f"[INFO] Camera config:   {camera_config_file}")
+    print(f"[INFO] GS data root:    {gs_data_root}")
     print(f"[INFO] Output dir:      {args.output_dir}")
     print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
     print("=" * 80)
 
     # ---- Camera config ----
-    with open(CAMERA_CONFIG_FILE, "r") as f:
+    with open(camera_config_file, "r") as f:
         cam_data = json.load(f)
     cam_config = cam_data["camera"]
     fov = float(cam_config["fov"])
@@ -700,7 +742,7 @@ def main():
 
     if not only_carla:
         print("\n[INFO] Auto-detecting split models...")
-        split_configs = auto_detect_splits()
+        split_configs = auto_detect_splits(gs_outputs_dir, gs_data_root)
 
         if args.only_split is not None:
             split_configs = [c for c in split_configs
@@ -713,7 +755,7 @@ def main():
                   f"(--only_split mode)")
 
         if split_configs:
-            split_models = load_split_models(split_configs, XODR_FILE, fov=fov)
+            split_models = load_split_models(split_configs, xodr_file, fov=fov)
 
         if not split_models:
             print("[WARN] No GS models loaded - falling back to only_carla mode")
@@ -735,7 +777,7 @@ def main():
     tm = client.get_trafficmanager(8000)
 
     # ---- Load trajectory ----
-    with open(TRAJECTORY_FILE, "r") as f:
+    with open(trajectory_file, "r") as f:
         trajectory_points = json.load(f)
     print(f"[INFO] Loaded {len(trajectory_points)} trajectory points.")
 
@@ -1086,7 +1128,7 @@ def main():
 
     save_flag = not args.no_save
     if save_flag:
-        run_name = f"{BAG_NAME}_replay"
+        run_name = f"{bag_stem}_replay"
         save_dir_carla = os.path.join(args.output_dir, run_name, "carla")
         save_dir_gs = os.path.join(args.output_dir, run_name, "gs")
         save_dir_combined = os.path.join(args.output_dir, run_name, "combined")
