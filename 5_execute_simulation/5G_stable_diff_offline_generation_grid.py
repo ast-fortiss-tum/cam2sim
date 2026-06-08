@@ -33,13 +33,13 @@ Writes to (external drive):
 The output is laid out as SUBFOLDERS (one per config), which matches what
 compute_metrics.py expects in its default (non-flat) mode. You can then run:
 
-    python compute_metrics.py \
-        --gt-folder data/raw_dataset/reference_bag/images \
-        --input-folder <EXTERNAL_DRIVE>/cam2sim_sd/reference_bag/sd_grid_search \
-        --output-folder <EXTERNAL_DRIVE>/cam2sim_sd/reference_bag/sd_grid_search_METRICS \
+    python 6_validation/6D_image_quality_metrics.py \
+        --gt-folder data/raw_dataset/<BAG>/images \
+        --input-folder <EXTERNAL_DRIVE>/cam2sim_sd/<BAG>/sd_grid_search \
+        --output-folder <EXTERNAL_DRIVE>/cam2sim_sd/<BAG>/sd_grid_search_METRICS \
         --crop-bottom 45
 
-and then rank the results with stable_diff_evaluate_results.py.
+and then rank the results with 6E_stable_diff_eval_results.py.
 """
 
 import os
@@ -47,6 +47,7 @@ import sys
 import json
 import time
 import argparse
+from pathlib import Path
 from typing import List, Tuple, Dict, Any
 
 import torch
@@ -74,58 +75,32 @@ if SCRIPT_DIR in sys.path:
 
 sys.path.insert(0, SCRIPT_DIR)
 
+
 # =======================
-# HARDCODED CONFIG
+# CONFIG (non bag-dependent)
 # =======================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+# Note: bag-dependent paths (REPLAY_DATASET_FOLDER, MODELS_BASE_DIR, ...) are
+# built in main() after argparse parses --bag-name.
+
 NUM_PARTS = 1
 
 GUIDANCE_SCALE = 3.0
 NUM_INFERENCE_STEPS = 50
 FIXED_SEED = 50
 
-
 DEFAULT_MAX_FRAMES = 10
 
-
-# =======================
-# INPUT PATHS (project root)
-# =======================
-
-REPLAY_DATASET_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "processed_dataset",
-    BAG_NAME,
-    "carla_replay_dataset_sd",
-)
-
-SEM_FOLDER = os.path.join(REPLAY_DATASET_FOLDER, "semantic")
-INST_FOLDER = os.path.join(REPLAY_DATASET_FOLDER, "instance")
-METADATA_PATH = os.path.join(REPLAY_DATASET_FOLDER, "data", "all_frame_data.json")
-
-TRAJECTORY_PATH = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "data_for_carla",
-    BAG_NAME,
-    "trajectory_positions_rear_odom_yaw.json",
-)
-
-
-# =======================
-# MODEL PATHS
-# =======================
-
+# External drive (shared, not bag-dependent)
 EXTERNAL_DRIVE = "/media/davide/extra2/work"
 CAM2SIM_SD_ROOT = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
 
-BAG_SD_DIR = os.path.join(CAM2SIM_SD_ROOT, BAG_NAME)
-MODELS_BASE_DIR = os.path.join(BAG_SD_DIR, "SD_Training_Outputs_Split")
-
 # Use the external drive for HuggingFace cache (so we don't re-download SD1.5)
 os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
+
 
 # =======================
 # LOCAL UTILS IMPORTS
@@ -141,15 +116,6 @@ try:
     from utils.stable_diffusion import NEGATIVE_PROMPT
 except ImportError:
     NEGATIVE_PROMPT = "blurry, distorted, street without street lines"
-
-
-
-
-# =======================
-# OUTPUT PATHS (external drive — grid search produces a lot of data)
-# =======================
-
-GRID_OUTPUT_ROOT = os.path.join(BAG_SD_DIR, "sd_grid_search")
 
 
 # =======================
@@ -352,13 +318,13 @@ def load_json_file(path):
         return json.load(f)
 
 
-def load_replay_data(max_frames=None):
+def load_replay_data(sem_folder, inst_folder, metadata_path, max_frames=None):
     """
     Load semantic + instance maps and metadata from the replay dataset.
     Same logic as 5E.
     """
-    print(f"\n[INFO] Loading replay dataset from: {REPLAY_DATASET_FOLDER}")
-    all_frame_data = load_json_file(METADATA_PATH)
+    print(f"\n[INFO] Loading replay dataset from: {os.path.dirname(metadata_path)}")
+    all_frame_data = load_json_file(metadata_path)
     if max_frames is not None and max_frames > 0:
         all_frame_data = all_frame_data[:max_frames]
 
@@ -368,8 +334,8 @@ def load_replay_data(max_frames=None):
     for item in tqdm(all_frame_data, desc="Reading frames"):
         frame_id = item["frame"]
         filename = f"{frame_id:06d}.png"
-        seg_path = os.path.join(SEM_FOLDER, filename)
-        inst_path = os.path.join(INST_FOLDER, filename)
+        seg_path = os.path.join(sem_folder, filename)
+        inst_path = os.path.join(inst_folder, filename)
         if not os.path.exists(seg_path) or not os.path.exists(inst_path):
             n_missing += 1
             continue
@@ -410,6 +376,12 @@ def parse_args():
         description="Grid search over SD ControlNet schedules for cam2sim."
     )
     parser.add_argument(
+        "--bag-name",
+        default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+        help="Bag filename including .bag extension "
+             "(default: env BAG_NAME or 'reference_bag.bag').",
+    )
+    parser.add_argument(
         "--max-frames", type=int, default=DEFAULT_MAX_FRAMES,
         help=f"How many replay frames to use per config (default: {DEFAULT_MAX_FRAMES}). "
              "Use a small number (~100) to iterate quickly, then scale up."
@@ -419,9 +391,9 @@ def parse_args():
         help="Only run the first N grid configurations. Default: all 100."
     )
     parser.add_argument(
-        "--output-root", type=str, default=GRID_OUTPUT_ROOT,
+        "--output-root", type=str, default=None,
         help="Where to write the grid search subfolders. "
-             f"Default: {GRID_OUTPUT_ROOT}"
+             "Default: <EXTERNAL_DRIVE>/cam2sim_sd/<bag>/sd_grid_search"
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -433,15 +405,42 @@ def parse_args():
 def main():
     args = parse_args()
 
+    bag_name = args.bag_name               # e.g. "reference_bag.bag"
+    bag_stem = Path(bag_name).stem         # e.g. "reference_bag"
+
+    # ---------- Build bag-dependent paths ----------
+    replay_dataset_folder = os.path.join(
+        PROJECT_ROOT, "data", "processed_dataset", bag_stem,
+        "carla_replay_dataset_sd",
+    )
+    sem_folder = os.path.join(replay_dataset_folder, "semantic")
+    inst_folder = os.path.join(replay_dataset_folder, "instance")
+    metadata_path = os.path.join(replay_dataset_folder, "data", "all_frame_data.json")
+
+    trajectory_path = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem,
+        "trajectory_positions_rear_odom_yaw.json",
+    )
+
+    bag_sd_dir = os.path.join(CAM2SIM_SD_ROOT, bag_stem)
+    models_base_dir = os.path.join(bag_sd_dir, "SD_Training_Outputs_Split")
+
+    # Output root: per-bag on external drive by default, or user override
+    if args.output_root is None:
+        output_root = os.path.join(bag_sd_dir, "sd_grid_search")
+    else:
+        output_root = args.output_root
+
     print("=" * 80)
     print("STABLE DIFFUSION GRID SEARCH (cam2sim, SD branch)")
     print("=" * 80)
     print(f"[INFO] Project root:        {PROJECT_ROOT}")
-    print(f"[INFO] Bag name:            {BAG_NAME}")
-    print(f"[INFO] Replay dataset:      {REPLAY_DATASET_FOLDER}")
-    print(f"[INFO] Trajectory:          {TRAJECTORY_PATH}")
-    print(f"[INFO] Models base:         {MODELS_BASE_DIR}")
-    print(f"[INFO] Output root:         {args.output_root}")
+    print(f"[INFO] Bag:                 {bag_name}")
+    print(f"[INFO] Bag stem:            {bag_stem}")
+    print(f"[INFO] Replay dataset:      {replay_dataset_folder}")
+    print(f"[INFO] Trajectory:          {trajectory_path}")
+    print(f"[INFO] Models base:         {models_base_dir}")
+    print(f"[INFO] Output root:         {output_root}")
     print(f"[INFO] Device:              {DEVICE}")
     print(f"[INFO] Num parts:           {NUM_PARTS}")
     print(f"[INFO] Guidance scale:      {GUIDANCE_SCALE}")
@@ -450,30 +449,30 @@ def main():
     print("=" * 80)
 
     # ---------- Sanity checks ----------
-    if not os.path.exists(REPLAY_DATASET_FOLDER):
+    if not os.path.exists(replay_dataset_folder):
         raise FileNotFoundError(
-            f"Replay dataset not found: {REPLAY_DATASET_FOLDER}\n"
-            f"Run 5A_OPT_trajectory_only_carla_with_instance_mapping.py first."
+            f"Replay dataset not found: {replay_dataset_folder}\n"
+            f"Run 5A_sd_trajectory_only_carla.py --bag-name {bag_name} first."
         )
-    if not os.path.exists(METADATA_PATH):
-        raise FileNotFoundError(f"Metadata not found: {METADATA_PATH}")
-    if not os.path.exists(TRAJECTORY_PATH):
-        raise FileNotFoundError(f"Trajectory not found: {TRAJECTORY_PATH}")
-    if not os.path.isdir(MODELS_BASE_DIR):
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
+    if not os.path.exists(trajectory_path):
+        raise FileNotFoundError(f"Trajectory not found: {trajectory_path}")
+    if not os.path.isdir(models_base_dir):
         raise FileNotFoundError(
-            f"SD models directory not found: {MODELS_BASE_DIR}\n"
-            f"Run 4A_train_stable_diff.py first."
+            f"SD models directory not found: {models_base_dir}\n"
+            f"Run 4A_train_stable_diff.py --bag-name {bag_name} first."
         )
     for part_idx in range(NUM_PARTS):
-        part_dir = os.path.join(MODELS_BASE_DIR, f"part_{part_idx}")
+        part_dir = os.path.join(models_base_dir, f"part_{part_idx}")
         if not os.path.isdir(part_dir):
             raise FileNotFoundError(f"Missing model part directory: {part_dir}")
 
     # ---------- Output root ----------
-    os.makedirs(args.output_root, exist_ok=True)
+    os.makedirs(output_root, exist_ok=True)
 
     # ---------- Load trajectory + chunks ----------
-    full_trajectory = load_json_file(TRAJECTORY_PATH)
+    full_trajectory = load_json_file(trajectory_path)
     trajectory_chunks = split_trajectory_into_parts(full_trajectory, NUM_PARTS)
     print(f"\n[INFO] Trajectory: {len(full_trajectory)} points")
     for i, chunk in enumerate(trajectory_chunks):
@@ -481,7 +480,10 @@ def main():
 
     # ---------- Load replay data once (reused across all configs) ----------
     seg_list, inst_list, frame_data, frame_indices = load_replay_data(
-        max_frames=args.max_frames
+        sem_folder=sem_folder,
+        inst_folder=inst_folder,
+        metadata_path=metadata_path,
+        max_frames=args.max_frames,
     )
     if not seg_list:
         raise RuntimeError("No frames to process.")
@@ -497,7 +499,7 @@ def main():
 
     # ---------- Iterate configs ----------
     grid_info = {
-        "bag_name": BAG_NAME,
+        "bag_name": bag_stem,
         "num_parts": NUM_PARTS,
         "guidance_scale": GUIDANCE_SCALE,
         "num_inference_steps": NUM_INFERENCE_STEPS,
@@ -512,7 +514,7 @@ def main():
 
     for config_idx, config in enumerate(all_configs):
         label = config["label"]
-        config_dir = os.path.join(args.output_root, label)
+        config_dir = os.path.join(output_root, label)
 
         # Idempotency
         if not args.force and is_config_complete(config_dir, frame_indices):
@@ -563,7 +565,7 @@ def main():
                     del pipe
                     del model_data
                     torch.cuda.empty_cache()
-                model_path = os.path.join(MODELS_BASE_DIR, f"part_{required_part}")
+                model_path = os.path.join(models_base_dir, f"part_{required_part}")
                 pipe, model_data = load_pipeline_models(model_path, DEVICE)
                 current_model_part = required_part
                 prev_generated = previous_model_last_image
@@ -623,7 +625,7 @@ def main():
         })
 
         # Periodically flush the summary JSON in case the run is killed
-        with open(os.path.join(args.output_root, "grid_search_info.json"), "w") as f:
+        with open(os.path.join(output_root, "grid_search_info.json"), "w") as f:
             json.dump(grid_info, f, indent=2)
 
     grid_elapsed = time.time() - grid_t_start
@@ -631,7 +633,7 @@ def main():
     grid_info["configs_done"] = n_done
     grid_info["configs_skipped"] = n_skipped
 
-    with open(os.path.join(args.output_root, "grid_search_info.json"), "w") as f:
+    with open(os.path.join(output_root, "grid_search_info.json"), "w") as f:
         json.dump(grid_info, f, indent=2)
 
     print("\n" + "=" * 80)
@@ -639,16 +641,16 @@ def main():
     print(f"  Configurations done:    {n_done}")
     print(f"  Configurations skipped: {n_skipped}")
     print(f"  Total time:             {grid_elapsed/60:.1f} min")
-    print(f"  Output root:            {args.output_root}")
+    print(f"  Output root:            {output_root}")
     print("=" * 80)
-    print("\nNext step — evaluate the grid with compute_metrics.py:")
-    print(f"  python compute_metrics.py \\")
-    print(f"      --gt-folder {os.path.join(PROJECT_ROOT, 'data', 'raw_dataset', BAG_NAME, 'images')} \\")
-    print(f"      --input-folder {args.output_root} \\")
-    print(f"      --output-folder {args.output_root}_METRICS \\")
+    print("\nNext step — evaluate the grid with 6D_image_quality_metrics.py:")
+    print(f"  python 6_validation/6D_image_quality_metrics.py \\")
+    print(f"      --gt-folder {os.path.join(PROJECT_ROOT, 'data', 'raw_dataset', bag_stem, 'images')} \\")
+    print(f"      --input-folder {output_root} \\")
+    print(f"      --output-folder {output_root}_METRICS \\")
     print(f"      --crop-bottom 45")
     print()
-    print("Then rank the configs with stable_diff_evaluate_results.py.")
+    print("Then rank the configs with 6E_stable_diff_eval_results.py.")
 
 
 if __name__ == "__main__":

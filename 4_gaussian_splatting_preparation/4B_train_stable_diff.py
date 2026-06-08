@@ -66,7 +66,7 @@ os.chdir(PROJECT_ROOT)
 BAG_NAME = args.bag_name                # e.g. "reference_bag.bag"
 BAG_STEM = Path(BAG_NAME).stem          # e.g. "reference_bag"
 
-NUM_PARTS = 1                       # Match the 3 GS splits of cam2sim
+NUM_PARTS = 3                       # Match the 3 GS splits of cam2sim
 RESOLUTION = 512
 PRETRAINED_SD = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 

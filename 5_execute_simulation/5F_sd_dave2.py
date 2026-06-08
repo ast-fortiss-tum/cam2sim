@@ -14,8 +14,8 @@ For each frame:
   - model switching across the 3 SD splits is done by position along trajectory
 
 Reads from (project root):
+    data/data_for_carla/camera.json                       (shared)
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
-    data/data_for_carla/<BAG>/camera.json
     data/data_for_carla/<BAG>/instance_color_map.json  (from 3F_OPT)
 
 Reads SD models from (external SSD):
@@ -42,6 +42,7 @@ import math
 import re
 import time
 import argparse
+from pathlib import Path
 from queue import Empty
 
 import carla
@@ -104,10 +105,15 @@ from utils.dave2_connection import (
 
 
 # =============================================================================
-#  CONFIG
+#  CONFIG (non bag-dependent)
 # =============================================================================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+# Note: bag-dependent paths (TRAJECTORY_FILE, MODELS_BASE_DIR, ...) are
+# built in main() after argparse parses --bag-name.
+
 NUM_PARTS = 3
 
 # Best control schedule from thesis
@@ -115,28 +121,13 @@ CONTROL_START = [0.0, 0.0, 0.35]   # [seg, inst, temp]
 CONTROL_END = [1.0, 0.6, 0.55]
 GUIDANCE_SCALE = 3.0
 
-# Input paths (project root)
-TRAJECTORY_FILE = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME,
-    "trajectory_positions_rear_odom_yaw.json"
-)
-CAMERA_CONFIG_FILE = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME, "camera.json"
-)
-INSTANCE_COLOR_MAP_PATH = os.path.join(
-    PROJECT_ROOT, "data", "data_for_carla", BAG_NAME, "instance_color_map.json"
-)
-
 # Output path (project root, same as 5D)
 DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "results")
 RUN_PREFIX = "sd_run"
 
-# SD models (external SSD)
+# External SSD root (shared, not bag-dependent)
 EXTERNAL_DRIVE = "/media/davidejannussi/ssd space"
 CAM2SIM_SD_ROOT = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
-MODELS_BASE_DIR = os.path.join(
-    CAM2SIM_SD_ROOT, BAG_NAME, "SD_Training_Outputs_Split"
-)
 os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
 
 # Sensors
@@ -175,7 +166,6 @@ TARGET_COLORS_BGR = [
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-GLOBAL_COLOR_MAP = {}
 
 
 # =============================================================================
@@ -311,10 +301,14 @@ def save_frame_outputs(frame, run_folder, final_rgb, final_seg, final_inst,
 # =============================================================================
 
 def main():
-    global GLOBAL_COLOR_MAP
-
     parser = argparse.ArgumentParser(
         description="DAVE-2 closed-loop driving with Stable Diffusion (cam2sim)"
+    )
+    parser.add_argument(
+        "--bag-name",
+        default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+        help="Bag filename including .bag extension "
+             "(default: env BAG_NAME or 'reference_bag.bag').",
     )
     parser.add_argument("--only_carla", action="store_true",
                         help="Run without SD - feed CARLA RGB directly to DAVE-2.")
@@ -328,15 +322,37 @@ def main():
                         help="Force a specific run number.")
     args = parser.parse_args()
 
+    bag_name = args.bag_name               # e.g. "reference_bag.bag"
+    bag_stem = Path(bag_name).stem         # e.g. "reference_bag"
+
+    # ---------- Build bag-dependent paths ----------
+    trajectory_file = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem,
+        "trajectory_positions_rear_odom_yaw.json",
+    )
+    camera_config_file = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", "camera.json"
+    )
+    instance_color_map_path = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem,
+        "instance_color_map.json",
+    )
+
+    # SD models (external SSD, per-bag)
+    models_base_dir = os.path.join(
+        CAM2SIM_SD_ROOT, bag_stem, "SD_Training_Outputs_Split"
+    )
+
     print("=" * 80)
     print("DAVE-2 CLOSED-LOOP WITH STABLE DIFFUSION (cam2sim, SD branch)")
     print("=" * 80)
     print(f"[INFO] Project root:    {PROJECT_ROOT}")
-    print(f"[INFO] Bag name:        {BAG_NAME}")
-    print(f"[INFO] Trajectory:      {TRAJECTORY_FILE}")
-    print(f"[INFO] Camera config:   {CAMERA_CONFIG_FILE}")
-    print(f"[INFO] Instance map:    {INSTANCE_COLOR_MAP_PATH}")
-    print(f"[INFO] SD models:       {MODELS_BASE_DIR}")
+    print(f"[INFO] Bag:             {bag_name}")
+    print(f"[INFO] Bag stem:        {bag_stem}")
+    print(f"[INFO] Trajectory:      {trajectory_file}")
+    print(f"[INFO] Camera config:   {camera_config_file}  (shared)")
+    print(f"[INFO] Instance map:    {instance_color_map_path}")
+    print(f"[INFO] SD models:       {models_base_dir}")
     print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
     print(f"[INFO] Device:          {DEVICE}")
     print(f"[INFO] only_carla mode: {args.only_carla}")
@@ -345,7 +361,7 @@ def main():
     print("=" * 80)
 
     # ---------- Camera config ----------
-    with open(CAMERA_CONFIG_FILE, "r") as f:
+    with open(camera_config_file, "r") as f:
         cam_data = json.load(f)
     cam_config = cam_data.get("camera", cam_data)
     fov = float(cam_config["fov"])
@@ -358,15 +374,16 @@ def main():
           f"pos=({cam_pos_x},{cam_pos_y},{cam_pos_z}), pitch={cam_pitch}")
 
     # ---------- Instance color map ----------
-    if os.path.exists(INSTANCE_COLOR_MAP_PATH):
-        GLOBAL_COLOR_MAP = load_instance_color_map(INSTANCE_COLOR_MAP_PATH)
-        print(f"[INFO] Loaded {len(GLOBAL_COLOR_MAP)} CARLA-to-bag color mappings.")
+    color_map = {}
+    if os.path.exists(instance_color_map_path):
+        color_map = load_instance_color_map(instance_color_map_path)
+        print(f"[INFO] Loaded {len(color_map)} CARLA-to-bag color mappings.")
     else:
         print(f"[WARN] No instance_color_map.json. Instance maps will use "
               f"CARLA synthetic colors only.")
 
     # ---------- Trajectory + chunks ----------
-    with open(TRAJECTORY_FILE, "r") as f:
+    with open(trajectory_file, "r") as f:
         trajectory_points = json.load(f)
     print(f"[INFO] Trajectory points: {len(trajectory_points)}")
 
@@ -600,7 +617,7 @@ def main():
             sem_data.convert(carla.ColorConverter.CityScapesPalette)
             sem_pil = remap_segmentation_colors(carla_image_to_pil(sem_data))
 
-            inst_pil = process_instance_map_fixed(inst_data, GLOBAL_COLOR_MAP)
+            inst_pil = process_instance_map_fixed(inst_data, color_map)
 
             sem_cleaned, inst_cleaned = clean_semantic_and_instance(
                 sem_pil, inst_pil
@@ -650,7 +667,7 @@ def main():
                                 print(f"   Freed GPU memory.")
 
                             model_path = os.path.join(
-                                MODELS_BASE_DIR, f"part_{required_part}"
+                                models_base_dir, f"part_{required_part}"
                             )
                             print(f"   Loading from: {model_path}")
                             pipe, model_data_gen = load_pipeline_models(
@@ -700,7 +717,7 @@ def main():
                     print(f"[F{frame}] Loading initial model part "
                           f"{initial_part} (dist={initial_dist:.2f}m)")
                     model_path = os.path.join(
-                        MODELS_BASE_DIR, f"part_{initial_part}"
+                        models_base_dir, f"part_{initial_part}"
                     )
                     pipe, model_data_gen = load_pipeline_models(
                         model_path, DEVICE

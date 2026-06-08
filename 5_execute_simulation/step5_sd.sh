@@ -16,7 +16,7 @@
 # (different from step5.sh which uses 3F_generate_carla_scenario.py).
 #
 # Sequence:
-#   1. Terminal 1: starts CARLA (3C_setup_carla.py)
+#   1. Terminal 1: starts CARLA (3C_sd_setup_carla.py)
 #   2. Waits for CARLA RPC port to be reachable
 #   3. Terminal 2: loads map + spawns cars (3F_sd_generate_carla_scenario.py)
 #      Script waits for Terminal 2 to FINISH (3F_sd is fire-and-exit)
@@ -25,11 +25,11 @@
 #   5. Terminal 4: runs the chosen Step 5 SD script (or scripts, for 5C)
 #
 # Usage:
-#     bash step5_sd.sh                 # defaults to 5C
-#     bash step5_sd.sh --mode 5A
-#     bash step5_sd.sh --mode 5B
-#     bash step5_sd.sh --mode 5C
-#     bash step5_sd.sh -m 5D
+#     bash step5_sd.sh <bag_name.bag>                  # defaults to mode 5C
+#     bash step5_sd.sh <bag_name.bag> --mode 5A
+#     bash step5_sd.sh <bag_name.bag> --mode 5B
+#     bash step5_sd.sh <bag_name.bag> --mode 5C
+#     bash step5_sd.sh <bag_name.bag> -m 5D
 # =============================================================================
 
 set -e
@@ -71,8 +71,33 @@ MAP_LOAD_TIMEOUT=180
 
 # -----------------------------------------------------------------------------
 
-# Parse args
+# ---------- Usage ----------
+
+usage() {
+    cat <<EOF
+Usage: $0 <bag_name.bag> [options]
+
+Arguments:
+  <bag_name.bag>            Bag filename including .bag extension
+
+Options:
+  -m, --mode MODE           Mode to run (default: 5C)
+                            Allowed: 5A, 5B, 5C, 5D
+  -h, --help                Show this help message
+
+Modes:
+  5A   SD CARLA-only replay with instance mapping  (env: $ENV_SD, no DAVE-2)
+  5B   CARLA-only DAVE-2 drive                     (env: $ENV_SD, with DAVE-2)
+  5C   5A_sd + 5E offline SD generation            (env: $ENV_SD, no DAVE-2)
+  5D   SD DAVE-2 closed-loop drive                 (env: $ENV_SD, with DAVE-2)
+EOF
+}
+
+# ---------- Parse args ----------
+
 MODE="5C"
+BAG_NAME=""
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -m|--mode)
@@ -80,16 +105,38 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            sed -n '2,30p' "$0"
+            usage
             exit 0
             ;;
-        *)
-            echo "[ERROR] Unknown argument: $1"
-            echo "        Use --mode 5A | 5B | 5C | 5D"
+        -*)
+            echo "[ERROR] Unknown option: $1"
+            usage
             exit 1
+            ;;
+        *)
+            if [ -z "$BAG_NAME" ]; then
+                BAG_NAME="$1"
+            else
+                echo "[ERROR] Unexpected extra argument: $1"
+                usage
+                exit 1
+            fi
+            shift
             ;;
     esac
 done
+
+if [ -z "$BAG_NAME" ]; then
+    echo "[ERROR] Missing bag name."
+    usage
+    exit 1
+fi
+
+BAG_STEM="${BAG_NAME%.bag}"
+
+# Export BAG_NAME so child Python scripts can pick it up via env var fallback,
+# in case any of them does not accept --bag-name yet.
+export BAG_NAME
 
 # Validate mode and pick script(s) + env + dave2-server flag
 NEED_DAVE_SERVER=0
@@ -126,7 +173,12 @@ case "$MODE" in
         ;;
 esac
 
+echo "=========================================="
+echo "Step 5 SD launcher"
+echo "=========================================="
 echo "[INFO] PROJECT_ROOT       = $PROJECT_ROOT"
+echo "[INFO] Bag                = $BAG_NAME"
+echo "[INFO] Bag stem           = $BAG_STEM"
 echo "[INFO] MODE               = $STEP5_LABEL"
 echo "[INFO] Step 5 env         = $STEP5_ENV"
 echo "[INFO] Step 5 script      = $STEP5_SCRIPT"
@@ -134,6 +186,7 @@ if [ $IS_MODE_5C -eq 1 ]; then
     echo "[INFO] Step 5 script (2)  = $STEP5_SCRIPT_2"
 fi
 echo "[INFO] DAVE-2 server      = $( [ $NEED_DAVE_SERVER -eq 1 ] && echo YES || echo NO )"
+echo "=========================================="
 
 # Detect terminal emulator
 if command -v gnome-terminal >/dev/null 2>&1; then
@@ -182,6 +235,8 @@ done
 # spawn_terminal TITLE ENV "command"
 # Opens a new terminal, sources conda, activates env, runs command,
 # keeps window open after exit.
+# BAG_NAME is exported in the parent shell and re-exported here so the
+# child process inherits it.
 spawn_terminal() {
     local title="$1"
     local env_name="$2"
@@ -194,9 +249,11 @@ echo '========================================================';
 source '$CONDA_SH';
 conda activate '$env_name';
 cd '$PROJECT_ROOT';
-echo '[step5_sd] PWD: '\$(pwd);
-echo '[step5_sd] ENV: $env_name';
-echo '[step5_sd] CMD: $command_to_run';
+export BAG_NAME='$BAG_NAME';
+echo '[step5_sd] PWD:      '\$(pwd);
+echo '[step5_sd] ENV:      $env_name';
+echo '[step5_sd] BAG_NAME: \$BAG_NAME';
+echo '[step5_sd] CMD:      $command_to_run';
 echo;
 $command_to_run;
 echo;
@@ -227,9 +284,11 @@ echo '========================================================';
 source '$CONDA_SH';
 conda activate '$env_name';
 cd '$PROJECT_ROOT';
-echo '[step5_sd] PWD: '\$(pwd);
-echo '[step5_sd] ENV: $env_name';
-echo '[step5_sd] CMD: $command_to_run';
+export BAG_NAME='$BAG_NAME';
+echo '[step5_sd] PWD:      '\$(pwd);
+echo '[step5_sd] ENV:      $env_name';
+echo '[step5_sd] BAG_NAME: \$BAG_NAME';
+echo '[step5_sd] CMD:      $command_to_run';
 echo;
 $command_to_run;
 exit_code=\$?;
@@ -314,7 +373,8 @@ SENTINEL_3F="$TMP_DIR/3F_sd_done"
 trap "rm -rf '$TMP_DIR'" EXIT
 
 echo ""
-echo "[STEP 1] Spawning Terminal 1: CARLA (3C_setup_carla.py)"
+echo "[STEP 1] Spawning Terminal 1: CARLA (3C_sd_setup_carla.py)"
+# 3C is infrastructure, no --bag-name needed.
 spawn_terminal "Terminal 1 - CARLA" "$ENV_CARLA" "python $SCRIPT_3C"
 
 sleep 2
@@ -330,7 +390,7 @@ echo "[STEP 2] Spawning Terminal 2: Map + Cars (3F_sd_generate_carla_scenario.py
 spawn_terminal_with_sentinel \
     "Terminal 2 - Map (SD)" \
     "$ENV_CARLA" \
-    "python $SCRIPT_3F_SD" \
+    "python $SCRIPT_3F_SD --bag-name '$BAG_NAME'" \
     "$SENTINEL_3F"
 
 if ! wait_for_sentinel "$SENTINEL_3F" "$MAP_LOAD_TIMEOUT" "3F_sd (map + cars + color map)"; then
@@ -346,6 +406,7 @@ if [ $NEED_DAVE_SERVER -eq 1 ]; then
     echo "[STEP 3] Spawning Terminal 3: DAVE-2 server ($SCRIPT_DAVE_SERVER)"
     # communicator.py loads 'final.h5' from its current working directory,
     # so we cd into system_under_test/ before launching it.
+    # DAVE-2 server is bag-agnostic (always loads final.h5), no --bag-name.
     spawn_terminal \
         "Terminal 3 - DAVE-2 server" \
         "$ENV_DAVE" \
@@ -368,13 +429,13 @@ if [ $IS_MODE_5C -eq 1 ]; then
     spawn_terminal \
         "Terminal $NEXT_TERM_NUM - $STEP5_LABEL" \
         "$STEP5_ENV" \
-        "python $STEP5_SCRIPT && python $STEP5_SCRIPT_2"
+        "python $STEP5_SCRIPT --bag-name '$BAG_NAME' && python $STEP5_SCRIPT_2 --bag-name '$BAG_NAME'"
 else
     echo "[STEP $NEXT_TERM_NUM] Spawning Terminal $NEXT_TERM_NUM: $STEP5_LABEL"
     spawn_terminal \
         "Terminal $NEXT_TERM_NUM - $STEP5_LABEL" \
         "$STEP5_ENV" \
-        "python $STEP5_SCRIPT"
+        "python $STEP5_SCRIPT --bag-name '$BAG_NAME'"
 fi
 
 echo ""

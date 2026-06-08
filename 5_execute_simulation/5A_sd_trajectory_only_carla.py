@@ -14,7 +14,7 @@ colors. This produces the exact format expected by the SD training and
 generation pipeline.
 
 Reads from (project root):
-    data/data_for_carla/<BAG>/camera.json
+    data/data_for_carla/camera.json                        (shared)
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
     data/data_for_carla/<BAG>/instance_color_map.json (from 3F_OPT)
 
@@ -30,6 +30,8 @@ import os
 import sys
 import json
 import math
+import argparse
+from pathlib import Path
 from queue import Empty
 
 import carla
@@ -82,42 +84,14 @@ from utils.carla_simulator import (
 
 
 # =======================
-# HARDCODED CONFIG
+# CONFIG (non bag-dependent)
 # =======================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
 
-CARLA_DATA_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "data_for_carla",
-    BAG_NAME,
-)
-
-CAMERA_JSON_PATH = os.path.join(
-    CARLA_DATA_FOLDER,
-    "camera.json",
-)
-
-TRAJECTORY_PATH = os.path.join(
-    CARLA_DATA_FOLDER,
-    "trajectory_positions_rear_odom_yaw.json",
-)
-
-# NEW: instance color map produced by 3F_OPT
-INSTANCE_COLOR_MAP_PATH = os.path.join(
-    CARLA_DATA_FOLDER,
-    "instance_color_map.json",
-)
-
-# Different output folder from the GS branch (carla_replay_dataset/)
-OUTPUT_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "processed_dataset",
-    BAG_NAME,
-    "carla_replay_dataset_sd",
-)
+# Note: bag-dependent paths (CARLA_DATA_FOLDER, TRAJECTORY_PATH, ...) are
+# built in main() after argparse parses --bag-name.
 
 IM_WIDTH = 800
 IM_HEIGHT = 503
@@ -161,14 +135,6 @@ TARGET_COLORS_BGR = [
     (50, 234, 157),  # RoadLines
     (232, 35, 244),  # Sidewalk
 ]
-
-
-# =======================
-# GLOBAL STORAGE
-# =======================
-
-ALL_FRAME_DATA = []
-GLOBAL_COLOR_MAP = {}   # CARLA instance color tuple -> [R, G, B] from bag
 
 
 # =======================
@@ -299,11 +265,11 @@ def load_camera_data(path):
     return camera_data
 
 
-def create_output_folders():
-    os.makedirs(os.path.join(OUTPUT_FOLDER, "rgb"), exist_ok=True)
-    os.makedirs(os.path.join(OUTPUT_FOLDER, "semantic"), exist_ok=True)
-    os.makedirs(os.path.join(OUTPUT_FOLDER, "instance"), exist_ok=True)
-    os.makedirs(os.path.join(OUTPUT_FOLDER, "data"), exist_ok=True)
+def create_output_folders(output_folder):
+    os.makedirs(os.path.join(output_folder, "rgb"), exist_ok=True)
+    os.makedirs(os.path.join(output_folder, "semantic"), exist_ok=True)
+    os.makedirs(os.path.join(output_folder, "instance"), exist_ok=True)
+    os.makedirs(os.path.join(output_folder, "data"), exist_ok=True)
 
 
 def clean_semantic_and_instance(sem_pil, inst_pil, min_area=MIN_PIXEL_AREA):
@@ -370,6 +336,9 @@ def save_frame_data(
     inst_obj,
     transform_data,
     target_size,
+    output_folder,
+    color_map,
+    all_frame_data,
 ):
     filename = f"{frame_id:06d}"
     target_res = (target_size, target_size)
@@ -383,7 +352,7 @@ def save_frame_data(
     )
 
     final_rgb.save(
-        os.path.join(OUTPUT_FOLDER, "rgb", f"{filename}.png")
+        os.path.join(output_folder, "rgb", f"{filename}.png")
     )
 
     # ---------- SEMANTIC ----------
@@ -392,8 +361,8 @@ def save_frame_data(
 
     # ---------- INSTANCE WITH BAG MAPPING ----------
     # Replaces raw CARLA BGRA with synthetic per-instance colors,
-    # then remaps any color that matches GLOBAL_COLOR_MAP to its bag RGB.
-    inst_pil_raw = process_instance_map_fixed(inst_obj, GLOBAL_COLOR_MAP)
+    # then remaps any color that matches color_map to its bag RGB.
+    inst_pil_raw = process_instance_map_fixed(inst_obj, color_map)
 
     # ---------- CLEANING ----------
     sem_cleaned, inst_cleaned = clean_semantic_and_instance(
@@ -413,15 +382,15 @@ def save_frame_data(
     )
 
     final_sem.save(
-        os.path.join(OUTPUT_FOLDER, "semantic", f"{filename}.png")
+        os.path.join(output_folder, "semantic", f"{filename}.png")
     )
 
     final_inst.save(
-        os.path.join(OUTPUT_FOLDER, "instance", f"{filename}.png")
+        os.path.join(output_folder, "instance", f"{filename}.png")
     )
 
     # ---------- METADATA ----------
-    ALL_FRAME_DATA.append(
+    all_frame_data.append(
         {
             "frame": int(frame_id),
             "location": transform_data["location"],
@@ -554,7 +523,37 @@ def drain_queues(*queues):
 # =======================
 
 def main():
-    global GLOBAL_COLOR_MAP
+    parser = argparse.ArgumentParser(
+        description="CARLA-only trajectory replay (SD branch, with instance color mapping)"
+    )
+    parser.add_argument(
+        "--bag-name",
+        default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+        help="Bag filename including .bag extension "
+             "(default: env BAG_NAME or 'reference_bag.bag').",
+    )
+    args = parser.parse_args()
+
+    bag_name = args.bag_name               # e.g. "reference_bag.bag"
+    bag_stem = Path(bag_name).stem         # e.g. "reference_bag"
+
+    # Build bag-dependent paths now that we know the bag.
+    carla_data_folder = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem
+    )
+    camera_json_path = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", "camera.json"
+    )
+    trajectory_path = os.path.join(
+        carla_data_folder, "trajectory_positions_rear_odom_yaw.json"
+    )
+    instance_color_map_path = os.path.join(
+        carla_data_folder, "instance_color_map.json"
+    )
+    output_folder = os.path.join(
+        PROJECT_ROOT, "data", "processed_dataset", bag_stem,
+        "carla_replay_dataset_sd",
+    )
 
     print("=" * 80)
     print("REPLAY HERO TRAJECTORY (SD branch, with instance color mapping)")
@@ -562,34 +561,37 @@ def main():
     print(f"[INFO] Project root:       {PROJECT_ROOT}")
     print(f"[INFO] Script folder:      {SCRIPT_DIR}")
     print(f"[INFO] Local utils:        {LOCAL_UTILS_DIR}")
-    print(f"[INFO] Bag name:           {BAG_NAME}")
-    print(f"[INFO] CARLA data folder:  {CARLA_DATA_FOLDER}")
-    print(f"[INFO] Camera json:        {CAMERA_JSON_PATH}")
-    print(f"[INFO] Trajectory path:    {TRAJECTORY_PATH}")
-    print(f"[INFO] Instance color map: {INSTANCE_COLOR_MAP_PATH}")
-    print(f"[INFO] Output folder:      {OUTPUT_FOLDER}")
+    print(f"[INFO] Bag:                {bag_name}")
+    print(f"[INFO] Bag stem:           {bag_stem}")
+    print(f"[INFO] CARLA data folder:  {carla_data_folder}")
+    print(f"[INFO] Camera json:        {camera_json_path}  (shared)")
+    print(f"[INFO] Trajectory path:    {trajectory_path}")
+    print(f"[INFO] Instance color map: {instance_color_map_path}")
+    print(f"[INFO] Output folder:      {output_folder}")
     print(f"[INFO] CARLA:              {CARLA_IP}:{CARLA_PORT}")
     print("=" * 80)
 
-    if not os.path.exists(CAMERA_JSON_PATH):
-        raise FileNotFoundError(f"camera.json not found: {CAMERA_JSON_PATH}")
+    if not os.path.exists(camera_json_path):
+        raise FileNotFoundError(f"camera.json not found: {camera_json_path}")
 
-    if not os.path.exists(TRAJECTORY_PATH):
-        raise FileNotFoundError(f"Trajectory file not found: {TRAJECTORY_PATH}")
+    if not os.path.exists(trajectory_path):
+        raise FileNotFoundError(f"Trajectory file not found: {trajectory_path}")
 
-    create_output_folders()
+    create_output_folders(output_folder)
 
     # ---------- Load instance color map ----------
-    if os.path.exists(INSTANCE_COLOR_MAP_PATH):
-        GLOBAL_COLOR_MAP = load_instance_color_map(INSTANCE_COLOR_MAP_PATH)
+    color_map = {}   # CARLA instance color tuple -> [R, G, B] from bag
+
+    if os.path.exists(instance_color_map_path):
+        color_map = load_instance_color_map(instance_color_map_path)
         print(
             f"[INFO] Loaded instance color map: "
-            f"{len(GLOBAL_COLOR_MAP)} CARLA-to-bag mappings."
+            f"{len(color_map)} CARLA-to-bag mappings."
         )
     else:
         print(
             f"[WARN] No instance_color_map.json found at "
-            f"{INSTANCE_COLOR_MAP_PATH}."
+            f"{instance_color_map_path}."
         )
         print(
             "       Instance maps will use CARLA synthetic colors only "
@@ -601,19 +603,19 @@ def main():
         )
 
     # ---------- Load camera + trajectory ----------
-    camera_data = load_camera_data(CAMERA_JSON_PATH)
+    camera_data = load_camera_data(camera_json_path)
 
     fov = str(camera_data["camera"]["fov"])
     target_size = int(camera_data["size"]["x"])
     fps = int(camera_data["camera"]["fps"])
 
-    trajectory_points = load_json_file(TRAJECTORY_PATH)
+    trajectory_points = load_json_file(trajectory_path)
 
     if MAX_FRAMES is not None and MAX_FRAMES > 0:
         trajectory_points = trajectory_points[:MAX_FRAMES]
 
     if not trajectory_points:
-        raise RuntimeError(f"Trajectory is empty: {TRAJECTORY_PATH}")
+        raise RuntimeError(f"Trajectory is empty: {trajectory_path}")
 
     print(f"[INFO] Loaded trajectory frames: {len(trajectory_points)}")
     print(f"[INFO] Target output size: {target_size} x {target_size}")
@@ -726,6 +728,9 @@ def main():
 
     print("[INFO] Starting trajectory replay.")
 
+    # Per-run frame metadata (was a module-level global before).
+    all_frame_data = []
+
     try:
         for idx, point in enumerate(trajectory_points):
             target_transform = make_trajectory_transform(point)
@@ -760,6 +765,9 @@ def main():
                 inst_obj=inst_data,
                 transform_data=current_transform_mapped,
                 target_size=target_size,
+                output_folder=output_folder,
+                color_map=color_map,
+                all_frame_data=all_frame_data,
             )
 
             if ENABLE_PYGAME_DISPLAY:
@@ -789,7 +797,7 @@ def main():
 
     finally:
         metadata_path = os.path.join(
-            OUTPUT_FOLDER,
+            output_folder,
             "data",
             "all_frame_data.json",
         )
@@ -797,10 +805,10 @@ def main():
         print("[INFO] Saving metadata...")
 
         with open(metadata_path, "w") as f:
-            json.dump(ALL_FRAME_DATA, f, indent=4)
+            json.dump(all_frame_data, f, indent=4)
 
         print(f"[INFO] Metadata saved: {metadata_path}")
-        print(f"[INFO] Saved frames: {len(ALL_FRAME_DATA)}")
+        print(f"[INFO] Saved frames: {len(all_frame_data)}")
 
         print("[INFO] Cleaning up sensors...")
 

@@ -41,6 +41,8 @@ import os
 import sys
 import json
 import time
+import argparse
+from pathlib import Path
 from typing import List, Tuple, Dict
 
 import torch
@@ -80,10 +82,15 @@ from utils.stable_diffusion import (
 
 
 # =======================
-# HARDCODED CONFIG
+# CONFIG (non bag-dependent)
 # =======================
 
-BAG_NAME = "reference_bag"
+# Bag name (with .bag extension): must match an existing bag from step 1.
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
+# Note: bag-dependent paths (REPLAY_DATASET_FOLDER, MODELS_BASE_DIR, ...) are
+# built in main() after argparse parses --bag-name.
+
 NUM_PARTS = 3
 
 # Best control schedule from the thesis
@@ -98,61 +105,12 @@ MAX_FRAMES = None
 # Skip frames whose output PNG already exists (idempotent)
 SKIP_EXISTING = False
 
-
-# =======================
-# INPUT PATHS (project root)
-# =======================
-
-REPLAY_DATASET_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "processed_dataset",
-    BAG_NAME,
-    "carla_replay_dataset_sd",
-)
-
-SEM_FOLDER = os.path.join(REPLAY_DATASET_FOLDER, "semantic")
-INST_FOLDER = os.path.join(REPLAY_DATASET_FOLDER, "instance")
-METADATA_PATH = os.path.join(REPLAY_DATASET_FOLDER, "data", "all_frame_data.json")
-
-TRAJECTORY_PATH = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "data_for_carla",
-    BAG_NAME,
-    "trajectory_positions_rear_odom_yaw.json",
-)
-
-
-# =======================
-# MODEL PATHS 
-# =======================
-
+# External SSD root (shared, not bag-dependent)
 EXTERNAL_DRIVE = "/media/davidejannussi/ssd space"
 CAM2SIM_SD_ROOT = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
 
-BAG_SD_DIR = os.path.join(CAM2SIM_SD_ROOT, BAG_NAME)
-MODELS_BASE_DIR = os.path.join(BAG_SD_DIR, "SD_Training_Outputs_Split")
-
 # Use the external SSD for HuggingFace cache too (so we don't re-download SD1.5)
 os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
-
-
-# =======================
-# OUTPUT PATHS (project root)
-# =======================
-
-OUTPUT_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "data",
-    "processed_dataset",
-    BAG_NAME,
-    "sd_generated",
-)
-
-OUTPUT_RGB_FOLDER = os.path.join(OUTPUT_FOLDER, "rgb")
-OUTPUT_DATA_FOLDER = os.path.join(OUTPUT_FOLDER, "data")
-OUTPUT_INFO_PATH = os.path.join(OUTPUT_DATA_FOLDER, "generation_info.json")
 
 
 # =======================
@@ -228,7 +186,7 @@ def load_json_file(path):
         return json.load(f)
 
 
-def load_replay_data(max_frames: int = None):
+def load_replay_data(sem_folder, inst_folder, metadata_path, max_frames=None):
     """
     Load semantic + instance maps and metadata from the replay dataset.
 
@@ -238,9 +196,9 @@ def load_replay_data(max_frames: int = None):
         frame_data:     list of metadata dicts (location, rotation, caption)
         frame_indices:  list of frame_id ints
     """
-    print(f"\n[INFO] Loading replay dataset from: {REPLAY_DATASET_FOLDER}")
+    print(f"\n[INFO] Loading replay dataset from: {os.path.dirname(metadata_path)}")
 
-    all_frame_data = load_json_file(METADATA_PATH)
+    all_frame_data = load_json_file(metadata_path)
 
     if max_frames is not None and max_frames > 0:
         all_frame_data = all_frame_data[:max_frames]
@@ -258,8 +216,8 @@ def load_replay_data(max_frames: int = None):
         frame_id = item["frame"]
         filename = f"{frame_id:06d}.png"
 
-        seg_path = os.path.join(SEM_FOLDER, filename)
-        inst_path = os.path.join(INST_FOLDER, filename)
+        seg_path = os.path.join(sem_folder, filename)
+        inst_path = os.path.join(inst_folder, filename)
 
         if not os.path.exists(seg_path) or not os.path.exists(inst_path):
             n_missing += 1
@@ -286,15 +244,56 @@ def load_replay_data(max_frames: int = None):
 # =======================
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Offline Stable Diffusion generation on CARLA replay dataset"
+    )
+    parser.add_argument(
+        "--bag-name",
+        default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+        help="Bag filename including .bag extension "
+             "(default: env BAG_NAME or 'reference_bag.bag').",
+    )
+    args = parser.parse_args()
+
+    bag_name = args.bag_name               # e.g. "reference_bag.bag"
+    bag_stem = Path(bag_name).stem         # e.g. "reference_bag"
+
+    # ---------- Build bag-dependent paths ----------
+    replay_dataset_folder = os.path.join(
+        PROJECT_ROOT, "data", "processed_dataset", bag_stem,
+        "carla_replay_dataset_sd",
+    )
+    sem_folder = os.path.join(replay_dataset_folder, "semantic")
+    inst_folder = os.path.join(replay_dataset_folder, "instance")
+    metadata_path = os.path.join(replay_dataset_folder, "data", "all_frame_data.json")
+
+    trajectory_path = os.path.join(
+        PROJECT_ROOT, "data", "data_for_carla", bag_stem,
+        "trajectory_positions_rear_odom_yaw.json",
+    )
+
+    # External SSD model paths (per-bag)
+    bag_sd_dir = os.path.join(CAM2SIM_SD_ROOT, bag_stem)
+    models_base_dir = os.path.join(bag_sd_dir, "SD_Training_Outputs_Split")
+
+    # Output paths (per-bag, in project root)
+    output_folder = os.path.join(
+        PROJECT_ROOT, "data", "processed_dataset", bag_stem, "sd_generated",
+    )
+    output_rgb_folder = os.path.join(output_folder, "rgb")
+    output_data_folder = os.path.join(output_folder, "data")
+    output_info_path = os.path.join(output_data_folder, "generation_info.json")
+
     print("=" * 80)
     print("OFFLINE STABLE DIFFUSION GENERATION (SD branch)")
     print("=" * 80)
     print(f"[INFO] Project root:        {PROJECT_ROOT}")
-    print(f"[INFO] Bag name:            {BAG_NAME}")
-    print(f"[INFO] Replay dataset:      {REPLAY_DATASET_FOLDER}")
-    print(f"[INFO] Trajectory:          {TRAJECTORY_PATH}")
-    print(f"[INFO] Models base:         {MODELS_BASE_DIR}")
-    print(f"[INFO] Output folder:       {OUTPUT_FOLDER}")
+    print(f"[INFO] Bag:                 {bag_name}")
+    print(f"[INFO] Bag stem:            {bag_stem}")
+    print(f"[INFO] Replay dataset:      {replay_dataset_folder}")
+    print(f"[INFO] Trajectory:          {trajectory_path}")
+    print(f"[INFO] Models base:         {models_base_dir}")
+    print(f"[INFO] Output folder:       {output_folder}")
     print(f"[INFO] Device:              {DEVICE}")
     print(f"[INFO] Num parts:           {NUM_PARTS}")
     print(f"[INFO] Control start:       {CONTROL_START}")
@@ -304,42 +303,42 @@ def main():
     print("=" * 80)
 
     # ---------- Sanity checks ----------
-    if not os.path.exists(REPLAY_DATASET_FOLDER):
+    if not os.path.exists(replay_dataset_folder):
         raise FileNotFoundError(
-            f"Replay dataset not found: {REPLAY_DATASET_FOLDER}\n"
-            f"Run 5A_OPT_trajectory_only_carla_with_instance_mapping.py first."
+            f"Replay dataset not found: {replay_dataset_folder}\n"
+            f"Run 5A_sd_trajectory_only_carla.py --bag-name {bag_name} first."
         )
 
-    if not os.path.exists(METADATA_PATH):
+    if not os.path.exists(metadata_path):
         raise FileNotFoundError(
-            f"Metadata not found: {METADATA_PATH}\n"
+            f"Metadata not found: {metadata_path}\n"
             f"The replay dataset is incomplete."
         )
 
-    if not os.path.exists(TRAJECTORY_PATH):
+    if not os.path.exists(trajectory_path):
         raise FileNotFoundError(
-            f"Trajectory not found: {TRAJECTORY_PATH}"
+            f"Trajectory not found: {trajectory_path}"
         )
 
-    if not os.path.isdir(MODELS_BASE_DIR):
+    if not os.path.isdir(models_base_dir):
         raise FileNotFoundError(
-            f"SD models directory not found: {MODELS_BASE_DIR}\n"
-            f"Run 4A_train_stable_diff.py first."
+            f"SD models directory not found: {models_base_dir}\n"
+            f"Run 4A_train_stable_diff.py --bag-name {bag_name} first."
         )
 
     for part_idx in range(NUM_PARTS):
-        part_dir = os.path.join(MODELS_BASE_DIR, f"part_{part_idx}")
+        part_dir = os.path.join(models_base_dir, f"part_{part_idx}")
         if not os.path.isdir(part_dir):
             raise FileNotFoundError(
                 f"Missing model part directory: {part_dir}"
             )
 
     # ---------- Output folders ----------
-    os.makedirs(OUTPUT_RGB_FOLDER, exist_ok=True)
-    os.makedirs(OUTPUT_DATA_FOLDER, exist_ok=True)
+    os.makedirs(output_rgb_folder, exist_ok=True)
+    os.makedirs(output_data_folder, exist_ok=True)
 
     # ---------- Load trajectory and split ----------
-    full_trajectory = load_json_file(TRAJECTORY_PATH)
+    full_trajectory = load_json_file(trajectory_path)
     trajectory_chunks = split_trajectory_into_parts(full_trajectory, NUM_PARTS)
     print(f"\n[INFO] Trajectory: {len(full_trajectory)} points")
     for i, chunk in enumerate(trajectory_chunks):
@@ -347,6 +346,9 @@ def main():
 
     # ---------- Load replay data ----------
     seg_list, inst_list, frame_data, frame_indices = load_replay_data(
+        sem_folder=sem_folder,
+        inst_folder=inst_folder,
+        metadata_path=metadata_path,
         max_frames=MAX_FRAMES,
     )
 
@@ -373,7 +375,7 @@ def main():
         frame_info = frame_data[i]
 
         out_filename = f"frame_{frame_id:06d}.png"
-        out_path = os.path.join(OUTPUT_RGB_FOLDER, out_filename)
+        out_path = os.path.join(output_rgb_folder, out_filename)
 
         # ---- Skip if already generated ----
         if SKIP_EXISTING and os.path.exists(out_path):
@@ -412,7 +414,7 @@ def main():
                 print("   Freed GPU memory.")
 
             # Load new model
-            model_path = os.path.join(MODELS_BASE_DIR, f"part_{required_part}")
+            model_path = os.path.join(models_base_dir, f"part_{required_part}")
             print(f"   Loading model from: {model_path}")
             pipe, model_data = load_pipeline_models(model_path, DEVICE)
 
@@ -472,7 +474,7 @@ def main():
 
     # ---------- Save generation info ----------
     info = {
-        "bag_name": BAG_NAME,
+        "bag_name": bag_stem,
         "num_parts": NUM_PARTS,
         "control_start": CONTROL_START,
         "control_end": CONTROL_END,
@@ -484,10 +486,10 @@ def main():
         "avg_seconds_per_generated_frame": (
             round(t_elapsed / max(n_generated, 1), 3)
         ),
-        "output_folder": OUTPUT_RGB_FOLDER,
+        "output_folder": output_rgb_folder,
     }
 
-    with open(OUTPUT_INFO_PATH, "w") as f:
+    with open(output_info_path, "w") as f:
         json.dump(info, f, indent=2)
 
     print("\n" + "=" * 80)
@@ -495,8 +497,8 @@ def main():
     print(f"   Frames generated:  {n_generated}")
     print(f"   Frames skipped:    {n_skipped}")
     print(f"   Total elapsed:     {t_elapsed / 60:.1f} min")
-    print(f"   Output folder:     {OUTPUT_RGB_FOLDER}")
-    print(f"   Generation info:   {OUTPUT_INFO_PATH}")
+    print(f"   Output folder:     {output_rgb_folder}")
+    print(f"   Generation info:   {output_info_path}")
     print("=" * 80)
 
 
