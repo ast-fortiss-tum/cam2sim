@@ -27,8 +27,8 @@ Writes to (external SSD):
 
 Run from project root:
     python 4B_stable_diffusion_training/4A_train_stable_diff.py
-    # Optional flag:
-    #   --force           retrain even if model markers exist
+    python 4B_stable_diffusion_training/4A_train_stable_diff.py --bag-name snowy.bag
+    python 4B_stable_diffusion_training/4A_train_stable_diff.py --force
 """
 
 import subprocess
@@ -36,6 +36,7 @@ import sys
 import os
 import argparse
 import json
+from pathlib import Path
 from datasets import load_from_disk
 from huggingface_hub import snapshot_download
 
@@ -43,7 +44,15 @@ from huggingface_hub import snapshot_download
 # ============================================================
 # STEP 0: Arguments & Setup
 # ============================================================
+DEFAULT_BAG_NAME = "reference_bag.bag"
+
 parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--bag-name",
+    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+    help="Bag filename including .bag extension "
+         "(default: env BAG_NAME or 'reference_bag.bag').",
+)
 parser.add_argument("--force", action="store_true",
                     help="Force retrain even if model markers exist")
 args, unknown = parser.parse_known_args()
@@ -54,8 +63,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 os.chdir(PROJECT_ROOT)
 
 # --- CONFIGURATION ---
-BAG_NAME = "reference_bag"
-NUM_PARTS = 3                       # Match the 3 GS splits of cam2sim
+BAG_NAME = args.bag_name                # e.g. "reference_bag.bag"
+BAG_STEM = Path(BAG_NAME).stem          # e.g. "reference_bag"
+
+NUM_PARTS = 1                       # Match the 3 GS splits of cam2sim
 RESOLUTION = 512
 PRETRAINED_SD = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 
@@ -63,10 +74,10 @@ PRETRAINED_SD = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 CONTROLNET_HF_REPO = "doguilmak/cityscapes-controlnet-sd15"
 CONTROLNET_HF_SUBFOLDER = "full_pipeline/controlnet"
 
-# --- INPUT (inside project root) ---
+# --- INPUT (inside project root, bag-dependent) ---
 LOCAL_BINARY_PATH = os.path.join(
     PROJECT_ROOT,
-    "data", "data_for_stable_diffusion", BAG_NAME, "hf_binary",
+    "data", "data_for_stable_diffusion", BAG_STEM, "hf_binary",
 )
 
 # --- EXTERNAL DRIVE (heavy stuff lives here to keep the repo light) ---
@@ -79,7 +90,7 @@ CONTROLNET_DIR = os.path.join(CAM2SIM_SD_ROOT, "cityscapes-controlnet")
 HF_CACHE_DIR = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
 
 # Per-bag (training outputs and parquet shards)
-BAG_SD_DIR = os.path.join(CAM2SIM_SD_ROOT, BAG_NAME)
+BAG_SD_DIR = os.path.join(CAM2SIM_SD_ROOT, BAG_STEM)
 OUTPUT_BASE = os.path.join(BAG_SD_DIR, "SD_Training_Outputs_Split")
 DATA_CACHE_DIR = os.path.join(BAG_SD_DIR, "local_data_shards")
 
@@ -100,6 +111,24 @@ os.makedirs(BAG_SD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_BASE, exist_ok=True)
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 os.makedirs(HF_CACHE_DIR, exist_ok=True)
+
+
+# --- BANNER ---
+print("=" * 60)
+print("STABLE DIFFUSION TRAINING (LoRA + 3 ControlNets per split)")
+print("=" * 60)
+print(f"[INFO] Bag:                  {BAG_NAME}")
+print(f"[INFO] Bag stem:             {BAG_STEM}")
+print(f"[INFO] Project root:         {PROJECT_ROOT}")
+print(f"[INFO] Local binary input:   {LOCAL_BINARY_PATH}")
+print(f"[INFO] External drive root:  {CAM2SIM_SD_ROOT}")
+print(f"[INFO] Bag SD dir:           {BAG_SD_DIR}")
+print(f"[INFO] Output base:          {OUTPUT_BASE}")
+print(f"[INFO] HF cache:             {HF_CACHE_DIR}")
+print(f"[INFO] NUM_PARTS:            {NUM_PARTS}")
+print(f"[INFO] Resolution:           {RESOLUTION}")
+print(f"[INFO] Force retrain:        {args.force}")
+print("=" * 60)
 
 
 # ============================================================
@@ -186,7 +215,8 @@ print("=" * 60)
 if not os.path.exists(LOCAL_BINARY_PATH):
     raise FileNotFoundError(
         f"Local dataset not found: {LOCAL_BINARY_PATH}\n"
-        f"Run 2_process_datasets/2H_prepare_dataset_for_stable_diffusion.py first."
+        f"Run 2_process_datasets/2H_prepare_dataset_for_stable_diffusion.py "
+        f"--bag-name {BAG_NAME} first."
     )
 
 print(f"Loading local dataset: {LOCAL_BINARY_PATH}...")
@@ -378,7 +408,7 @@ for i in range(NUM_PARTS):
     print(f"\n>>> [Part {i}] Saving config.json...")
     config = {
         "part_index": i,
-        "bag_name": BAG_NAME,
+        "bag_name": BAG_STEM,
         "controlnet_segmentation": "controlnet_segmentation",
         "controlnet_instance": "controlnet_instance",
         "controlnet_tempconsistency": "controlnet_tempconsistency",
