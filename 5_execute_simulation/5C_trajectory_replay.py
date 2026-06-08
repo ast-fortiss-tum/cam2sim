@@ -8,11 +8,14 @@ Replay script for Gaussian Splatting / Nerfstudio models on cam2sim data layout.
 Reads from (project root):
     data/processed_dataset/<BAG>/maps/map.xodr
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
-    data/data_for_carla/<BAG>/camera.json
-    data/data_for_gaussian_splatting/<BAG>/outputs/nerfacto_split_N/nerfacto/<TS>/config.yml
-    data/data_for_gaussian_splatting/<BAG>/outputs/nerfacto_split_N/nerfacto/<TS>/utm_to_nerfstudio_transform.json
+    data/data_for_carla/camera.json                                 (shared)
+    data/data_for_gaussian_splatting/<BAG>/outputs/<METHOD>_split_N/<METHOD>/<TS>/config.yml
+    data/data_for_gaussian_splatting/<BAG>/outputs/<METHOD>_split_N/<METHOD>/<TS>/utm_to_nerfstudio_transform.json
     data/data_for_gaussian_splatting/<BAG>/frame_positions_split_N_1_of_K.txt
 
+Supported methods (mirrors 4B/4D): splatfacto, splatfacto-big, nerfacto, nerfacto-big.
+Use --method to restrict to a single method when multiple are trained on the
+same bag.
 
 Phases:
   PHASE 1: Optional 4-panel calibration GUI (CARLA, GS free cam, original training image,
@@ -92,6 +95,10 @@ from utils.carla_simulator import (
 
 # Bag name (with .bag extension): must match an existing bag from step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
+
+# Methods supported by 4B. Nerfstudio writes config.yml under:
+#   data/data_for_gaussian_splatting/<BAG>/outputs/<METHOD>_split_<N>/<METHOD>/<TS>/config.yml
+SUPPORTED_METHODS = ("splatfacto", "splatfacto-big", "nerfacto", "nerfacto-big")
 
 # Note: bag-dependent paths (XODR_FILE, TRAJECTORY_FILE, ...) are built
 # in main() after argparse parses --bag-name. We only define constants here.
@@ -264,8 +271,11 @@ class CoordinateTransformer:
 
 class SplitModel:
     def __init__(self, name, pipeline, coord_transformer, training_cameras,
-                 frame_ids, training_filenames, data_root=None):
+                 frame_ids, training_filenames, data_root=None,
+                 method=None, split_num=None):
         self.name = name
+        self.method = method        # e.g. "splatfacto", "nerfacto-big"
+        self.split_num = split_num  # e.g. 0, 1, 2
         self.pipeline = pipeline
         self.coord_transformer = coord_transformer
         self.training_cameras = training_cameras
@@ -427,51 +437,79 @@ def render_gs(pipeline, c2w, width, height, fov):
 
 
 # =============================================================================
-#  SPLIT DETECTION (cam2sim layout)
+#  SPLIT DETECTION (cam2sim layout, multi-method)
 # =============================================================================
 
-def auto_detect_splits(gs_outputs_dir, gs_data_root):
+def auto_detect_splits(gs_outputs_dir, gs_data_root, allowed_methods=None):
     """
-    Look for splatfacto splits in:
-        <gs_outputs_dir>/splatfacto_split_<N>/splatfacto/<TS>/config.yml
+    Look for split runs in:
+        <gs_outputs_dir>/<METHOD>_split_<N>/<METHOD>/<TS>/config.yml
+
+    where METHOD is one of SUPPORTED_METHODS. If allowed_methods is given,
+    restrict to that subset.
 
     For each split also resolves:
         - utm_to_nerfstudio_transform.json  (next to config.yml)
         - frame_positions_split_<N>_*.txt   (in gs_data_root)
+
+    Returns a list of split configs. Each config has:
+        name, method, split_num, gs_config, utm_transform, frame_positions,
+        data_root, run_name
     """
+    if allowed_methods is None:
+        allowed_methods = SUPPORTED_METHODS
+
     splits = []
 
     if not os.path.isdir(gs_outputs_dir):
         print(f"[WARN] Outputs folder not found: {gs_outputs_dir}")
         return splits
 
-    split_dirs = sorted([
+    # Sort methods by descending length so we match "splatfacto-big" BEFORE
+    # "splatfacto" when checking which method a directory belongs to.
+    methods_by_length = sorted(allowed_methods, key=len, reverse=True)
+
+    # Pre-compile a regex per method.
+    method_patterns = {
+        m: re.compile(rf"^{re.escape(m)}_split_(\d+)$")
+        for m in allowed_methods
+    }
+
+    all_dirs = sorted([
         d for d in os.listdir(gs_outputs_dir)
         if os.path.isdir(os.path.join(gs_outputs_dir, d))
-        and d.startswith("splatfacto_split_")
     ])
 
-    for split_dir in split_dirs:
-        match = re.match(r"splatfacto_split_(\d+)", split_dir)
-        if not match:
-            continue
-        split_num = int(match.group(1))
+    for split_dir in all_dirs:
+        # Determine which method this dir belongs to (longest match first).
+        matched_method = None
+        matched_split_num = None
+        for m in methods_by_length:
+            mm = method_patterns[m].match(split_dir)
+            if mm:
+                matched_method = m
+                matched_split_num = int(mm.group(1))
+                break
 
-        splatfacto_dir = os.path.join(gs_outputs_dir, split_dir, "splatfacto")
-        if not os.path.isdir(splatfacto_dir):
-            print(f"[WARN] Missing 'splatfacto' subfolder in {split_dir}")
+        if matched_method is None:
+            # Not a recognized "<method>_split_<N>" folder; skip silently.
+            continue
+
+        method_subdir = os.path.join(gs_outputs_dir, split_dir, matched_method)
+        if not os.path.isdir(method_subdir):
+            print(f"[WARN] Missing '{matched_method}' subfolder in {split_dir}")
             continue
 
         runs = sorted([
-            d for d in os.listdir(splatfacto_dir)
-            if os.path.isdir(os.path.join(splatfacto_dir, d))
+            d for d in os.listdir(method_subdir)
+            if os.path.isdir(os.path.join(method_subdir, d))
         ])
         if not runs:
-            print(f"[WARN] No runs found in {splatfacto_dir}")
+            print(f"[WARN] No runs found in {method_subdir}")
             continue
 
         run_name = runs[-1]
-        run_dir = os.path.join(splatfacto_dir, run_name)
+        run_dir = os.path.join(method_subdir, run_name)
         config_path = os.path.join(run_dir, "config.yml")
         utm_transform_path = os.path.join(run_dir, "utm_to_nerfstudio_transform.json")
 
@@ -480,35 +518,41 @@ def auto_detect_splits(gs_outputs_dir, gs_data_root):
             continue
         if not os.path.exists(utm_transform_path):
             print(f"[WARN] No utm_to_nerfstudio_transform.json in {run_dir}")
-            print(f"       Run 4C_utm_yaw_to_nerfstudio.py for split {split_num} first.")
+            print(f"       Run 4C_utm_yaw_to_nerfstudio.py for "
+                  f"{matched_method}_split_{matched_split_num} first.")
             continue
 
-        # Find frame_positions_split_<N>_*.txt
+        # Find frame_positions_split_<N>_*.txt (shared across methods because
+        # it's a property of the data split, not the model).
         frame_positions = None
         for fname in os.listdir(gs_data_root):
-            if (fname.startswith(f"frame_positions_split_{split_num}_")
+            if (fname.startswith(f"frame_positions_split_{matched_split_num}_")
                     and fname.endswith(".txt")):
                 frame_positions = os.path.join(gs_data_root, fname)
                 break
 
         if frame_positions is None:
-            print(f"[WARN] No frame_positions_split_{split_num}_*.txt found "
-                  f"in {gs_data_root}")
+            print(f"[WARN] No frame_positions_split_{matched_split_num}_*.txt "
+                  f"found in {gs_data_root}")
 
+        split_name = f"{matched_method}_split_{matched_split_num}"
         splits.append({
-            "name": f"split_{split_num}",
-            "split_num": split_num,
+            "name": split_name,
+            "method": matched_method,
+            "split_num": matched_split_num,
             "gs_config": config_path,
             "utm_transform": utm_transform_path,
             "frame_positions": frame_positions,
             "data_root": gs_data_root,
             "run_name": run_name,
         })
-        print(f"[INFO] Found split_{split_num} (run={run_name})")
+        print(f"[INFO] Found {split_name} (run={run_name})")
 
-    splits.sort(key=lambda s: s["split_num"])
+    # Sort: method first (in SUPPORTED_METHODS order), then split_num.
+    method_rank = {m: i for i, m in enumerate(SUPPORTED_METHODS)}
+    splits.sort(key=lambda s: (method_rank.get(s["method"], 999), s["split_num"]))
     return splits
- 
+
 
 def find_best_split(frame_id, splits, last_split_idx=0):
     current_split = splits[last_split_idx]
@@ -560,12 +604,14 @@ def load_split_models(split_configs, xodr_path, fov):
 
     for cfg in split_configs:
         name = cfg["name"]
+        method = cfg["method"]
+        split_num = cfg["split_num"]
         gs_config = cfg["gs_config"]
         utm_transform = cfg["utm_transform"]
         data_root = cfg["data_root"]
 
         print(f"\n{'='*60}")
-        print(f"  Loading split: {name}")
+        print(f"  Loading split: {name}  (method={method})")
         print(f"{'='*60}")
 
         coord_transformer = CoordinateTransformer(xodr_path, utm_transform)
@@ -617,6 +663,8 @@ def load_split_models(split_configs, xodr_path, fov):
                 frame_ids=all_frame_ids,
                 training_filenames=training_filenames,
                 data_root=str(data_root_abs),
+                method=method,
+                split_num=split_num,
             ))
         except Exception as e:
             print(f"ERROR loading {name}: {e}")
@@ -635,7 +683,8 @@ def load_split_models(split_configs, xodr_path, fov):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Replay with Nerfstudio-trained GS (multi-split, cam2sim layout)"
+        description="Replay with Nerfstudio-trained GS (multi-split, multi-method, "
+                    f"cam2sim layout). Supported methods: {', '.join(SUPPORTED_METHODS)}."
     )
     parser.add_argument(
         "--bag-name",
@@ -648,7 +697,14 @@ def main():
     parser.add_argument("--only_split", type=int, default=None,
                         help="Load and use ONLY this split number "
                              "(useful for low-VRAM GPUs). "
-                             "All trajectory frames will use this split.")
+                             "All trajectory frames will use this split. "
+                             "If multiple methods exist for the same split_num, "
+                             "all of them are loaded unless --method is given.")
+    parser.add_argument("--method", type=str, default=None,
+                        choices=list(SUPPORTED_METHODS),
+                        help="Restrict to a single training method. "
+                             f"One of: {', '.join(SUPPORTED_METHODS)}. "
+                             "Default: load all methods that have trained splits.")
     parser.add_argument("--max_frames", type=int, default=None,
                         help="Maximum number of frames to render")
     parser.add_argument("--skip_calibration", action="store_true", default=True,
@@ -674,10 +730,6 @@ def main():
         "trajectory_positions_rear_odom_yaw.json"
     )
     # Camera config resolution: per-bag override -> shared default.
-    # In most cases the same physical camera is used for every bag (same
-    # vehicle, same sensor), so we keep a shared default in
-    # data/data_for_carla/camera.json and let any bag override it
-    # by placing its own camera.json under data/data_for_carla/<bag>/.
     per_bag_camera_config = os.path.join(
         PROJECT_ROOT, "data", "data_for_carla", bag_stem, "camera.json"
     )
@@ -709,17 +761,24 @@ def main():
     if args.output_dir is None:
         args.output_dir = default_output_dir
 
+    # Determine which methods to scan.
+    if args.method is not None:
+        allowed_methods = (args.method,)
+    else:
+        allowed_methods = SUPPORTED_METHODS
+
     print("=" * 80)
-    print("REPLAY: CARLA + Gaussian Splatting (multi-split)")
+    print("REPLAY: CARLA + Gaussian Splatting / Nerfstudio (multi-split, multi-method)")
     print("=" * 80)
     print(f"[INFO] Project root:    {PROJECT_ROOT}")
     print(f"[INFO] Bag:             {bag_name}")
     print(f"[INFO] Bag stem:        {bag_stem}")
     print(f"[INFO] XODR file:       {xodr_file}")
     print(f"[INFO] Trajectory:      {trajectory_file}")
-    print(f"[INFO] Camera config:   {camera_config_file}")
+    print(f"[INFO] Camera config:   {camera_config_file}  ({camera_config_source})")
     print(f"[INFO] GS data root:    {gs_data_root}")
     print(f"[INFO] Output dir:      {args.output_dir}")
+    print(f"[INFO] Methods scanned: {', '.join(allowed_methods)}")
     print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
     print("=" * 80)
 
@@ -742,7 +801,9 @@ def main():
 
     if not only_carla:
         print("\n[INFO] Auto-detecting split models...")
-        split_configs = auto_detect_splits(gs_outputs_dir, gs_data_root)
+        split_configs = auto_detect_splits(
+            gs_outputs_dir, gs_data_root, allowed_methods=allowed_methods
+        )
 
         if args.only_split is not None:
             split_configs = [c for c in split_configs
@@ -766,7 +827,8 @@ def main():
         for sm in split_models:
             zmin = sm.training_cameras[:, 2, 3].min()
             zmax = sm.training_cameras[:, 2, 3].max()
-            print(f"   {sm.name}: frames [{sm.min_frame}-{sm.max_frame}], "
+            print(f"   {sm.name}: method={sm.method}, "
+                  f"frames [{sm.min_frame}-{sm.max_frame}], "
                   f"Z range [{zmin:.4f}, {zmax:.4f}]")
 
     # ---- Connect to CARLA ----
@@ -1122,7 +1184,7 @@ def main():
     win_w = IM_WIDTH * 2
     win_h = IM_HEIGHT
     screen = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("GS Replay (Multi-Split) | Driving")
+    pygame.display.set_caption("GS Replay (Multi-Split, Multi-Method) | Driving")
 
     print(f"\n[INFO] Replaying with {len(split_models)} split(s)...")
 

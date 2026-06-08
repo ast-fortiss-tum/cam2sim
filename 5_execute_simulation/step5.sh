@@ -4,12 +4,12 @@
 #
 # Convenience launcher for Step 5 (4 modes).
 #
-# Mode  | Script                       | Env             | DAVE-2 server?
-# ------+------------------------------+-----------------+----------------
-# 5A    | 5A_trajectory_only_carla.py  | data_extraction | NO
-# 5B    | 5B_dave2_only_carla.py       | data_extraction | YES
-# 5C    | 5C_trajectory_replay.py      | nerfstudio      | NO
-# 5D    | 5D_dave2.py                  | nerfstudio      | YES
+# Mode  | Script                        | Env             | DAVE-2 server?
+# ------+-------------------------------+-----------------+----------------
+# 5A    | 5A_trajectory_only_carla.py   | data_extraction | NO
+# 5B    | 5B_dave2_only_carla.py        | data_extraction | YES
+# 5C    | 5C_trajectory_replay.py       | nerfstudio      | NO
+# 5D    | 5D_dave2.py                   | nerfstudio      | YES
 #
 # Sequence:
 #   1. Terminal 1: starts CARLA (3C_setup_carla.py)
@@ -21,12 +21,14 @@
 #   5. Terminal 4: runs the chosen Step 5 script
 #
 # Usage:
-#     bash step5.sh <bag_name.bag>                  # defaults to mode 5C
+#     bash step5.sh <bag_name.bag>                                     # defaults to 5C
 #     bash step5.sh <bag_name.bag> --mode 5A
 #     bash step5.sh <bag_name.bag> --mode 5B
 #     bash step5.sh <bag_name.bag> --mode 5C
 #     bash step5.sh <bag_name.bag> -m 5D
-#     bash step5.sh <bag_name.bag> --mode 5C --max-jobs 2   # limit CUDA JIT
+#     bash step5.sh <bag_name.bag> --mode 5C --max-jobs 2
+#     bash step5.sh <bag_name.bag> --mode 5C --method nerfacto
+#     bash step5.sh <bag_name.bag> --mode 5D --method splatfacto-big --max-jobs 4
 # =============================================================================
 
 set -e
@@ -36,9 +38,9 @@ set -e
 PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 
 # Conda envs
-ENV_CARLA="data_extraction"
-ENV_GS="nerfstudio"
-ENV_DAVE="dave_2"
+ENV_CARLA="data_extraction"   # for 3C, 3F, 5A, 5B (CARLA-side scripts)
+ENV_GS="nerfstudio"           # for 5C/5D (Gaussian Splatting / Nerfstudio)
+ENV_DAVE="dave_2"             # for the DAVE-2 TCP server
 
 # Python scripts (paths relative to PROJECT_ROOT)
 SCRIPT_3C="3_generate_simulation_data/3C_setup_carla.py"
@@ -55,6 +57,7 @@ CARLA_PORT="2000"
 CARLA_WAIT_TIMEOUT=120
 
 # DAVE-2 socket server (communicator.py)
+# Hardcoded inside communicator.py: HOST=localhost, PORT=5090
 DAVE_HOST="127.0.0.1"
 DAVE_PORT="5090"
 DAVE_WAIT_TIMEOUT=120
@@ -65,10 +68,8 @@ DAVE_SERVER_CWD="system_under_test"
 # How long to wait for 3F to finish loading the map+cars (sanity timeout)
 MAP_LOAD_TIMEOUT=180
 
-# Parallel CUDA build jobs for gsplat / tinycudann JIT compilation.
-# Empty = ninja default (typically nproc). Only relevant for 5C/5D
-# (the nerfstudio-based modes). Ignored for 5A/5B.
-MAX_JOBS=""
+# Allowed values for --method (must match SUPPORTED_METHODS in 5C/5D and 4B/4D).
+ALLOWED_METHODS=("splatfacto" "splatfacto-big" "nerfacto" "nerfacto-big")
 
 # -----------------------------------------------------------------------------
 
@@ -84,6 +85,10 @@ Arguments:
 Options:
   -m, --mode MODE           Mode to run (default: 5C)
                             Allowed: 5A, 5B, 5C, 5D
+  --method NAME             Restrict GS replay/drive to a single trained method.
+                            Only affects 5C/5D (ignored on 5A/5B).
+                            Allowed: ${ALLOWED_METHODS[*]}
+                            Default: load all methods that have trained splits.
   --max-jobs N              Limit parallel CUDA build jobs (MAX_JOBS env var)
                             for gsplat/tinycudann JIT compilation.
                             Only affects 5C/5D. Lower if you hit RAM OOM
@@ -102,11 +107,17 @@ EOF
 
 MODE="5C"
 BAG_NAME=""
+MAX_JOBS=""
+METHOD=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -m|--mode)
             MODE="$2"
+            shift 2
+            ;;
+        --method)
+            METHOD="$2"
             shift 2
             ;;
         --max-jobs)
@@ -147,6 +158,23 @@ BAG_STEM="${BAG_NAME%.bag}"
 # in case any of them does not accept --bag-name yet.
 export BAG_NAME
 
+# ---------- Validate --method (if given) ----------
+
+if [[ -n "$METHOD" ]]; then
+    METHOD_OK=false
+    for m in "${ALLOWED_METHODS[@]}"; do
+        if [[ "$m" == "$METHOD" ]]; then
+            METHOD_OK=true
+            break
+        fi
+    done
+    if [ "$METHOD_OK" != true ]; then
+        echo "[ERROR] Unsupported --method: $METHOD"
+        echo "        Allowed: ${ALLOWED_METHODS[*]}"
+        exit 1
+    fi
+fi
+
 # Validate mode and pick script + env + dave2-server flag
 NEED_DAVE_SERVER=0
 USES_NERFSTUDIO=0
@@ -181,11 +209,10 @@ case "$MODE" in
         ;;
 esac
 
-# Export MAX_JOBS only if user passed it AND the mode actually uses nerfstudio.
-# For 5A/5B it's harmless but irrelevant, so we skip the export to keep
-# the environment clean.
-if [ -n "$MAX_JOBS" ] && [ "$USES_NERFSTUDIO" -eq 1 ]; then
-    export MAX_JOBS
+# --method only meaningful for 5C/5D.
+if [[ -n "$METHOD" ]] && [ "$USES_NERFSTUDIO" -ne 1 ]; then
+    echo "[WARN] --method '$METHOD' is ignored for mode $MODE (GS-only flag)."
+    METHOD=""
 fi
 
 echo "=========================================="
@@ -198,12 +225,9 @@ echo "[INFO] MODE               = $STEP5_LABEL"
 echo "[INFO] Step 5 env         = $STEP5_ENV"
 echo "[INFO] Step 5 script      = $STEP5_SCRIPT"
 echo "[INFO] DAVE-2 server      = $( [ $NEED_DAVE_SERVER -eq 1 ] && echo YES || echo NO )"
-if [ "$USES_NERFSTUDIO" -eq 1 ]; then
-    if [ -n "$MAX_JOBS" ]; then
-        echo "[INFO] MAX_JOBS           = $MAX_JOBS (CUDA JIT build limit)"
-    else
-        echo "[INFO] MAX_JOBS           = (ninja default)"
-    fi
+if [ $USES_NERFSTUDIO -eq 1 ]; then
+    echo "[INFO] GS method          = ${METHOD:-(all detected)}"
+    echo "[INFO] MAX_JOBS           = ${MAX_JOBS:-(default)}"
 fi
 echo "=========================================="
 
@@ -248,18 +272,21 @@ done
 # Helpers
 # ----------------------------------------------------------------------------
 
-# Compose the optional MAX_JOBS export line for the child terminal.
-# Only present if MAX_JOBS is set in the parent shell (i.e. user passed
-# --max-jobs AND mode is nerfstudio-based).
-if [ -n "$MAX_JOBS" ]; then
+# Bash fragments injected into the child terminal only when the spawned
+# command uses gsplat/tinycudann (i.e. 5C or 5D). Otherwise empty.
+if [ -n "$MAX_JOBS" ] && [ "$USES_NERFSTUDIO" -eq 1 ]; then
     MAX_JOBS_EXPORT_LINE="export MAX_JOBS='$MAX_JOBS';"
-    MAX_JOBS_ECHO_LINE="echo '[step5] MAX_JOBS: \$MAX_JOBS';"
+    MAX_JOBS_ECHO_LINE="echo '[step5] MAX_JOBS: $MAX_JOBS (limits ninja parallel jobs)';"
 else
     MAX_JOBS_EXPORT_LINE=""
     MAX_JOBS_ECHO_LINE=""
 fi
 
 # spawn_terminal TITLE ENV "command"
+# Opens a new terminal, sources conda, activates env, runs command,
+# keeps window open after exit.
+# BAG_NAME is exported in the parent shell and re-exported here so the
+# child process inherits it.
 spawn_terminal() {
     local title="$1"
     local env_name="$2"
@@ -294,6 +321,8 @@ read
 }
 
 # spawn_terminal_with_sentinel TITLE ENV "command" SENTINEL_FILE
+# Same as spawn_terminal but touches a sentinel file when the command exits.
+# Useful to wait for the subprocess to finish from the parent script.
 spawn_terminal_with_sentinel() {
     local title="$1"
     local env_name="$2"
@@ -366,6 +395,7 @@ wait_for_dave2() {
     return 0
 }
 
+# Wait for a sentinel file to appear, up to TIMEOUT seconds.
 wait_for_sentinel() {
     local sentinel="$1"
     local timeout="$2"
@@ -396,8 +426,15 @@ TMP_DIR="$(mktemp -d)"
 SENTINEL_3F="$TMP_DIR/3F_done"
 trap "rm -rf '$TMP_DIR'" EXIT
 
+# Build the extra GS-specific CLI args once (used only for 5C/5D).
+GS_EXTRA_ARGS=""
+if [ $USES_NERFSTUDIO -eq 1 ] && [ -n "$METHOD" ]; then
+    GS_EXTRA_ARGS="--method '$METHOD'"
+fi
+
 echo ""
 echo "[STEP 1] Spawning Terminal 1: CARLA (3C_setup_carla.py)"
+# 3C is infrastructure, no --bag-name needed.
 spawn_terminal "Terminal 1 - CARLA" "$ENV_CARLA" "python $SCRIPT_3C"
 
 sleep 2
@@ -421,11 +458,15 @@ if ! wait_for_sentinel "$SENTINEL_3F" "$MAP_LOAD_TIMEOUT" "3F (map + cars)"; the
     exit 1
 fi
 
+# Optional: short cushion after map load
 sleep 2
 
 if [ $NEED_DAVE_SERVER -eq 1 ]; then
     echo ""
     echo "[STEP 3] Spawning Terminal 3: DAVE-2 server ($SCRIPT_DAVE_SERVER)"
+    # communicator.py loads 'final.h5' from its current working directory,
+    # so we cd into system_under_test/ before launching it.
+    # DAVE-2 server is bag-agnostic (always loads final.h5), no --bag-name.
     spawn_terminal \
         "Terminal 3 - DAVE-2 server" \
         "$ENV_DAVE" \
@@ -441,10 +482,17 @@ fi
 NEXT_TERM_NUM=$(( NEED_DAVE_SERVER == 1 ? 4 : 3 ))
 echo ""
 echo "[STEP $NEXT_TERM_NUM] Spawning Terminal $NEXT_TERM_NUM: $STEP5_LABEL"
+
+# Compose the step5 command with --bag-name and (for 5C/5D) --method.
+STEP5_CMD="python $STEP5_SCRIPT --bag-name '$BAG_NAME'"
+if [ -n "$GS_EXTRA_ARGS" ]; then
+    STEP5_CMD="$STEP5_CMD $GS_EXTRA_ARGS"
+fi
+
 spawn_terminal \
     "Terminal $NEXT_TERM_NUM - $STEP5_LABEL" \
     "$STEP5_ENV" \
-    "python $STEP5_SCRIPT --bag-name '$BAG_NAME'"
+    "$STEP5_CMD"
 
 echo ""
 echo "[INFO] All terminals launched (mode: $STEP5_LABEL)."

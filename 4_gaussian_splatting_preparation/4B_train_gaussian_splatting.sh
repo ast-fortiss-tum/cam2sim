@@ -19,6 +19,12 @@
 #   splatfacto / splatfacto-big -> default 30000 steps  (threshold 29000)
 #   nerfacto   / nerfacto-big   -> default 100000 steps (threshold 99000)
 #
+# Method-family-aware extra training flags:
+#   nerfacto / nerfacto-big -> --pipeline.model.camera-optimizer.mode off
+#                              (keeps extrinsics aligned with COLMAP poses so
+#                               4C_utm_yaw_to_nerfstudio.py stays consistent)
+#   splatfacto*             -> none (poses are fixed by default)
+#
 # Prerequisites:
 #   - Step 2 GS  (produces images_gs_split_*_1_of_<SKIP>/ folders)
 #   - Step 4A    (produces colmap/split_<N>/sparse/0/*.bin)
@@ -151,6 +157,21 @@ case "$METHOD" in
         ;;
 esac
 
+# ---------- Method-specific extra training flags ----------
+# For nerfacto/nerfacto-big, disable the camera-pose optimizer so that the
+# extrinsics stay aligned with what COLMAP / our transforms.json declared.
+# Otherwise 4C_utm_yaw_to_nerfstudio.py would compute the UTM->Nerfstudio
+# transform from pre-optimization poses while the model is rendering with
+# post-optimization ones, introducing a small offset/rotation drift.
+# Splatfacto* keeps poses fixed by default, so no flag is needed there.
+
+EXTRA_NS_TRAIN_FLAGS=()
+case "$METHOD" in
+    nerfacto|nerfacto-big)
+        EXTRA_NS_TRAIN_FLAGS+=(--pipeline.model.camera-optimizer.mode off)
+        ;;
+esac
+
 BAG_STEM="${BAG_NAME%.bag}"
 SPLIT_LABEL="1_of_${SPLIT_SKIP}"
 
@@ -218,17 +239,18 @@ fi
 echo "=========================================="
 echo "NERFSTUDIO TRAINING"
 echo "=========================================="
-echo "Bag:                $BAG_NAME"
-echo "Bag stem:           $BAG_STEM"
-echo "Split skip label:   $SPLIT_SKIP  (folder suffix: $SPLIT_LABEL)"
-echo "Splits detected:    $NUM_SPLITS"
-echo "Method:             $METHOD"
-echo "Use sky masks:      $USE_SKY_MASKS"
-echo "MAX_JOBS:           ${MAX_JOBS:-(default)}"
-echo "Expected final step: $EXPECTED_FINAL_STEP"
-echo "Min ckpt to skip:   $MIN_CHECKPOINT_STEP"
-echo "Data root:          $DATA_ROOT"
-echo "Output root:        $OUTPUT_ROOT"
+echo "Bag:                  $BAG_NAME"
+echo "Bag stem:             $BAG_STEM"
+echo "Split skip label:     $SPLIT_SKIP  (folder suffix: $SPLIT_LABEL)"
+echo "Splits detected:      $NUM_SPLITS"
+echo "Method:               $METHOD"
+echo "Use sky masks:        $USE_SKY_MASKS"
+echo "MAX_JOBS:             ${MAX_JOBS:-(default)}"
+echo "Expected final step:  $EXPECTED_FINAL_STEP"
+echo "Min ckpt to skip:     $MIN_CHECKPOINT_STEP"
+echo "Extra ns-train flags: ${EXTRA_NS_TRAIN_FLAGS[*]:-(none)}"
+echo "Data root:            $DATA_ROOT"
+echo "Output root:          $OUTPUT_ROOT"
 echo "=========================================="
 
 # =============================================================================
@@ -366,6 +388,7 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
     echo "  Images path:  ${IMAGES_PATH}"
     echo "  Masks path:   ${MASKS_PATH}"
     echo "  Output dir:   ${OUTPUT_ROOT}"
+    echo "  Extra flags:  ${EXTRA_NS_TRAIN_FLAGS[*]:-(none)}"
     echo "============================================================"
 
     if [[ "${USE_SKY_MASKS}" = true ]] && [[ -d "${DATA_ROOT}/${MASKS_PATH}" ]]; then
@@ -374,6 +397,7 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
             --output-dir "${OUTPUT_ROOT}" \
             --experiment-name "${EXP_NAME}" \
             --viewer.quit-on-train-completion True \
+            "${EXTRA_NS_TRAIN_FLAGS[@]}" \
             colmap \
             --colmap-path "${COLMAP_PATH}" \
             --images-path "${IMAGES_PATH}" \
@@ -388,6 +412,7 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
             --output-dir "${OUTPUT_ROOT}" \
             --experiment-name "${EXP_NAME}" \
             --viewer.quit-on-train-completion True \
+            "${EXTRA_NS_TRAIN_FLAGS[@]}" \
             colmap \
             --colmap-path "${COLMAP_PATH}" \
             --images-path "${IMAGES_PATH}"
