@@ -73,7 +73,10 @@ from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.cameras.cameras import Cameras, CameraType
-
+from utils.nerfstudio import (
+    SUPPORTED_METHODS,
+    detect_available_methods,
+)
 from utils.dave2_connection import connect_to_dave2_server, send_image_over_connection
 # =============================================================================
 #  PATH SETUP
@@ -112,9 +115,6 @@ from utils.carla_simulator import (
 # Bag name (with .bag extension): must match an existing bag from step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
-# Methods supported by 4B. Nerfstudio writes config.yml under:
-#   data/data_for_gaussian_splatting/<BAG>/outputs/<METHOD>_split_<N>/<METHOD>/<TS>/config.yml
-SUPPORTED_METHODS = ("splatfacto", "splatfacto-big", "nerfacto", "nerfacto-big")
 
 # Note: bag-dependent paths (XODR_FILE, TRAJECTORY_FILE, ...) are built
 # in main() after argparse parses --bag-name. We only define constants here.
@@ -813,8 +813,26 @@ def main():
         allowed_methods = (args.method,)
         run_prefix = f"{args.method}_run"
     else:
-        allowed_methods = SUPPORTED_METHODS
-        run_prefix = DEFAULT_RUN_PREFIX_MULTI
+        detected = detect_available_methods(gs_outputs_dir, SUPPORTED_METHODS)
+        if len(detected) == 0:
+            # No trained method found: leave allowed_methods empty so that
+            # auto_detect_splits() returns nothing and the downstream
+            # fallback to only_carla kicks in naturally.
+            allowed_methods = ()
+            run_prefix = DEFAULT_RUN_PREFIX_MULTI
+        elif len(detected) == 1:
+            m = detected[0]
+            print(f"[INFO] Auto-selected method: {m} "
+                f"(only one trained for bag '{bag_stem}')")
+            allowed_methods = (m,)
+            run_prefix = f"{m}_run"
+        else:
+            print(f"[ERROR] Multiple GS methods trained for bag '{bag_stem}': "
+                f"{detected}")
+            print(f"        Specify --method explicitly to avoid "
+                f"mixed-method inference.")
+            print(f"        Example: --method {detected[0]}")
+            sys.exit(1)
 
     print("=" * 80)
     print("REPLAY: CARLA + Gaussian Splatting / Nerfstudio + DAVE-2 "
