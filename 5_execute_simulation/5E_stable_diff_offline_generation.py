@@ -14,7 +14,7 @@ For each frame:
   - the temporal ControlNet uses the previous generated frame
   - saves the generated RGB image
 
-Uses one fixed control schedule (the best config from the thesis):
+Uses one fixed control schedule:
     control_start = [0.0, 0.0, 0.35]   # [seg, inst, temp]
     control_end   = [1.0, 0.6, 0.55]
 
@@ -23,8 +23,8 @@ Reads from (project root):
         semantic/, instance/, data/all_frame_data.json
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
 
-Reads SD models from (external SSD):
-    <EXTERNAL_DRIVE>/cam2sim_sd/<BAG>/SD_Training_Outputs_Split/part_<N>/
+Reads SD models from:
+    <SD_ROOT>/<BAG>/SD_Training_Outputs_Split/part_<N>/
         config.json
         stable_diffusion/pytorch_lora_weights.safetensors
         controlnet_segmentation/
@@ -39,6 +39,40 @@ Writes to (project root):
 
 import os
 import sys
+
+
+# =======================
+# PATH SETUP (must come BEFORE any diffusers/HF import)
+# =======================
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+
+LOCAL_UTILS_DIR = os.path.join(SCRIPT_DIR, "utils")
+if not os.path.isdir(LOCAL_UTILS_DIR):
+    raise FileNotFoundError(
+        f"Expected utils folder next to this script, but not found: {LOCAL_UTILS_DIR}"
+    )
+
+if SCRIPT_DIR in sys.path:
+    sys.path.remove(SCRIPT_DIR)
+sys.path.insert(0, SCRIPT_DIR)
+
+
+# =======================
+# HF CACHE SETUP (must come BEFORE diffusers import to take effect)
+# =======================
+
+from utils.sd_paths import resolve_sd_root
+
+CAM2SIM_SD_ROOT, _ = resolve_sd_root(PROJECT_ROOT)
+os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
+
+
+# =======================
+# STANDARD IMPORTS (safe now, HF_HOME is set)
+# =======================
+
 import json
 import time
 import argparse
@@ -50,35 +84,14 @@ import numpy as np
 from PIL import Image
 from tqdm.auto import tqdm
 
-
-# =======================
-# PATH SETUP
-# =======================
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-
-LOCAL_UTILS_DIR = os.path.join(SCRIPT_DIR, "utils")
-
-if not os.path.isdir(LOCAL_UTILS_DIR):
-    raise FileNotFoundError(
-        f"Expected utils folder next to this script, but not found: {LOCAL_UTILS_DIR}"
-    )
-
-if SCRIPT_DIR in sys.path:
-    sys.path.remove(SCRIPT_DIR)
-
-sys.path.insert(0, SCRIPT_DIR)
-
-
-# =======================
-# LOCAL UTILS IMPORTS
-# =======================
-
 from utils.stable_diffusion import (
     load_pipeline_models,
     generate_image_realtime,
+    split_trajectory_into_parts,
+    select_model_part,
+    load_replay_data,
 )
+from utils.sd_paths import detect_num_trained_parts, require_trained_parts, build_sd_bag_paths
 
 
 # =======================
@@ -88,29 +101,15 @@ from utils.stable_diffusion import (
 # Bag name (with .bag extension): must match an existing bag from step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
-# Note: bag-dependent paths (REPLAY_DATASET_FOLDER, MODELS_BASE_DIR, ...) are
-# built in main() after argparse parses --bag-name.
-
-NUM_PARTS = 3
-
-# Best control schedule from the thesis
 CONTROL_START = [0.0, 0.0, 0.35]
 CONTROL_END = [1.0, 0.6, 0.55]
 GUIDANCE_SCALE = 3.0
 
 # Limit generation to first N frames (None = all)
-MAX_FRAMES = None
-# MAX_FRAMES = 100
+MAX_FRAMES = 1
 
 # Skip frames whose output PNG already exists (idempotent)
 SKIP_EXISTING = False
-
-# External SSD root (shared, not bag-dependent)
-EXTERNAL_DRIVE = "/media/davidejannussi/ssd space"
-CAM2SIM_SD_ROOT = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
-
-# Use the external SSD for HuggingFace cache too (so we don't re-download SD1.5)
-os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
 
 
 # =======================
@@ -120,123 +119,7 @@ os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# =======================
-# TRAJECTORY-BASED MODEL SELECTION
-# =======================
 
-def split_trajectory_into_parts(trajectory_points, num_parts=3):
-    """Split trajectory into equal chunks (same as training)."""
-    total = len(trajectory_points)
-    chunk_size = total // num_parts
-
-    chunks = []
-    for i in range(num_parts):
-        start = i * chunk_size
-        end = total if i == num_parts - 1 else (i + 1) * chunk_size
-        chunks.append(trajectory_points[start:end])
-
-    return chunks
-
-
-def find_closest_trajectory_point(frame_location, trajectory_chunk):
-    """Find closest point in a trajectory chunk to (x, y) of frame_location."""
-    min_dist = float("inf")
-    closest_idx = 0
-
-    for idx, point in enumerate(trajectory_chunk):
-        traj_x = point["transform"]["location"]["x"]
-        traj_y = point["transform"]["location"]["y"]
-
-        dist = np.sqrt(
-            (frame_location["x"] - traj_x) ** 2
-            + (frame_location["y"] - traj_y) ** 2
-        )
-
-        if dist < min_dist:
-            min_dist = dist
-            closest_idx = idx
-
-    return closest_idx, min_dist
-
-
-def select_model_part(frame_location, trajectory_chunks):
-    """Find which model part (chunk) the current frame belongs to."""
-    best_part = 0
-    best_distance = float("inf")
-
-    for part_idx, chunk in enumerate(trajectory_chunks):
-        _, dist = find_closest_trajectory_point(frame_location, chunk)
-
-        if dist < best_distance:
-            best_distance = dist
-            best_part = part_idx
-
-    return best_part, best_distance
-
-
-# =======================
-# DATA LOADING
-# =======================
-
-def load_json_file(path):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"JSON file not found: {path}")
-
-    with open(path, "r") as f:
-        return json.load(f)
-
-
-def load_replay_data(sem_folder, inst_folder, metadata_path, max_frames=None):
-    """
-    Load semantic + instance maps and metadata from the replay dataset.
-
-    Returns:
-        seg_list:       list of PIL.Image (RGB)
-        inst_list:      list of PIL.Image (RGB)
-        frame_data:     list of metadata dicts (location, rotation, caption)
-        frame_indices:  list of frame_id ints
-    """
-    print(f"\n[INFO] Loading replay dataset from: {os.path.dirname(metadata_path)}")
-
-    all_frame_data = load_json_file(metadata_path)
-
-    if max_frames is not None and max_frames > 0:
-        all_frame_data = all_frame_data[:max_frames]
-
-    seg_list = []
-    inst_list = []
-    frame_data = []
-    frame_indices = []
-
-    print(f"[INFO] Reading {len(all_frame_data)} frames...")
-
-    n_missing = 0
-
-    for item in tqdm(all_frame_data, desc="Reading frames"):
-        frame_id = item["frame"]
-        filename = f"{frame_id:06d}.png"
-
-        seg_path = os.path.join(sem_folder, filename)
-        inst_path = os.path.join(inst_folder, filename)
-
-        if not os.path.exists(seg_path) or not os.path.exists(inst_path):
-            n_missing += 1
-            continue
-
-        seg_img = Image.open(seg_path).convert("RGB")
-        inst_img = Image.open(inst_path).convert("RGB")
-
-        seg_list.append(seg_img)
-        inst_list.append(inst_img)
-        frame_data.append(item)
-        frame_indices.append(frame_id)
-
-    if n_missing > 0:
-        print(f"[WARN] Missing files for {n_missing} frames (skipped).")
-
-    print(f"[INFO] Loaded {len(seg_list)} frames.")
-
-    return seg_list, inst_list, frame_data, frame_indices
 
 
 # =======================
@@ -272,7 +155,7 @@ def main():
         "trajectory_positions_rear_odom_yaw.json",
     )
 
-    # External SSD model paths (per-bag)
+    # External paths (per-bag)
     bag_sd_dir = os.path.join(CAM2SIM_SD_ROOT, bag_stem)
     models_base_dir = os.path.join(bag_sd_dir, "SD_Training_Outputs_Split")
 
@@ -284,25 +167,7 @@ def main():
     output_data_folder = os.path.join(output_folder, "data")
     output_info_path = os.path.join(output_data_folder, "generation_info.json")
 
-    print("=" * 80)
-    print("OFFLINE STABLE DIFFUSION GENERATION (SD branch)")
-    print("=" * 80)
-    print(f"[INFO] Project root:        {PROJECT_ROOT}")
-    print(f"[INFO] Bag:                 {bag_name}")
-    print(f"[INFO] Bag stem:            {bag_stem}")
-    print(f"[INFO] Replay dataset:      {replay_dataset_folder}")
-    print(f"[INFO] Trajectory:          {trajectory_path}")
-    print(f"[INFO] Models base:         {models_base_dir}")
-    print(f"[INFO] Output folder:       {output_folder}")
-    print(f"[INFO] Device:              {DEVICE}")
-    print(f"[INFO] Num parts:           {NUM_PARTS}")
-    print(f"[INFO] Control start:       {CONTROL_START}")
-    print(f"[INFO] Control end:         {CONTROL_END}")
-    print(f"[INFO] Guidance scale:      {GUIDANCE_SCALE}")
-    print(f"[INFO] Skip existing PNGs:  {SKIP_EXISTING}")
-    print("=" * 80)
-
-    # ---------- Sanity checks ----------
+# ---------- Sanity checks on inputs ----------
     if not os.path.exists(replay_dataset_folder):
         raise FileNotFoundError(
             f"Replay dataset not found: {replay_dataset_folder}\n"
@@ -320,26 +185,35 @@ def main():
             f"Trajectory not found: {trajectory_path}"
         )
 
-    if not os.path.isdir(models_base_dir):
-        raise FileNotFoundError(
-            f"SD models directory not found: {models_base_dir}\n"
-            f"Run 4A_train_stable_diff.py --bag-name {bag_name} first."
-        )
+    num_parts = require_trained_parts(models_base_dir, bag_name)
 
-    for part_idx in range(NUM_PARTS):
-        part_dir = os.path.join(models_base_dir, f"part_{part_idx}")
-        if not os.path.isdir(part_dir):
-            raise FileNotFoundError(
-                f"Missing model part directory: {part_dir}"
-            )
+    # ---------- Banner ----------
+    print("=" * 80)
+    print("OFFLINE STABLE DIFFUSION GENERATION (SD branch)")
+    print("=" * 80)
+    print(f"[INFO] Project root:        {PROJECT_ROOT}")
+    print(f"[INFO] Bag:                 {bag_name}")
+    print(f"[INFO] Bag stem:            {bag_stem}")
+    print(f"[INFO] Replay dataset:      {replay_dataset_folder}")
+    print(f"[INFO] Trajectory:          {trajectory_path}")
+    print(f"[INFO] Models base:         {models_base_dir}")
+    print(f"[INFO] Output folder:       {output_folder}")
+    print(f"[INFO] Device:              {DEVICE}")
+    print(f"[INFO] Num parts:           {num_parts}")
+    print(f"[INFO] Control start:       {CONTROL_START}")
+    print(f"[INFO] Control end:         {CONTROL_END}")
+    print(f"[INFO] Guidance scale:      {GUIDANCE_SCALE}")
+    print(f"[INFO] Skip existing PNGs:  {SKIP_EXISTING}")
+    print("=" * 80)
 
     # ---------- Output folders ----------
     os.makedirs(output_rgb_folder, exist_ok=True)
     os.makedirs(output_data_folder, exist_ok=True)
 
     # ---------- Load trajectory and split ----------
-    full_trajectory = load_json_file(trajectory_path)
-    trajectory_chunks = split_trajectory_into_parts(full_trajectory, NUM_PARTS)
+    with open(trajectory_path, "r") as f:
+        full_trajectory = json.load(f)
+    trajectory_chunks = split_trajectory_into_parts(full_trajectory, num_parts)
     print(f"\n[INFO] Trajectory: {len(full_trajectory)} points")
     for i, chunk in enumerate(trajectory_chunks):
         print(f"   Part {i}: {len(chunk)} frames")
@@ -387,7 +261,7 @@ def main():
         # ---- Model selection based on frame location ----
         frame_location = frame_info["location"]
         required_part, traj_distance = select_model_part(
-            frame_location, trajectory_chunks
+            (frame_location["x"], frame_location["y"]), trajectory_chunks
         )
 
         # ---- Switch model if needed ----
@@ -475,7 +349,7 @@ def main():
     # ---------- Save generation info ----------
     info = {
         "bag_name": bag_stem,
-        "num_parts": NUM_PARTS,
+        "num_parts": num_parts,
         "control_start": CONTROL_START,
         "control_end": CONTROL_END,
         "guidance_scale": GUIDANCE_SCALE,

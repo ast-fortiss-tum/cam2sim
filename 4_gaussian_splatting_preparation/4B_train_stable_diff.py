@@ -53,6 +53,10 @@ parser.add_argument(
     help="Bag filename including .bag extension "
          "(default: env BAG_NAME or 'reference_bag.bag').",
 )
+parser.add_argument("--output-root", type=str, default=None,
+                    help="Where to store trained SD models. "
+                         "First time: optional (default: data/stable_diff_models). "
+                         "Saved to data/.sd_root so you don't need to repeat it.")
 parser.add_argument("--force", action="store_true",
                     help="Force retrain even if model markers exist")
 args, unknown = parser.parse_known_args()
@@ -66,7 +70,7 @@ os.chdir(PROJECT_ROOT)
 BAG_NAME = args.bag_name                # e.g. "reference_bag.bag"
 BAG_STEM = Path(BAG_NAME).stem          # e.g. "reference_bag"
 
-NUM_PARTS = 3                       # Match the 3 GS splits of cam2sim
+NUM_PARTS = 2                       # Match the 3 GS splits of cam2sim
 RESOLUTION = 512
 PRETRAINED_SD = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 
@@ -80,9 +84,10 @@ LOCAL_BINARY_PATH = os.path.join(
     "data", "data_for_stable_diffusion", BAG_STEM, "hf_binary",
 )
 
-# --- EXTERNAL DRIVE (heavy stuff lives here to keep the repo light) ---
-EXTERNAL_DRIVE = "/media/davide/extra2/work"
-CAM2SIM_SD_ROOT = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
+from utils.sd_paths import resolve_sd_root
+
+CAM2SIM_SD_ROOT, sd_action = resolve_sd_root(PROJECT_ROOT, override=args.output_root)
+print(f"[INFO] SD storage root: {CAM2SIM_SD_ROOT} (source: {sd_action})")
 
 # Shared across bags
 DIFFUSERS_DIR = os.path.join(CAM2SIM_SD_ROOT, "diffusers_repo")

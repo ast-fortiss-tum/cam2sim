@@ -1,60 +1,9 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-5F_sd_dave2.py
-
-DAVE-2 closed-loop driving with Stable Diffusion rendering, cam2sim layout.
-
-For each frame:
-  - CARLA renders the ground-truth sensors
-  - SD generates an RGB image from CARLA's semantic + instance + previous
-  - DAVE-2 takes the SD frame as input and produces steering
-  - hero is controlled via ackermann
-  - model switching across the 3 SD splits is done by position along trajectory
-
-Reads from (project root):
-    data/data_for_carla/camera.json                       (shared)
-    data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
-    data/data_for_carla/<BAG>/instance_color_map.json  (from 3F_OPT)
-
-Reads SD models from (external SSD):
-    <EXTERNAL_DRIVE>/cam2sim_sd/<BAG>/SD_Training_Outputs_Split/part_<N>/
-
-Writes to (project root):
-    data/results/sd_run<N>/
-        trajectory.json
-        rgb/           CARLA RGB frames (used as fallback in only_carla mode)
-        semantic/      cleaned semantic maps
-        instance/      cleaned + bag-remapped instance maps
-        generated/     SD generated frames (only when SD is active)
-        combined/      side-by-side preview
-        prompts.txt    per-frame prompt + control schedule + model part
-
-Auto-increments run folder: scans data/results/ for existing sd_run<N>
-and picks the next free integer.
-"""
-
 import os
 import sys
-import json
-import math
-import re
-import time
-import argparse
-from pathlib import Path
-from queue import Empty
-
-import carla
-import numpy as np
-import pygame
-import cv2
-import torch
-from PIL import Image
 
 
 # =============================================================================
-#  PATH SETUP
+#  PATH SETUP (must come BEFORE any diffusers/HF import)
 # =============================================================================
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,6 +20,36 @@ if SCRIPT_DIR in sys.path:
     sys.path.remove(SCRIPT_DIR)
 
 sys.path.insert(0, SCRIPT_DIR)
+
+
+# =============================================================================
+#  HF CACHE SETUP (must come BEFORE diffusers import to take effect)
+# =============================================================================
+
+from utils.sd_paths import resolve_sd_root, detect_num_trained_parts, require_trained_parts
+
+CAM2SIM_SD_ROOT, _ = resolve_sd_root(PROJECT_ROOT)
+os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
+
+
+# =============================================================================
+#  STANDARD IMPORTS (safe now, HF_HOME is set)
+# =============================================================================
+
+import json
+import math
+import re
+import time
+import argparse
+from pathlib import Path
+from queue import Empty
+
+import carla
+import numpy as np
+import pygame
+import cv2
+import torch
+from PIL import Image
 
 
 # =============================================================================
@@ -96,13 +75,14 @@ from utils.carla_simulator import (
 from utils.stable_diffusion import (
     load_pipeline_models,
     generate_image_realtime,
+    split_trajectory_into_parts,
+    select_model_part,
 )
 
 from utils.dave2_connection import (
     connect_to_dave2_server,
     send_image_over_connection,
 )
-
 
 # =============================================================================
 #  CONFIG (non bag-dependent)
@@ -111,10 +91,6 @@ from utils.dave2_connection import (
 # Bag name (with .bag extension): must match an existing bag from step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
-# Note: bag-dependent paths (TRAJECTORY_FILE, MODELS_BASE_DIR, ...) are
-# built in main() after argparse parses --bag-name.
-
-NUM_PARTS = 3
 
 # Best control schedule from thesis
 CONTROL_START = [0.0, 0.0, 0.35]   # [seg, inst, temp]
@@ -125,10 +101,7 @@ GUIDANCE_SCALE = 3.0
 DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "results")
 RUN_PREFIX = "sd_run"
 
-# External SSD root (shared, not bag-dependent)
-EXTERNAL_DRIVE = "/media/davidejannussi/ssd space"
-CAM2SIM_SD_ROOT = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
-os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
+
 
 # Sensors
 IM_WIDTH = 800
@@ -208,47 +181,6 @@ def clean_semantic_and_instance(sem_pil, inst_pil, min_area=MIN_PIXEL_AREA):
     return cleaned_sem_pil, cleaned_inst_pil
 
 
-# =============================================================================
-#  TRAJECTORY-BASED MODEL SELECTION
-# =============================================================================
-
-def split_trajectory_into_parts(trajectory_points, num_parts=3):
-    """Split trajectory into equal chunks (same as training)."""
-    total = len(trajectory_points)
-    chunk_size = total // num_parts
-    chunks = []
-    for i in range(num_parts):
-        start = i * chunk_size
-        end = total if i == num_parts - 1 else (i + 1) * chunk_size
-        chunks.append(trajectory_points[start:end])
-    return chunks
-
-
-def find_closest_trajectory_point(current_pos, trajectory_chunk):
-    """current_pos is a carla.Location."""
-    min_dist = float("inf")
-    closest_idx = 0
-    for idx, point in enumerate(trajectory_chunk):
-        traj_x = point["transform"]["location"]["x"]
-        traj_y = point["transform"]["location"]["y"]
-        dist = np.sqrt(
-            (current_pos.x - traj_x) ** 2 + (current_pos.y - traj_y) ** 2
-        )
-        if dist < min_dist:
-            min_dist = dist
-            closest_idx = idx
-    return closest_idx, min_dist
-
-
-def select_model_part(current_pos, trajectory_chunks):
-    best_part = 0
-    best_distance = float("inf")
-    for part_idx, chunk in enumerate(trajectory_chunks):
-        _, dist = find_closest_trajectory_point(current_pos, chunk)
-        if dist < best_distance:
-            best_distance = dist
-            best_part = part_idx
-    return best_part, best_distance
 
 
 # =============================================================================
@@ -338,10 +270,12 @@ def main():
         "instance_color_map.json",
     )
 
-    # SD models (external SSD, per-bag)
+    # SD models 
     models_base_dir = os.path.join(
         CAM2SIM_SD_ROOT, bag_stem, "SD_Training_Outputs_Split"
     )
+
+    num_parts = require_trained_parts(models_base_dir, bag_name)
 
     print("=" * 80)
     print("DAVE-2 CLOSED-LOOP WITH STABLE DIFFUSION (cam2sim, SD branch)")
@@ -355,6 +289,7 @@ def main():
     print(f"[INFO] SD models:       {models_base_dir}")
     print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
     print(f"[INFO] Device:          {DEVICE}")
+    print(f"[INFO] Num parts:       {num_parts}")
     print(f"[INFO] only_carla mode: {args.only_carla}")
     print(f"[INFO] Control start:   {CONTROL_START}")
     print(f"[INFO] Control end:     {CONTROL_END}")
@@ -388,7 +323,7 @@ def main():
     print(f"[INFO] Trajectory points: {len(trajectory_points)}")
 
     trajectory_chunks = split_trajectory_into_parts(
-        trajectory_points, NUM_PARTS
+        trajectory_points, num_parts
     )
     for i, chunk in enumerate(trajectory_chunks):
         print(f"   Part {i}: {len(chunk)} frames")
@@ -647,7 +582,7 @@ def main():
             else:
                 # ---- Model selection ----
                 required_part, traj_distance = select_model_part(
-                    cur_loc, trajectory_chunks
+                    (cur_loc.x, cur_loc.y), trajectory_chunks
                 )
 
                 # ---- Hysteresis-based switching ----
@@ -712,7 +647,7 @@ def main():
                 else:
                     # First frame: load initial model based on spawn position
                     initial_part, initial_dist = select_model_part(
-                        cur_loc, trajectory_chunks
+                        (cur_loc.x, cur_loc.y), trajectory_chunks
                     )
                     print(f"[F{frame}] Loading initial model part "
                           f"{initial_part} (dist={initial_dist:.2f}m)")

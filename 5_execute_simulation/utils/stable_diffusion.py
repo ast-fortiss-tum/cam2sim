@@ -10,7 +10,11 @@ from utils.config import (STABLE_DIFF_PROMPT,
                     STATIC_PROMPT, NEGATIVE_PROMPT, 
                     CONTROL_START, CONTROL_END)
 from safetensors import safe_open
+import numpy as np
+from PIL import Image
+from tqdm.auto import tqdm
 
+GUIDANCE_SCALE = 3.0
 
 def load_pipeline_models(model_root, device):
     config_path = os.path.join(model_root, "config.json")
@@ -28,7 +32,8 @@ def load_pipeline_models(model_root, device):
         model_data["stable_diffusion_model"],
         controlnet=[cnet_seg, cnet_inst, cnet_temp], 
         torch_dtype=torch.float16,
-        use_safetensors=True,
+        safety_checker=None,                # <-- skip safety classifier load
+        requires_safety_checker=False,      # <-- tell diffusers it's intentional
     ).to(device)
 
     # Load LoRA
@@ -46,15 +51,12 @@ def load_pipeline_models(model_root, device):
 
 
 def generate_image_realtime(
-    pipe, 
-    seg_image, 
-    inst_image, 
-    model_data, 
-    prev_image, 
-    prompt, 
-    guidance=3.0,
-    control_start=None, 
-    control_end=None
+    pipe, seg_image, inst_image, model_data, prev_image, prompt,
+    guidance=GUIDANCE_SCALE,
+    control_start=None, control_end=None,
+    guess_mode=True,            # <-- nuovo, era hardcoded
+    seed=None,                  # <-- nuovo, None = random
+    num_inference_steps=50,
 ):
     """
     Generates one frame using specific ControlNet parameters, DYNAMIC PROMPT, 
@@ -97,3 +99,114 @@ def generate_image_realtime(
             generator=generator
         )
     return result.images[0]
+
+# =======================
+# TRAJECTORY-BASED MODEL SELECTION
+# =======================
+# Same chunking logic the training uses to split the dataset into per-part
+# shards. Inference scripts (5E offline, 5F closed-loop, 5G grid search)
+# rebuild the same chunks and dispatch each frame to the matching SD model
+# part based on the hero (x, y) position along the planned trajectory.
+
+def split_trajectory_into_parts(trajectory_points, num_parts):
+    """Split the trajectory into num_parts equal chunks (same as training)."""
+    total = len(trajectory_points)
+    chunk_size = total // num_parts
+    chunks = []
+    for i in range(num_parts):
+        start = i * chunk_size
+        end = total if i == num_parts - 1 else (i + 1) * chunk_size
+        chunks.append(trajectory_points[start:end])
+    return chunks
+
+
+def find_closest_trajectory_point(xy, trajectory_chunk):
+    """
+    Index of the trajectory point closest to (x, y).
+
+    Args:
+        xy: 2-element tuple/list/array (x, y). Callers pass either
+            (frame_location["x"], frame_location["y"]) for offline scripts
+            or (cur_loc.x, cur_loc.y) for the closed-loop script.
+        trajectory_chunk: list of {"transform": {"location": {"x":..,"y":..}}}.
+
+    Returns:
+        (closest_idx, min_distance)
+    """
+    x, y = float(xy[0]), float(xy[1])
+    min_dist = float("inf")
+    closest_idx = 0
+    for idx, point in enumerate(trajectory_chunk):
+        traj_x = point["transform"]["location"]["x"]
+        traj_y = point["transform"]["location"]["y"]
+        dist = np.sqrt((x - traj_x) ** 2 + (y - traj_y) ** 2)
+        if dist < min_dist:
+            min_dist = dist
+            closest_idx = idx
+    return closest_idx, min_dist
+
+
+def select_model_part(xy, trajectory_chunks):
+    """
+    Find which chunk (i.e. which SD model part) the (x, y) belongs to.
+    Returns (best_part_index, distance_to_that_chunk_in_meters).
+    """
+    best_part = 0
+    best_distance = float("inf")
+    for part_idx, chunk in enumerate(trajectory_chunks):
+        _, dist = find_closest_trajectory_point(xy, chunk)
+        if dist < best_distance:
+            best_distance = dist
+            best_part = part_idx
+    return best_part, best_distance
+
+
+# =======================
+# REPLAY DATASET LOADING (offline scripts only: 5E, 5G)
+# =======================
+
+def load_replay_data(sem_folder, inst_folder, metadata_path, max_frames=None):
+    """
+    Load semantic + instance maps and metadata from the replay dataset
+    produced by 5A_sd_trajectory_only_carla.py.
+
+    Returns:
+        seg_list:       list of PIL.Image (RGB)
+        inst_list:      list of PIL.Image (RGB)
+        frame_data:     list of metadata dicts (location, rotation, caption)
+        frame_indices:  list of frame_id ints
+
+    Frames whose semantic or instance file is missing on disk are silently
+    skipped and counted in a warning at the end.
+    """
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
+
+    print(f"\n[INFO] Loading replay dataset from: {os.path.dirname(metadata_path)}")
+
+    with open(metadata_path, "r") as f:
+        all_frame_data = json.load(f)
+
+    if max_frames is not None and max_frames > 0:
+        all_frame_data = all_frame_data[:max_frames]
+
+    seg_list, inst_list, frame_data, frame_indices = [], [], [], []
+    n_missing = 0
+
+    for item in tqdm(all_frame_data, desc="Reading frames"):
+        frame_id = item["frame"]
+        filename = f"{frame_id:06d}.png"
+        seg_path = os.path.join(sem_folder, filename)
+        inst_path = os.path.join(inst_folder, filename)
+        if not os.path.exists(seg_path) or not os.path.exists(inst_path):
+            n_missing += 1
+            continue
+        seg_list.append(Image.open(seg_path).convert("RGB"))
+        inst_list.append(Image.open(inst_path).convert("RGB"))
+        frame_data.append(item)
+        frame_indices.append(frame_id)
+
+    if n_missing > 0:
+        print(f"[WARN] Missing files for {n_missing} frames (skipped).")
+    print(f"[INFO] Loaded {len(seg_list)} frames.")
+    return seg_list, inst_list, frame_data, frame_indices

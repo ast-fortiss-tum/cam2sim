@@ -23,10 +23,10 @@ Reads from (project root):
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
 
 Reads SD models from (external drive):
-    <EXTERNAL_DRIVE>/cam2sim_sd/<BAG>/SD_Training_Outputs_Split/part_<N>/
+    <SD_ROOT>/<BAG>/SD_Training_Outputs_Split/part_<N>/
 
 Writes to (external drive):
-    <EXTERNAL_DRIVE>/cam2sim_sd/<BAG>/sd_grid_search/
+    <SD_ROOT>/<BAG>/sd_grid_search/
         <config_label>/frame_XXXXXX.png
         grid_search_info.json    (summary of all configs)
 
@@ -35,8 +35,8 @@ compute_metrics.py expects in its default (non-flat) mode. You can then run:
 
     python 6_validation/6D_image_quality_metrics.py \
         --gt-folder data/raw_dataset/<BAG>/images \
-        --input-folder <EXTERNAL_DRIVE>/cam2sim_sd/<BAG>/sd_grid_search \
-        --output-folder <EXTERNAL_DRIVE>/cam2sim_sd/<BAG>/sd_grid_search_METRICS \
+        --input-folder <SD_ROOT>/<BAG>/sd_grid_search \
+        --output-folder <SD_ROOT>/<BAG>/sd_grid_search_METRICS \
         --crop-bottom 45
 
 and then rank the results with 6E_stable_diff_eval_results.py.
@@ -44,20 +44,10 @@ and then rank the results with 6E_stable_diff_eval_results.py.
 
 import os
 import sys
-import json
-import time
-import argparse
-from pathlib import Path
-from typing import List, Tuple, Dict, Any
-
-import torch
-import numpy as np
-from PIL import Image
-from tqdm.auto import tqdm
 
 
 # =======================
-# PATH SETUP
+# PATH SETUP (must come BEFORE any diffusers/HF import)
 # =======================
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -77,6 +67,52 @@ sys.path.insert(0, SCRIPT_DIR)
 
 
 # =======================
+# HF CACHE SETUP (must come BEFORE diffusers import to take effect)
+# =======================
+
+from utils.sd_paths import resolve_sd_root, detect_num_trained_parts, require_trained_parts
+
+CAM2SIM_SD_ROOT, _ = resolve_sd_root(PROJECT_ROOT)
+os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
+
+
+# =======================
+# STANDARD IMPORTS (safe now, HF_HOME is set)
+# =======================
+
+import json
+import time
+import argparse
+from pathlib import Path
+from typing import List, Tuple, Dict, Any
+
+import torch
+import numpy as np
+from PIL import Image
+from tqdm.auto import tqdm
+
+
+# =======================
+# LOCAL UTILS IMPORTS
+# =======================
+
+from utils.stable_diffusion import (
+    load_pipeline_models,
+    split_trajectory_into_parts,
+    select_model_part,
+    load_replay_data,
+    generate_image_realtime,
+)
+
+# We import NEGATIVE_PROMPT lazily so the script keeps working even on older
+# utils versions that don't export it.
+try:
+    from utils.stable_diffusion import NEGATIVE_PROMPT
+except ImportError:
+    NEGATIVE_PROMPT = "blurry, distorted, street without street lines"
+
+
+# =======================
 # CONFIG (non bag-dependent)
 # =======================
 
@@ -86,36 +122,11 @@ DEFAULT_BAG_NAME = "reference_bag.bag"
 # Note: bag-dependent paths (REPLAY_DATASET_FOLDER, MODELS_BASE_DIR, ...) are
 # built in main() after argparse parses --bag-name.
 
-NUM_PARTS = 1
-
 GUIDANCE_SCALE = 3.0
 NUM_INFERENCE_STEPS = 50
 FIXED_SEED = 50
 
 DEFAULT_MAX_FRAMES = 10
-
-# External drive (shared, not bag-dependent)
-EXTERNAL_DRIVE = "/media/davide/extra2/work"
-CAM2SIM_SD_ROOT = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
-
-# Use the external drive for HuggingFace cache (so we don't re-download SD1.5)
-os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
-
-
-# =======================
-# LOCAL UTILS IMPORTS
-# =======================
-
-from utils.stable_diffusion import (
-    load_pipeline_models,
-)
-
-# We import NEGATIVE_PROMPT lazily inside the extended generator below,
-# to avoid hard-coupling this script to a particular utils refactor.
-try:
-    from utils.stable_diffusion import NEGATIVE_PROMPT
-except ImportError:
-    NEGATIVE_PROMPT = "blurry, distorted, street without street lines"
 
 
 # =======================
@@ -136,7 +147,7 @@ def generate_grid_configs() -> List[ControlDict]:
     """
     Build the grid of configurations to evaluate.
 
-    Default: 25 (start, end) schedules × 4 (guess_mode, fixed_seed) combos
+    Default: 25 (start, end) schedules x 4 (guess_mode, fixed_seed) combos
     = 100 configurations total.
 
     To run a smaller experiment, slice the returned list, or use --max-configs.
@@ -204,153 +215,6 @@ def generate_grid_configs() -> List[ControlDict]:
 
 
 # =======================
-# EXTENDED GENERATOR (supports guess_mode and seed control)
-# =======================
-
-def generate_image_extended(
-    pipe,
-    seg_image,
-    inst_image,
-    model_data,
-    prev_image,
-    prompt,
-    guidance=GUIDANCE_SCALE,
-    control_start=None,
-    control_end=None,
-    guess_mode=True,
-    use_fixed_seed=True,
-    fixed_seed=FIXED_SEED,
-    num_inference_steps=NUM_INFERENCE_STEPS,
-):
-    """
-    Like utils.stable_diffusion.generate_image_realtime, but also exposes
-    guess_mode and seed control as arguments. This is what enables the grid
-    search to vary those two axes per configuration.
-    """
-    if control_start is None:
-        control_start = [0.41, 0.0, 0.0]
-    if control_end is None:
-        control_end = [1.0, 0.4, 0.4]
-
-    # Prepare ControlNet inputs: [seg, inst, temp]
-    ctrl_temp = prev_image if prev_image is not None else seg_image
-    control_images = [seg_image, inst_image, ctrl_temp]
-
-    # Per-ControlNet conditioning scales
-    current_temp_scale = 1.1 if prev_image is not None else 0.0
-    controlnet_scales = [0.7, 0.7, current_temp_scale]
-
-    # Seed: fixed (reproducible) or None (random each call)
-    if use_fixed_seed:
-        generator = torch.Generator(device=pipe.device).manual_seed(fixed_seed)
-    else:
-        generator = None
-
-    with torch.no_grad():
-        result = pipe(
-            prompt=prompt,
-            image=control_images,
-            negative_prompt=NEGATIVE_PROMPT,
-            controlnet_conditioning_scale=controlnet_scales,
-            height=model_data["size"]["y"],
-            width=model_data["size"]["x"],
-            num_inference_steps=num_inference_steps,
-            control_guidance_start=control_start,
-            control_guidance_end=control_end,
-            guidance_scale=guidance,
-            guess_mode=guess_mode,
-            output_type="pil",
-            generator=generator,
-        )
-    return result.images[0]
-
-
-# =======================
-# TRAJECTORY-BASED MODEL SELECTION
-# =======================
-
-def split_trajectory_into_parts(trajectory_points, num_parts=3):
-    total = len(trajectory_points)
-    chunk_size = total // num_parts
-    chunks = []
-    for i in range(num_parts):
-        start = i * chunk_size
-        end = total if i == num_parts - 1 else (i + 1) * chunk_size
-        chunks.append(trajectory_points[start:end])
-    return chunks
-
-
-def find_closest_trajectory_point(frame_location, trajectory_chunk):
-    min_dist = float("inf")
-    closest_idx = 0
-    for idx, point in enumerate(trajectory_chunk):
-        traj_x = point["transform"]["location"]["x"]
-        traj_y = point["transform"]["location"]["y"]
-        dist = np.sqrt(
-            (frame_location["x"] - traj_x) ** 2
-            + (frame_location["y"] - traj_y) ** 2
-        )
-        if dist < min_dist:
-            min_dist = dist
-            closest_idx = idx
-    return closest_idx, min_dist
-
-
-def select_model_part(frame_location, trajectory_chunks):
-    best_part = 0
-    best_distance = float("inf")
-    for part_idx, chunk in enumerate(trajectory_chunks):
-        _, dist = find_closest_trajectory_point(frame_location, chunk)
-        if dist < best_distance:
-            best_distance = dist
-            best_part = part_idx
-    return best_part, best_distance
-
-
-# =======================
-# DATA LOADING
-# =======================
-
-def load_json_file(path):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"JSON file not found: {path}")
-    with open(path, "r") as f:
-        return json.load(f)
-
-
-def load_replay_data(sem_folder, inst_folder, metadata_path, max_frames=None):
-    """
-    Load semantic + instance maps and metadata from the replay dataset.
-    Same logic as 5E.
-    """
-    print(f"\n[INFO] Loading replay dataset from: {os.path.dirname(metadata_path)}")
-    all_frame_data = load_json_file(metadata_path)
-    if max_frames is not None and max_frames > 0:
-        all_frame_data = all_frame_data[:max_frames]
-
-    seg_list, inst_list, frame_data, frame_indices = [], [], [], []
-    n_missing = 0
-
-    for item in tqdm(all_frame_data, desc="Reading frames"):
-        frame_id = item["frame"]
-        filename = f"{frame_id:06d}.png"
-        seg_path = os.path.join(sem_folder, filename)
-        inst_path = os.path.join(inst_folder, filename)
-        if not os.path.exists(seg_path) or not os.path.exists(inst_path):
-            n_missing += 1
-            continue
-        seg_list.append(Image.open(seg_path).convert("RGB"))
-        inst_list.append(Image.open(inst_path).convert("RGB"))
-        frame_data.append(item)
-        frame_indices.append(frame_id)
-
-    if n_missing > 0:
-        print(f"[WARN] Missing files for {n_missing} frames (skipped).")
-    print(f"[INFO] Loaded {len(seg_list)} frames.")
-    return seg_list, inst_list, frame_data, frame_indices
-
-
-# =======================
 # CONFIG COMPLETENESS CHECK (for idempotency)
 # =======================
 
@@ -393,7 +257,7 @@ def parse_args():
     parser.add_argument(
         "--output-root", type=str, default=None,
         help="Where to write the grid search subfolders. "
-             "Default: <EXTERNAL_DRIVE>/cam2sim_sd/<bag>/sd_grid_search"
+             "Default: <SD_ROOT>/<bag>/sd_grid_search"
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -431,6 +295,8 @@ def main():
     else:
         output_root = args.output_root
 
+    num_parts = require_trained_parts(models_base_dir, bag_name)
+
     print("=" * 80)
     print("STABLE DIFFUSION GRID SEARCH (cam2sim, SD branch)")
     print("=" * 80)
@@ -442,13 +308,13 @@ def main():
     print(f"[INFO] Models base:         {models_base_dir}")
     print(f"[INFO] Output root:         {output_root}")
     print(f"[INFO] Device:              {DEVICE}")
-    print(f"[INFO] Num parts:           {NUM_PARTS}")
+    print(f"[INFO] Num parts:           {num_parts}")
     print(f"[INFO] Guidance scale:      {GUIDANCE_SCALE}")
     print(f"[INFO] Max frames / config: {args.max_frames}")
     print(f"[INFO] Force re-run:        {args.force}")
     print("=" * 80)
 
-    # ---------- Sanity checks ----------
+    # ---------- Sanity checks on remaining inputs ----------
     if not os.path.exists(replay_dataset_folder):
         raise FileNotFoundError(
             f"Replay dataset not found: {replay_dataset_folder}\n"
@@ -458,22 +324,14 @@ def main():
         raise FileNotFoundError(f"Metadata not found: {metadata_path}")
     if not os.path.exists(trajectory_path):
         raise FileNotFoundError(f"Trajectory not found: {trajectory_path}")
-    if not os.path.isdir(models_base_dir):
-        raise FileNotFoundError(
-            f"SD models directory not found: {models_base_dir}\n"
-            f"Run 4A_train_stable_diff.py --bag-name {bag_name} first."
-        )
-    for part_idx in range(NUM_PARTS):
-        part_dir = os.path.join(models_base_dir, f"part_{part_idx}")
-        if not os.path.isdir(part_dir):
-            raise FileNotFoundError(f"Missing model part directory: {part_dir}")
 
     # ---------- Output root ----------
     os.makedirs(output_root, exist_ok=True)
 
     # ---------- Load trajectory + chunks ----------
-    full_trajectory = load_json_file(trajectory_path)
-    trajectory_chunks = split_trajectory_into_parts(full_trajectory, NUM_PARTS)
+    with open(trajectory_path, "r") as f:
+        full_trajectory = json.load(f)
+    trajectory_chunks = split_trajectory_into_parts(full_trajectory, num_parts)
     print(f"\n[INFO] Trajectory: {len(full_trajectory)} points")
     for i, chunk in enumerate(trajectory_chunks):
         print(f"   Part {i}: {len(chunk)} frames")
@@ -500,7 +358,7 @@ def main():
     # ---------- Iterate configs ----------
     grid_info = {
         "bag_name": bag_stem,
-        "num_parts": NUM_PARTS,
+        "num_parts": num_parts,
         "guidance_scale": GUIDANCE_SCALE,
         "num_inference_steps": NUM_INFERENCE_STEPS,
         "fixed_seed": FIXED_SEED,
@@ -554,7 +412,7 @@ def main():
             # ---- Model selection ----
             frame_location = frame_info["location"]
             required_part, traj_distance = select_model_part(
-                frame_location, trajectory_chunks
+                (frame_location["x"], frame_location["y"]), trajectory_chunks
             )
 
             if required_part != current_model_part:
@@ -581,7 +439,7 @@ def main():
             prev_img = None if i == 0 else prev_generated
 
             # ---- Generate with this config ----
-            out_img = generate_image_extended(
+            out_img = generate_image_realtime(
                 pipe=pipe,
                 seg_image=seg,
                 inst_image=inst,
@@ -643,14 +501,8 @@ def main():
     print(f"  Total time:             {grid_elapsed/60:.1f} min")
     print(f"  Output root:            {output_root}")
     print("=" * 80)
-    print("\nNext step — evaluate the grid with 6D_image_quality_metrics.py:")
-    print(f"  python 6_validation/6D_image_quality_metrics.py \\")
-    print(f"      --gt-folder {os.path.join(PROJECT_ROOT, 'data', 'raw_dataset', bag_stem, 'images')} \\")
-    print(f"      --input-folder {output_root} \\")
-    print(f"      --output-folder {output_root}_METRICS \\")
-    print(f"      --crop-bottom 45")
-    print()
-    print("Then rank the configs with 6E_stable_diff_eval_results.py.")
+
+
 
 
 if __name__ == "__main__":

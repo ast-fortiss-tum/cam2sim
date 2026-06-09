@@ -34,3 +34,5 @@ data/raw_dataset/*/
 data/processed_dataset/*/
 data/data_for_gaussian_splatting/*/
 data/data_for_carla/*/
+data/.sd_root
+data/stable_diff_models/
