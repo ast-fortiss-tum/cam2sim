@@ -3,17 +3,22 @@ import json
 import torch
 from diffusers import ControlNetModel, StableDiffusionControlNetPipeline
 from huggingface_hub import login, snapshot_download
-from utils.config import (STABLE_DIFF_PROMPT, 
-                    STABLE_DIFF_STEPS, 
-                    SEGMENTATION_COND_SCALE, 
-                    MODEL_FOLDER_NAME, 
-                    STATIC_PROMPT, NEGATIVE_PROMPT, 
-                    CONTROL_START, CONTROL_END)
+from utils.config import (NEGATIVE_PROMPT)
 from safetensors import safe_open
 import numpy as np
 from PIL import Image
 from tqdm.auto import tqdm
 
+# =======================
+# DEFAULT INFERENCE CONFIG
+# =======================
+
+# ControlNet conditioning schedule: [seg, inst, temp]
+# Controls when each ControlNet starts/stops influencing the diffusion process.
+CONTROL_START = [0.0, 0.0, 0.35]
+CONTROL_END = [1.0, 0.6, 0.55]
+
+# Classifier-free guidance strength.
 GUIDANCE_SCALE = 3.0
 
 def load_pipeline_models(model_root, device):

@@ -70,7 +70,7 @@ sys.path.insert(0, SCRIPT_DIR)
 # HF CACHE SETUP (must come BEFORE diffusers import to take effect)
 # =======================
 
-from utils.sd_paths import resolve_sd_root, detect_num_trained_parts, require_trained_parts
+from utils.sd_paths import resolve_sd_root, require_trained_parts
 
 CAM2SIM_SD_ROOT, _ = resolve_sd_root(PROJECT_ROOT)
 os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")

@@ -4129,7 +4129,7 @@ The scripts in this folder execute different kinds of simulation runs inside CAR
 - Replay the recorded trajectory in CARLA + Gaussian Splatting side by side
 - Run the DAVE-2 self-driving model on Gaussian-Splatted views
 - Replay the recorded trajectory in CARLA producing SD-ready semantic + instance maps (with bag colors)
-- Generate Stable Diffusion frames offline from the SD replay, either with one fixed configuration (best from the thesis) or with a 100-configuration grid search
+- Generate Stable Diffusion frames offline from the SD replay, either with one fixed configuration or with a 100-configuration grid search
 - Run the DAVE-2 self-driving model on Stable-Diffusion-rendered views
 
 The scripts are not alternatives to each other — they answer different questions, and you may run any subset depending on what you want to evaluate.
@@ -4169,7 +4169,7 @@ The scripts can produce or use:
 - A frame-by-frame replay with side-by-side CARLA and Gaussian Splatting renders
 - A closed-loop DAVE-2 driving run on Gaussian-Splatted views
 - A frame-by-frame replay producing SD-conditioning maps (instance maps recolored with bag-derived colors via `instance_color_map.json`)
-- Stable Diffusion offline generations from the SD replay, either with one fixed ControlNet schedule or with the 100-configuration grid search used in the thesis
+- Stable Diffusion offline generations from the SD replay, either with one fixed ControlNet schedule or with the 100-configuration grid search options.
 - A closed-loop DAVE-2 driving run on Stable-Diffusion-rendered views
 
 ---
@@ -4372,8 +4372,7 @@ CAM2SIM_SD_ROOT  = os.path.join(EXTERNAL_DRIVE, "cam2sim_sd")
 
 Edit these in `5E`, `5G`, and `5F_sd` if your external drive is mounted elsewhere. The cache `os.environ["HF_HOME"]` is set **before** importing `utils.stable_diffusion` so the SD weights are loaded from / cached to the external drive rather than `~/.cache/huggingface/`.
 
-The SD scripts also expose three SD-inference constants near the top, fixed to the values used in the thesis:
-
+The SD scripts also expose three SD-inference constants near the top.
 ```python
 GUIDANCE_SCALE       = 3.0
 NUM_INFERENCE_STEPS  = 50
@@ -4736,13 +4735,13 @@ This script is the **main GS-branch experiment**: it answers whether a self-driv
 
 ### 5E_stable_diff_offline_generation.py
 
-Generates Stable Diffusion frames offline from the SD replay dataset produced by `5A_sd`, using **one fixed ControlNet configuration** — the best one identified by the thesis. This is the SD counterpart of "running a single replay", and the script invoked when you call `step5_sd.sh --mode 5C`.
+Generates Stable Diffusion frames offline from the SD replay dataset produced by `5A_sd`, using **one fixed ControlNet configuration**. This is the SD counterpart of "running a single replay", and the script invoked when you call `step5_sd.sh --mode 5C`.
 
 What the script does:
 
 1. Loads SD1.5 + LoRA + 3 ControlNets (segmentation, instance, temporal) from `<EXTERNAL_DRIVE>/cam2sim_sd/<bag>/SD_Training_Outputs_Split/part_<N>/`. The pipeline is loaded **once** before the frame loop, not per-frame.
 2. Reads semantic + instance maps and per-frame metadata from `data/processed_dataset/<bag>/carla_replay_dataset_sd/`.
-3. For each replay frame, picks the trajectory chunk closest to the current ego location, switches to the corresponding `part_<N>` model if needed (with carry-over of the last generated frame for temporal coherence), and generates one SD frame using the realtime generator in `utils/stable_diffusion.py` (best schedule + guess mode + fixed seed from the thesis).
+3. For each replay frame, picks the trajectory chunk closest to the current ego location, switches to the corresponding `part_<N>` model if needed (with carry-over of the last generated frame for temporal coherence), and generates one SD frame using the realtime generator in `utils/stable_diffusion.py`
 4. Writes one PNG per frame to the external drive.
 
 Default input:
@@ -4780,8 +4779,7 @@ This script does **not** require CARLA: it consumes the replay dataset produced 
 
 ### 5G_stable_diff_grid_search.py
 
-Grid search version of `5E_stable_diff_offline_generation.py`. Generates the same replay dataset with **100 different SD control configurations**, one folder per configuration. This is the coarse parameter exploration described in the thesis as the first stage of the SD evaluation pipeline (100 configs × 10 frames, evaluated with all four metric groups in Step 6).
-
+Grid search version of `5E_stable_diff_offline_generation.py`. Generates the same replay dataset with **100 different SD control configurations**, one folder per configuration. T
 Each configuration varies:
 
 - `control_start = [seg_start, inst_start, temp_start]`
@@ -4828,7 +4826,7 @@ Useful CLI arguments:
 
 | Argument | Effect |
 |---|---|
-| `--max-frames N` | How many replay frames to use per configuration (default: 10, matching the thesis coarse stage). |
+| `--max-frames N` | How many replay frames to use per configuration |
 | `--max-configs N` | Only run the first `N` grid configurations. Default: all 100. |
 | `--output-root <path>` | Override the output root (default: `<EXTERNAL_DRIVE>/cam2sim_sd/<bag>/sd_grid_search/`). |
 | `--force` | Re-run configurations whose folder already looks complete. |
@@ -4858,7 +4856,7 @@ What the script does:
 1. Spawns the hero vehicle at the first trajectory pose, applies a stabilization sequence + launch warmup (same physics handling as `5B` / `5D`).
 2. At every frame, samples CARLA's semantic + instance segmentation sensors (the instance map is remapped to bag colors using `instance_color_map.json`, same logic as `5A_sd`).
 3. Picks the SD model part whose training trajectory chunk is closest to the current ego location. To avoid rapid flicker between adjacent parts, model switches are gated by a 5-frame hysteresis (i.e. the new part must remain the best choice for 5 consecutive frames before the switch is committed).
-4. Generates the SD frame with the realtime generator (best schedule from the thesis, guess mode + fixed seed), using the previous SD frame as temporal conditioning.
+4. Generates the SD frame with the realtime generator, using the previous SD frame as temporal conditioning.
 5. Sends the SD frame to the DAVE-2 server, applies the predicted steering, and ticks the world forward at constant speed.
 
 Termination conditions: same as `5D` (`--max_frames`, low-z fall, stuck-detector, coverage, user quit).
@@ -4951,7 +4949,7 @@ python 3_generate_simulation_data/3F_sd_generate_carla_scenario.py
 conda activate data_extraction
 python 5_execute_simulation/5A_sd_trajectory_only_carla.py
 
-# 2. (Optional) single-config offline SD generation (best schedule from the thesis)
+# 2. (Optional) single-config offline SD generation
 conda activate stable_diff
 python 5_execute_simulation/5E_stable_diff_offline_generation.py
 
@@ -5011,7 +5009,7 @@ The scripts in this folder compare the outputs of the simulation step against gr
 - Collect everything Step 6 needs into a single self-contained `data/data_for_validation/` directory
 - Compare semantic segmentation maps (real vs CARLA replay)
 - Compute driving-quality metrics (Min-Frechet distance, corridor violation, steering jitter)
-- Compute image-quality metrics on Stable Diffusion generated frames (17 metrics in 4 groups, matching the thesis: Single Image, Vehicle, Distribution, Temporal)
+- Compute image-quality metrics on Stable Diffusion generated frames (17 metrics in 4 groups: Single Image, Vehicle, Distribution, Temporal)
 - Aggregate the image-quality metrics into z-score-based rankings, with optional correlation against human rankings
 - Plot all trajectories on an OpenStreetMap basemap (utility)
 
@@ -5241,7 +5239,7 @@ MIN_VEHICLE_AREA = 600
 IOU_THRESHOLD    = 0.5
 ```
 
-`6E_evaluate_image_metrics_results.py` is configured at the top via two important dictionaries that group the 17 metrics into the same 4 categories used in the thesis:
+`6E_evaluate_image_metrics_results.py` is configured at the top via two important dictionaries that group the 17 metrics into  4 categories:
 
 ```python
 METRIC_GROUPS = {
@@ -5266,8 +5264,7 @@ LOWER_IS_BETTER  = {"MSE", "FID", "KID_mean", "MMD_RBF", "CPL",
                     "Temp_MSE", "Temp_CPL"}
 ```
 
-The z-score is negated for lower-is-better metrics so that a higher value always means better performance, matching the convention used in the thesis.
-
+The z-score is negated for lower-is-better metrics so that a higher value always means better performance.
 ---
 
 ## Scripts
@@ -5472,7 +5469,7 @@ Useful CLI arguments:
 
 ### 6D_image_quality_metrics.py
 
-Computes per-image image-quality metrics on Stable Diffusion generated frames, matching the 17 metrics used in the thesis. Each metric falls in one of four groups:
+Computes per-image image-quality metrics on Stable Diffusion generated frames, using the 17 metrics. Each metric falls in one of four groups:
 
 - **Single Image** (real vs generated, paired per frame): MSE, PSNR, SSIM, CPL, SegScore.
 - **Vehicle Consistency** (YOLO detections, paired per frame): Veh_Recall, Veh_Precision, Veh_AvgIoU.
@@ -5535,7 +5532,7 @@ python 6_validation/6D_image_quality_metrics.py \
     --crop-bottom 45
 ```
 
-`--crop-bottom 45` removes the bottom 45 pixels from both the GT and the generated images before comparison. This is the value used in the thesis for the cam2sim reference bag, to crop out the ego-vehicle hood. Change it for other bags.
+`--crop-bottom 45` removes the bottom 45 pixels from both the GT and the generated images to crop out the ego-vehicle hood before comparison. This is the value used for our bag, change it for other bags.
 
 Useful CLI arguments:
 
@@ -5554,23 +5551,22 @@ Useful CLI arguments:
 | `--skip-distribution` | Skip distribution-level metrics (FID / KID / IS / MMD / PRDC). |
 | `--skip-temporal` | Skip temporal-consistency metrics. |
 
-The thesis distinguishes between the *coarse* parameter exploration (100 configs × 10 frames each, evaluated with all 4 metric groups) and the *focused* parameter exploration (50 configs × 384 frames each, evaluated with all groups except Distribution because the sample size is too small for FID/KID to be meaningful, following Chong & Forsyth 2020 and Jayasumana et al. 2024). To reproduce the focused stage, add `--skip-distribution` to the command above.
+
 
 ---
 
 ### 6E_evaluate_image_metrics_results.py
 
-Aggregates the per-configuration JSON reports produced by `6D_image_quality_metrics.py` into a single ranking of SD configurations, using the same z-score-based aggregation described in the thesis.
-
+Aggregates the per-configuration JSON reports produced by `6D_image_quality_metrics.py` into a single ranking of SD configurations, using the z-score-based aggregation.
 What the script does:
 
 1. Scans the folder passed as positional argument for `*_image_level_report.json` files (the output of `6D`).
 2. Parses each report and merges its `average_metrics` and `temporal_metrics` blocks into a single per-config row.
 3. Optionally parses the START / END ControlNet schedule values out of the report filename (e.g. `START_seg_0.0_inst_0.0_temp_0.33__END_seg_1.0_inst_1.0_temp_0.66`) so they can be plotted alongside the scores. Disable with `--no-params`.
 4. Computes the z-score of every numeric column across all configurations: `z = (x - mean) / std`. The z-score is negated for metrics where lower-is-better (MSE, FID, KID, MMD, CPL, Temp_MSE, Temp_CPL), so a higher z always means better.
-5. Aggregates the per-metric z-scores into 4 per-group means matching the thesis: `Score_SingleImage`, `Score_Vehicle`, `Score_Distribution`, `Score_Temporal`. The overall ranking is the mean across all metrics: `Score_Overall`.
+5. Aggregates the per-metric z-scores into 4 per-group: `Score_SingleImage`, `Score_Vehicle`, `Score_Distribution`, `Score_Temporal`. The overall ranking is the mean across all metrics: `Score_Overall`.
 6. Sorts the configurations by `Score_Overall` (descending) and prints the top 10 to stdout, plus the top 5 by `Score_Vehicle` and by `Score_Temporal` separately.
-7. Optionally loads a human-ranking CSV via `--human <path>` (columns: `rank,config,human_score`), matches each entry to a metric report, computes Spearman and Kendall correlations between every numeric metric and the human score, and prints the strongest correlators. This is what produced the human-vs-automated correlation tables in the thesis.
+7. Optionally loads a human-ranking CSV via `--human <path>` (columns: `rank,config,human_score`), matches each entry to a metric report, computes Spearman and Kendall correlations between every numeric metric and the human score, and prints the strongest correlators.
 8. If `--csv` is provided, writes the full sorted table to disk and also dumps a `_top25.txt` file with the top 25 configuration names (useful as input for the focused-stage selection).
 9. Produces a bar chart with one bar per metric group per configuration, color-coded consistently across the four groups. If a human-rankings CSV was supplied, the human rank for each configuration is overlaid in red. Saved as `metrics_plot.png` and displayed unless `--no-plot` is given.
 
@@ -5708,7 +5704,7 @@ python 6_validation/6B_semantic_map_comparision.py
 python 6_validation/6UTIL_plot_all_trajectories.py
 ```
 
-A typical SD-evaluation workflow that takes the output of the Step 5 grid search and produces a ranked CSV (the basis of the figures in the thesis) is:
+A typical SD-evaluation workflow that takes the output of the Step 5 grid search and produces a ranked CSV is:
 
 ```bash
 conda activate data_extraction
@@ -5764,7 +5760,7 @@ python 6_validation/6E_evaluate_image_metrics_results.py \
 - `6D` is idempotent: a configuration whose JSON report already exists in `--output-folder` is skipped on subsequent runs. To force recomputation, delete the existing JSON.
 - `6D` downloads the SegFormer-b0 cityscapes model, YOLOv8n, and InceptionV3 the first time it runs (~ 130 MB total). They are cached in the standard HuggingFace and torch hub directories and reused on later runs.
 - `6D` matches GT to generated frames by filename, so the generated subfolders must use the same naming convention as the GT (`frame_XXXXXX.png`). The script reports how many frames matched, how many were GT-only, and how many were generated-only.
-- `--crop-bottom 45` in `6D` is the value used in the thesis for the cam2sim reference bag, to remove the ego-vehicle hood from both GT and generated frames before comparison. Adjust for other bags or other camera mounts.
+- `--crop-bottom 45` in `6D` is the value used ifor our reference bag, to remove the ego-vehicle hood from both GT and generated frames before comparison. Adjust for other bags or other camera mounts.
 - `6E` recognizes both `Score_Distribution` and missing distribution metrics. If `6D` was run with `--skip-distribution`, the corresponding group is simply omitted from `Score_Overall` and from the bar chart.
 - `6E`'s human-correlation analysis expects a CSV with columns `rank,config,human_score`. The `config` column must match the JSON filenames produced by `6D`, optionally without the `_image_level_report` suffix. Mismatches are reported and skipped.
 - `6UTIL` does not write any file. It is intended for visual inspection and for generating LaTeX snippets to include in a paper; the metric JSONs that the paper relies on are produced by `6C`.

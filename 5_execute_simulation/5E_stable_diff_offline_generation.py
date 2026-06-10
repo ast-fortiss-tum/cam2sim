@@ -42,7 +42,8 @@ import sys
 
 
 # =======================
-# PATH SETUP (must come BEFORE any diffusers/HF import)
+# PATH SETUP, script can be launched from any directory.
+# (must come BEFORE any diffusers/HF import)
 # =======================
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,8 +62,13 @@ sys.path.insert(0, SCRIPT_DIR)
 
 # =======================
 # HF CACHE SETUP (must come BEFORE diffusers import to take effect)
+# Sets HF_HOME so Hugging Face libraries (diffusers, huggingface_hub) read
+# and write models in our chosen SD storage root instead of the default
+# ~/.cache/huggingface/. The env var is read at import time by
+# huggingface_hub.constants, so it has to be set before the first
+# diffusers/HF import — otherwise the library locks onto the default
+# cache and our override is silently ignored.
 # =======================
-
 from utils.sd_paths import resolve_sd_root
 
 CAM2SIM_SD_ROOT, _ = resolve_sd_root(PROJECT_ROOT)
@@ -77,12 +83,8 @@ import json
 import time
 import argparse
 from pathlib import Path
-from typing import List, Tuple, Dict
-
 import torch
-import numpy as np
 from PIL import Image
-from tqdm.auto import tqdm
 
 from utils.stable_diffusion import (
     load_pipeline_models,
@@ -90,25 +92,24 @@ from utils.stable_diffusion import (
     split_trajectory_into_parts,
     select_model_part,
     load_replay_data,
+    CONTROL_START,
+    CONTROL_END,
+    GUIDANCE_SCALE,
 )
-from utils.sd_paths import detect_num_trained_parts, require_trained_parts, build_sd_bag_paths
+from utils.sd_paths import require_trained_parts
 
 
 # =======================
-# CONFIG (non bag-dependent)
+# CONFIG
 # =======================
 
 # Bag name (with .bag extension): must match an existing bag from step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
-CONTROL_START = [0.0, 0.0, 0.35]
-CONTROL_END = [1.0, 0.6, 0.55]
-GUIDANCE_SCALE = 3.0
+# Limit generation to first N frames for testing. Set to None to disable.
+MAX_FRAMES = 3
 
-# Limit generation to first N frames (None = all)
-MAX_FRAMES = 1
-
-# Skip frames whose output PNG already exists (idempotent)
+# Skip frames whose output PNG already exists, to resume interrupted generation without redoing completed frames.
 SKIP_EXISTING = False
 
 
@@ -117,10 +118,6 @@ SKIP_EXISTING = False
 # =======================
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-
-
 
 # =======================
 # MAIN

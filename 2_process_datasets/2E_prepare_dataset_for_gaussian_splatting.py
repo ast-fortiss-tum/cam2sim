@@ -85,14 +85,13 @@ OUTPUT_ROOT = os.path.join(
 
 CROP_BOTTOM = 45
 
-# THESIS PARAMETERS (do NOT change without rerunning COLMAP)
 FRAME_SKIP = 2
 NUM_SPLITS = 2
 OVERLAP_FRAMES = 100   # in ORIGINAL frame_id units
 
 OVERWRITE_EXISTING = True
 
-# Sky-mask model (same as thesis)
+# Sky-mask model 
 SKY_MASK_MODEL_NAME = "nvidia/segformer-b1-finetuned-cityscapes-1024-1024"
 
 # =======================
@@ -253,7 +252,7 @@ def process_frames():
     indices = list(range(0, total_frames, FRAME_SKIP))
 
     print("=" * 80)
-    print("GAUSSIAN SPLATTING IMAGE PREPARATION (thesis-replicating, WITH sky masks)")
+    print("GAUSSIAN SPLATTING IMAGE PREPARATION")
     print("=" * 80)
     print(f"[INFO] Project root:            {PROJECT_ROOT}")
     print(f"[INFO] Bag:                     {bag_name}")

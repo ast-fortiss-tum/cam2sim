@@ -77,6 +77,9 @@ from utils.stable_diffusion import (
     generate_image_realtime,
     split_trajectory_into_parts,
     select_model_part,
+    CONTROL_START,
+    CONTROL_END,
+    GUIDANCE_SCALE,
 )
 
 from utils.dave2_connection import (
@@ -91,11 +94,6 @@ from utils.dave2_connection import (
 # Bag name (with .bag extension): must match an existing bag from step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
-
-# Best control schedule from thesis
-CONTROL_START = [0.0, 0.0, 0.35]   # [seg, inst, temp]
-CONTROL_END = [1.0, 0.6, 0.55]
-GUIDANCE_SCALE = 3.0
 
 # Output path (project root, same as 5D)
 DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "results")
