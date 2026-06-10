@@ -18,8 +18,17 @@ from tqdm.auto import tqdm
 CONTROL_START = [0.0, 0.0, 0.35]
 CONTROL_END = [1.0, 0.6, 0.55]
 
+# Per-ControlNet conditioning scales [seg, inst, temp].
+# When prev_image is None (first frame) the temporal scale is set to 0
+# so the temporal ControlNet has no effect on that frame.
+CONTROLNET_SCALES_SEG = 0.7
+CONTROLNET_SCALES_INST = 0.7
+CONTROLNET_SCALES_TEMP = 1.1
+
 # Classifier-free guidance strength.
 GUIDANCE_SCALE = 3.0
+
+DEFAULT_SEED = 50
 
 def load_pipeline_models(model_root, device):
     config_path = os.path.join(model_root, "config.json")
@@ -55,53 +64,78 @@ def load_pipeline_models(model_root, device):
     return pipe, model_data
 
 
+
+
+
 def generate_image_realtime(
     pipe, seg_image, inst_image, model_data, prev_image, prompt,
     guidance=GUIDANCE_SCALE,
     control_start=None, control_end=None,
-    guess_mode=True,            # <-- nuovo, era hardcoded
-    seed=None,                  # <-- nuovo, None = random
+    guess_mode=True,
+    seed=DEFAULT_SEED,
     num_inference_steps=50,
+    seg_scale=CONTROLNET_SCALES_SEG,
+    inst_scale=CONTROLNET_SCALES_INST,
+    temp_scale=CONTROLNET_SCALES_TEMP,
 ):
     """
-    Generates one frame using specific ControlNet parameters, DYNAMIC PROMPT, 
-    and DYNAMIC SCHEDULES.
+    Generate a single frame with the SD + 3-ControlNet pipeline.
+
+    Args:
+        pipe, model_data:   pipeline objects from load_pipeline_models().
+        seg_image, inst_image, prev_image: PIL conditioning inputs for
+                            the segmentation, instance and temporal
+                            ControlNets respectively. prev_image may be
+                            None on the first frame, in which case the
+                            temporal ControlNet is disabled
+                            (its conditioning scale is forced to 0).
+        prompt:             text prompt for the diffusion step.
+        guidance:           classifier-free guidance scale.
+        control_start, control_end: per-ControlNet [seg, inst, temp]
+                            schedules in [0, 1]. If None, falls back to
+                            the module-level CONTROL_START / CONTROL_END.
+        guess_mode:         enables ControlNet guess mode.
+        seed:               integer seed for reproducible generation,
+                            or None to draw a fresh seed every call.
+        num_inference_steps: number of denoising steps.
+        seg_scale, inst_scale, temp_scale: conditioning scales applied
+                            to each ControlNet. temp_scale is ignored
+                            on the first frame.
+
+    Returns:
+        PIL.Image of the generated frame.
     """
-    # Default fallbacks if None passed (optional, safety net)
-    if control_start is None: control_start = [0.41, 0.0, 0.0]
-    if control_end is None:   control_end   = [1.0, 0.4, 0.4]
+    if control_start is None:
+        control_start = CONTROL_START
+    if control_end is None:
+        control_end = CONTROL_END
 
-    # 1. Prepare Control Images
     ctrl_temp = prev_image if prev_image is not None else seg_image
-    
-    # ControlNet Input Order: [Seg, Inst, Temp]
     control_images = [seg_image, inst_image, ctrl_temp]
-    
-    # 2. Parameter Configuration
-    current_temp_scale = 1.1 if prev_image is not None else 0.0
-    controlnet_scales = [0.7, 0.7, current_temp_scale]
 
-    generator = torch.Generator(device=pipe.device).manual_seed(50) 
+    effective_temp_scale = temp_scale if prev_image is not None else 0.0
+    controlnet_scales = [seg_scale, inst_scale, effective_temp_scale]
 
-    # 3. Call Pipeline
+    if seed is not None:
+        generator = torch.Generator(device=pipe.device).manual_seed(seed)
+    else:
+        generator = None
+
     with torch.no_grad():
         result = pipe(
             prompt=prompt,
             image=control_images,
-            negative_prompt= NEGATIVE_PROMPT,
+            negative_prompt=NEGATIVE_PROMPT,
             controlnet_conditioning_scale=controlnet_scales,
             height=model_data["size"]["y"],
             width=model_data["size"]["x"],
-            num_inference_steps=50, #STABLE_DIFF_STEPS, # Ensure this matches your config
-            
-            # --- DYNAMIC APPLIED SCHEDULES ---
-            control_guidance_start=control_start, 
-            control_guidance_end=control_end,     
-            
+            num_inference_steps=num_inference_steps,
+            control_guidance_start=control_start,
+            control_guidance_end=control_end,
             guidance_scale=guidance,
-            guess_mode=True, 
+            guess_mode=guess_mode,
             output_type="pil",
-            generator=generator
+            generator=generator,
         )
     return result.images[0]
 

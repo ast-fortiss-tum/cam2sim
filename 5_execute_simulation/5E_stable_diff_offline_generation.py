@@ -164,7 +164,7 @@ def main():
     output_data_folder = os.path.join(output_folder, "data")
     output_info_path = os.path.join(output_data_folder, "generation_info.json")
 
-# ---------- Sanity checks on inputs ----------
+    # ---------- Sanity checks on inputs ----------
     if not os.path.exists(replay_dataset_folder):
         raise FileNotFoundError(
             f"Replay dataset not found: {replay_dataset_folder}\n"
