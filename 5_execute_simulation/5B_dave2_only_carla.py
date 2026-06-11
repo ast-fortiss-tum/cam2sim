@@ -11,7 +11,7 @@ Reads from (project root):
 
 Writes to (project root):
     data/driving_runs/<BAG>/only_carla/<TIMESTAMP>/
-        data/trajectory.json
+        trajectory.json
         depth/    (CARLA depth maps)
         instance/ (CARLA instance maps)
         rgb/      (CARLA rgb frames)
@@ -247,7 +247,6 @@ def create_output_folders(output_folder):
         "semantic",
         "instance",
         "depth",
-        "data",
     ]:
         os.makedirs(os.path.join(output_folder, subdir), exist_ok=True)
 
@@ -931,7 +930,7 @@ def main():
                     pass
 
         if trajectory_log:
-            traj_file = os.path.join(output_folder, "data", "trajectory.json")
+            traj_file = os.path.join(output_folder, "trajectory.json")
 
             with open(traj_file, "w") as f:
                 json.dump(trajectory_log, f, indent=2)
