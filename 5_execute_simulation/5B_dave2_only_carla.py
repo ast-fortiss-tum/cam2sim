@@ -9,8 +9,8 @@ Reads from (project root):
     data/data_for_carla/camera.json                        (shared)
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
 
-Writes to:
-    data/processed_dataset/<BAG>/dave2_runs/only_carla_run<N>
+Writes to (project root):
+    data/driving_runs/<BAG>/only_carla/<TIMESTAMP>/
         data/trajectory.json
         depth/    (CARLA depth maps)
         instance/ (CARLA instance maps)
@@ -23,8 +23,8 @@ import sys
 import json
 import math
 import time
-import re
 import argparse
+from datetime import datetime
 from pathlib import Path
 from queue import Empty
 
@@ -90,8 +90,6 @@ DEFAULT_BAG_NAME = "reference_bag.bag"
 
 # Note: bag-dependent paths (CARLA_DATA_FOLDER, TRAJECTORY_PATH, ...) are
 # built in main() after argparse parses --bag-name.
-
-RUN_PREFIX = "only_carla_run"
 
 IM_WIDTH = 800
 IM_HEIGHT = 503
@@ -230,27 +228,17 @@ def load_camera_data(path):
     return camera_data
 
 
-def next_run_folder(base_dir, prefix=RUN_PREFIX, forced_id=None):
+def make_run_folder(project_root, bag_stem, method):
     """
-    Pick the next free <prefix><N> folder inside base_dir.
-    If forced_id is given, use that number explicitly.
+    Build a timestamped output folder for a driving run.
+
+    Layout: <project_root>/data/driving_runs/<bag_stem>/<method>/<TIMESTAMP>/
+    Timestamp format: YYYY-MM-DD_HH-MM-SS (filesystem-safe, sortable).
     """
-    os.makedirs(base_dir, exist_ok=True)
-    if forced_id is not None:
-        return os.path.join(base_dir, f"{prefix}{int(forced_id)}")
-
-    existing = []
-    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
-    for entry in os.listdir(base_dir):
-        full = os.path.join(base_dir, entry)
-        if not os.path.isdir(full):
-            continue
-        m = pattern.match(entry)
-        if m:
-            existing.append(int(m.group(1)))
-
-    next_n = max(existing) + 1 if existing else 1
-    return os.path.join(base_dir, f"{prefix}{next_n}")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return os.path.join(
+        project_root, "data", "driving_runs", bag_stem, method, timestamp,
+    )
 
 
 def create_output_folders(output_folder):
@@ -563,18 +551,11 @@ def main():
              "(default: env BAG_NAME or 'reference_bag.bag').",
     )
     parser.add_argument(
-        "--run-id",
-        type=int,
-        default=None,
-        help="Force a specific run number for the output folder "
-             "(default: auto-pick next free integer).",
-    )
-    parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
         help="Custom output dir. If omitted, auto-picks "
-             "data/processed_dataset/<bag>/dave2_runs/only_carla_run<N>.",
+             "data/driving_runs/<bag>/only_carla/<TIMESTAMP>.",
     )
     args = parser.parse_args()
 
@@ -591,18 +572,11 @@ def main():
     trajectory_path = os.path.join(
         carla_data_folder, "trajectory_positions_rear_odom_yaw.json"
     )
-    output_root = os.path.join(
-        PROJECT_ROOT, "data", "processed_dataset", bag_stem, "dave2_runs"
-    )
 
     if args.output_dir:
         output_folder = args.output_dir
     else:
-        output_folder = next_run_folder(
-            output_root,
-            prefix=RUN_PREFIX,
-            forced_id=args.run_id,
-        )
+        output_folder = make_run_folder(PROJECT_ROOT, bag_stem, "only_carla")
 
     print("=" * 80)
     print("DAVE-2 ONLY-CARLA DRIVING")

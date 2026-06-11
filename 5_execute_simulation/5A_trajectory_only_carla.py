@@ -11,7 +11,7 @@ Reads from (project root):
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
 
 Writes to (project root):
-    data/processed_dataset/<BAG>/carla_replay_dataset
+    data/replay_dataset/<BAG>/only_carla/
         data/all_frame_data.json
         instance/ (CARLA instance maps)
         rgb/      (CARLA rgb frames)
@@ -551,8 +551,7 @@ def main():
         carla_data_folder, "trajectory_positions_rear_odom_yaw.json"
     )
     output_folder = os.path.join(
-        PROJECT_ROOT, "data", "processed_dataset", bag_stem,
-        "carla_replay_dataset",
+        PROJECT_ROOT, "data", "replay_dataset", bag_stem, "only_carla",
     )
 
     print("=" * 80)

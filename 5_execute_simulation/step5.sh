@@ -29,6 +29,9 @@
 #     bash step5.sh <bag_name.bag> --mode 5C --max-jobs 2
 #     bash step5.sh <bag_name.bag> --mode 5C --method nerfacto
 #     bash step5.sh <bag_name.bag> --mode 5D --method splatfacto-big --max-jobs 4
+#     bash step5.sh <bag_name.bag> --mode 5C -- --no_save --max_frames 200
+#
+# Anything after '--' is forwarded verbatim to the Step 5 python script.
 # =============================================================================
 
 set -e
@@ -77,7 +80,7 @@ ALLOWED_METHODS=("splatfacto" "splatfacto-big" "nerfacto" "nerfacto-big")
 
 usage() {
     cat <<EOF
-Usage: $0 <bag_name.bag> [options]
+Usage: $0 <bag_name.bag> [options] [-- <extra args for python script>]
 
 Arguments:
   <bag_name.bag>            Bag filename including .bag extension
@@ -95,11 +98,19 @@ Options:
                             during JIT build (default: unset, = ninja default).
   -h, --help                Show this help message
 
+Passthrough:
+  Anything after '--' is forwarded verbatim to the Step 5 python script.
+
 Modes:
   5A   CARLA-only trajectory replay        (env: $ENV_CARLA, no DAVE-2)
   5B   CARLA-only DAVE-2 drive             (env: $ENV_CARLA, with DAVE-2)
   5C   Gaussian Splatting trajectory       (env: $ENV_GS, no DAVE-2)
   5D   Gaussian Splatting DAVE-2 drive     (env: $ENV_GS, with DAVE-2)
+
+Examples:
+  bash $0 reference_bag.bag -m 5C -- --no_save
+  bash $0 reference_bag.bag -m 5C -- --max_frames 200 --no_save
+  bash $0 reference_bag.bag -m 5C --method nerfacto -- --only_split 1
 EOF
 }
 
@@ -109,6 +120,7 @@ MODE="5C"
 BAG_NAME=""
 MAX_JOBS=""
 METHOD=""
+PASSTHROUGH_ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -127,6 +139,12 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             usage
             exit 0
+            ;;
+        --)
+            # Everything after '--' is forwarded verbatim to the python script.
+            shift
+            PASSTHROUGH_ARGS="$*"
+            break
             ;;
         -*)
             echo "[ERROR] Unknown option: $1"
@@ -228,6 +246,9 @@ echo "[INFO] DAVE-2 server      = $( [ $NEED_DAVE_SERVER -eq 1 ] && echo YES || 
 if [ $USES_NERFSTUDIO -eq 1 ]; then
     echo "[INFO] GS method          = ${METHOD:-(all detected)}"
     echo "[INFO] MAX_JOBS           = ${MAX_JOBS:-(default)}"
+fi
+if [ -n "$PASSTHROUGH_ARGS" ]; then
+    echo "[INFO] Passthrough args   = $PASSTHROUGH_ARGS"
 fi
 echo "=========================================="
 
@@ -483,10 +504,14 @@ NEXT_TERM_NUM=$(( NEED_DAVE_SERVER == 1 ? 4 : 3 ))
 echo ""
 echo "[STEP $NEXT_TERM_NUM] Spawning Terminal $NEXT_TERM_NUM: $STEP5_LABEL"
 
-# Compose the step5 command with --bag-name and (for 5C/5D) --method.
+# Compose the step5 command with --bag-name, (for 5C/5D) --method, and
+# the user-supplied passthrough args (if any).
 STEP5_CMD="python $STEP5_SCRIPT --bag-name '$BAG_NAME'"
 if [ -n "$GS_EXTRA_ARGS" ]; then
     STEP5_CMD="$STEP5_CMD $GS_EXTRA_ARGS"
+fi
+if [ -n "$PASSTHROUGH_ARGS" ]; then
+    STEP5_CMD="$STEP5_CMD $PASSTHROUGH_ARGS"
 fi
 
 spawn_terminal \

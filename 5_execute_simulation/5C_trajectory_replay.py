@@ -13,6 +13,14 @@ Reads from (project root):
     data/data_for_gaussian_splatting/<BAG>/outputs/<METHOD>_split_N/<METHOD>/<TS>/utm_to_nerfstudio_transform.json
     data/data_for_gaussian_splatting/<BAG>/frame_positions_split_N_1_of_K.txt
 
+Writes to (project root, unless --no_save):
+    data/replay_dataset/<BAG>/<METHOD>/
+        carla/      (CARLA RGB frames at replay poses)
+        gs/         (GS-rendered RGB frames)
+        combined/   (side-by-side carla+gs JPGs)
+
+    <METHOD> is one of: splatfacto, splatfacto-big, nerfacto, nerfacto-big.
+
 Supported methods (mirrors 4B/4D): splatfacto, splatfacto-big, nerfacto, nerfacto-big.
 Use --method to restrict to a single method when multiple are trained on the
 same bag.
@@ -23,6 +31,7 @@ Phases:
   PHASE 2: Replay - drive trajectory with CARLA + GS side by side, save frames.
 
 Run with --skip_calibration to jump straight to phase 2.
+Pass --no_save to disable frame saving.
 
 Coordinate chain (per split):
     CARLA local coords -> UTM (inverse XODR projection) -> Nerfstudio (similarity transform)
@@ -693,28 +702,24 @@ def main():
         help="Bag filename including .bag extension "
              "(default: env BAG_NAME or 'reference_bag.bag').",
     )
-    parser.add_argument("--only_carla", action="store_true",
-                        help="Run without GS model")
     parser.add_argument("--only_split", type=int, default=None,
                         help="Load and use ONLY this split number "
                              "(useful for low-VRAM GPUs). "
-                             "All trajectory frames will use this split. "
-                             "If multiple methods exist for the same split_num, "
-                             "all of them are loaded unless --method is given.")
+                             "All trajectory frames will use this split.")
     parser.add_argument("--method", type=str, default=None,
                         choices=list(SUPPORTED_METHODS),
                         help="Restrict to a single training method. "
                              f"One of: {', '.join(SUPPORTED_METHODS)}. "
-                             "Default: load all methods that have trained splits.")
+                             "Default: auto-detect (exactly one method must be trained).")
     parser.add_argument("--max_frames", type=int, default=None,
                         help="Maximum number of frames to render")
     parser.add_argument("--skip_calibration", action="store_true", default=True,
                         help="Skip Phase 1 free camera calibration (default: True)")
     parser.add_argument("--no_save", action="store_true",
-                        help="Disable frame saving")
+                        help="Disable frame saving. By default frames ARE saved.")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory for saved frames "
-                             "(default: <PROJECT_ROOT>/data/data_for_carla/<bag>/replay_results)")
+                             "(default: <PROJECT_ROOT>/data/replay_dataset/<bag>/<method>)")
 
 
     args = parser.parse_args()
@@ -754,29 +759,27 @@ def main():
         PROJECT_ROOT, "data", "data_for_gaussian_splatting", bag_stem
     )
     gs_outputs_dir = os.path.join(gs_data_root, "outputs")
-    default_output_dir = os.path.join(
-        PROJECT_ROOT, "data", "data_for_carla", bag_stem, "replay_results"
-    )
 
-    # If user did not override --output_dir, use the default built from bag_stem.
-    if args.output_dir is None:
-        args.output_dir = default_output_dir
-
-    # Determine which methods to scan.
+    # Determine which methods to scan and the active method name (used to
+    # build the default output directory). A GS method MUST be available:
+    # this script is for GS replay, not for CARLA-only runs (use 5A for that).
     if args.method is not None:
         allowed_methods = (args.method,)
+        method_name = args.method
     else:
         detected = detect_available_methods(gs_outputs_dir, SUPPORTED_METHODS)
         if len(detected) == 0:
-            # No trained method found: leave allowed_methods empty so that
-            # auto_detect_splits() returns nothing and the downstream
-            # fallback to only_carla kicks in naturally.
-            allowed_methods = ()
+            print(f"[ERROR] No trained GS method found for bag '{bag_stem}'.")
+            print(f"        Train at least one method first "
+                  f"(4D_train_split.py) before running this script.")
+            print(f"        Supported methods: {', '.join(SUPPORTED_METHODS)}.")
+            sys.exit(1)
         elif len(detected) == 1:
             m = detected[0]
             print(f"[INFO] Auto-selected method: {m} "
                 f"(only one trained for bag '{bag_stem}')")
             allowed_methods = (m,)
+            method_name = m
         else:
             print(f"[ERROR] Multiple GS methods trained for bag '{bag_stem}': "
                 f"{detected}")
@@ -784,6 +787,14 @@ def main():
                 f"mixed-method inference.")
             print(f"        Example: --method {detected[0]}")
             sys.exit(1)
+
+    default_output_dir = os.path.join(
+        PROJECT_ROOT, "data", "replay_dataset", bag_stem, method_name,
+    )
+
+    # If user did not override --output_dir, use the default built from bag_stem and method.
+    if args.output_dir is None:
+        args.output_dir = default_output_dir
 
     print("=" * 80)
     print("REPLAY: CARLA + Gaussian Splatting / Nerfstudio (multi-split, multi-method)")
@@ -795,8 +806,9 @@ def main():
     print(f"[INFO] Trajectory:      {trajectory_file}")
     print(f"[INFO] Camera config:   {camera_config_file}  ({camera_config_source})")
     print(f"[INFO] GS data root:    {gs_data_root}")
+    print(f"[INFO] Method:          {method_name}")
     print(f"[INFO] Output dir:      {args.output_dir}")
-    print(f"[INFO] Methods scanned: {', '.join(allowed_methods)}")
+    print(f"[INFO] Save frames:     {'NO (--no_save)' if args.no_save else 'YES'}")
     print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
     print("=" * 80)
 
@@ -814,40 +826,34 @@ def main():
           f"pos=({cam_pos_x},{cam_pos_y},{cam_pos_z}), pitch={cam_pitch}")
 
     # ---- Discover and load split models ----
-    only_carla = args.only_carla
-    split_models = []
+    print("\n[INFO] Auto-detecting split models...")
+    split_configs = auto_detect_splits(
+        gs_outputs_dir, gs_data_root, allowed_methods=allowed_methods
+    )
 
-    if not only_carla:
-        print("\n[INFO] Auto-detecting split models...")
-        split_configs = auto_detect_splits(
-            gs_outputs_dir, gs_data_root, allowed_methods=allowed_methods
-        )
+    if args.only_split is not None:
+        split_configs = [c for c in split_configs
+                         if c["split_num"] == args.only_split]
+        if not split_configs:
+            print(f"[ERROR] --only_split {args.only_split} requested but "
+                  f"no matching split found")
+            sys.exit(1)
+        print(f"[INFO] Filtered to ONLY split_{args.only_split} "
+              f"(--only_split mode)")
 
-        if args.only_split is not None:
-            split_configs = [c for c in split_configs
-                             if c["split_num"] == args.only_split]
-            if not split_configs:
-                print(f"[ERROR] --only_split {args.only_split} requested but "
-                      f"no matching split found")
-                sys.exit(1)
-            print(f"[INFO] Filtered to ONLY split_{args.only_split} "
-                  f"(--only_split mode)")
+    split_models = load_split_models(split_configs, xodr_file, fov=fov) if split_configs else []
 
-        if split_configs:
-            split_models = load_split_models(split_configs, xodr_file, fov=fov)
+    if not split_models:
+        print("[ERROR] No GS models loaded. Aborting.")
+        sys.exit(1)
 
-        if not split_models:
-            print("[WARN] No GS models loaded - falling back to only_carla mode")
-            only_carla = True
-
-    if split_models:
-        print(f"\nLoaded {len(split_models)} split model(s):")
-        for sm in split_models:
-            zmin = sm.training_cameras[:, 2, 3].min()
-            zmax = sm.training_cameras[:, 2, 3].max()
-            print(f"   {sm.name}: method={sm.method}, "
-                  f"frames [{sm.min_frame}-{sm.max_frame}], "
-                  f"Z range [{zmin:.4f}, {zmax:.4f}]")
+    print(f"\nLoaded {len(split_models)} split model(s):")
+    for sm in split_models:
+        zmin = sm.training_cameras[:, 2, 3].min()
+        zmax = sm.training_cameras[:, 2, 3].max()
+        print(f"   {sm.name}: method={sm.method}, "
+              f"frames [{sm.min_frame}-{sm.max_frame}], "
+              f"Z range [{zmin:.4f}, {zmax:.4f}]")
 
     # ---- Connect to CARLA ----
     print(f"\n[INFO] Connecting to CARLA at {CARLA_IP}:{CARLA_PORT}...")
@@ -933,7 +939,7 @@ def main():
     # ============================================================
     calibration_offsets = {}
 
-    if split_models and not args.skip_calibration:
+    if not args.skip_calibration:
         cal_win_w = IM_WIDTH * 2
         cal_win_h = IM_HEIGHT * 2
         screen = pygame.display.set_mode((cal_win_w, cal_win_h))
@@ -1174,7 +1180,7 @@ def main():
                   f"yaw_offset={math.degrees(yaw_offset):.2f} deg, "
                   f"z_offset_from_interp={z_offset_from_interp:.4f}")
 
-    if args.skip_calibration and split_models:
+    if args.skip_calibration:
         for sm in split_models:
             cam_pos_train = sm.training_cameras[0, :, 3].copy()
             fid = sm.cam_idx_to_frame_id.get(0)
@@ -1208,15 +1214,15 @@ def main():
 
     save_flag = not args.no_save
     if save_flag:
-        run_name = f"{bag_stem}_replay"
-        save_dir_carla = os.path.join(args.output_dir, run_name, "carla")
-        save_dir_gs = os.path.join(args.output_dir, run_name, "gs")
-        save_dir_combined = os.path.join(args.output_dir, run_name, "combined")
+        save_dir_carla = os.path.join(args.output_dir, "carla")
+        save_dir_gs = os.path.join(args.output_dir, "gs")
+        save_dir_combined = os.path.join(args.output_dir, "combined")
         os.makedirs(save_dir_carla, exist_ok=True)
         os.makedirs(save_dir_gs, exist_ok=True)
         os.makedirs(save_dir_combined, exist_ok=True)
-        print(f"[INFO] Saving frames to: "
-              f"{os.path.join(args.output_dir, run_name)}")
+        print(f"[INFO] Saving frames to: {args.output_dir}")
+    else:
+        print("[INFO] --no_save: frame saving is DISABLED")
 
     current_split_idx = 0
 
@@ -1267,74 +1273,66 @@ def main():
             except Empty:
                 continue
 
-            gs_pil = None
-            active_split_name = "none"
-            ns_pos_raw = None
-            offsets = None
+            new_split_idx = find_best_split(
+                frame_id, split_models, current_split_idx
+            )
+            if new_split_idx != current_split_idx:
+                print(f"[Frame {idx}] Switching: "
+                      f"{split_models[current_split_idx].name} -> "
+                      f"{split_models[new_split_idx].name}")
+                current_split_idx = new_split_idx
 
-            if split_models:
-                new_split_idx = find_best_split(
-                    frame_id, split_models, current_split_idx
-                )
-                if new_split_idx != current_split_idx:
-                    print(f"[Frame {idx}] Switching: "
-                          f"{split_models[current_split_idx].name} -> "
-                          f"{split_models[new_split_idx].name}")
-                    current_split_idx = new_split_idx
+            sm = split_models[current_split_idx]
+            active_split_name = sm.name
+            offsets = calibration_offsets.get(sm.name, {
+                "pos_offset": np.zeros(3),
+                "yaw_offset": 0.0,
+                "pitch_offset": 0.0,
+                "roll_offset": 0.0,
+                "z_offset": 0.0,
+            })
 
-                sm = split_models[current_split_idx]
-                active_split_name = sm.name
-                offsets = calibration_offsets.get(sm.name, {
-                    "pos_offset": np.zeros(3),
-                    "yaw_offset": 0.0,
-                    "pitch_offset": 0.0,
-                    "roll_offset": 0.0,
-                    "z_offset": 0.0,
-                })
+            cam_tf = rgb_sensor.get_transform()
+            carla_x = cam_tf.location.x
+            carla_y = cam_tf.location.y
+            carla_yaw_rad = math.radians(cam_tf.rotation.yaw)
 
-                cam_tf = rgb_sensor.get_transform()
-                carla_x = cam_tf.location.x
-                carla_y = cam_tf.location.y
-                carla_yaw_rad = math.radians(cam_tf.rotation.yaw)
+            ns_pos_raw = sm.coord_transformer.carla_to_nerfstudio(
+                carla_x, carla_y
+            )
+            ns_pos_raw[2] = sm.lookup_z(ns_pos_raw[0], ns_pos_raw[1])
 
-                ns_pos_raw = sm.coord_transformer.carla_to_nerfstudio(
-                    carla_x, carla_y
-                )
-                ns_pos_raw[2] = sm.lookup_z(ns_pos_raw[0], ns_pos_raw[1])
+            ns_pos = ns_pos_raw + offsets["pos_offset"]
+            ns_pos[2] = ns_pos_raw[2] + offsets.get("z_offset", 0.0)
 
-                ns_pos = ns_pos_raw + offsets["pos_offset"]
-                ns_pos[2] = ns_pos_raw[2] + offsets.get("z_offset", 0.0)
+            ns_yaw_raw = sm.coord_transformer.transform_yaw_carla_to_nerfstudio(
+                carla_yaw_rad
+            )
+            ns_yaw = ns_yaw_raw + offsets["yaw_offset"]
+            ns_pitch = sm.avg_pitch + offsets["pitch_offset"]
+            ns_roll = sm.avg_roll + offsets["roll_offset"]
 
-                ns_yaw_raw = sm.coord_transformer.transform_yaw_carla_to_nerfstudio(
-                    carla_yaw_rad
-                )
-                ns_yaw = ns_yaw_raw + offsets["yaw_offset"]
-                ns_pitch = sm.avg_pitch + offsets["pitch_offset"]
-                ns_roll = sm.avg_roll + offsets["roll_offset"]
+            if idx % 100 == 0:
+                print(f"[Frame {idx}] {sm.name} | CARLA: "
+                      f"({carla_x:.2f}, {carla_y:.2f}) "
+                      f"yaw={math.degrees(carla_yaw_rad):.1f}deg -> NS: "
+                      f"({ns_pos[0]:.4f}, {ns_pos[1]:.4f}, {ns_pos[2]:.4f}) "
+                      f"yaw={math.degrees(ns_yaw):.1f}deg")
 
-                if idx % 100 == 0:
-                    print(f"[Frame {idx}] {sm.name} | CARLA: "
-                          f"({carla_x:.2f}, {carla_y:.2f}) "
-                          f"yaw={math.degrees(carla_yaw_rad):.1f}deg -> NS: "
-                          f"({ns_pos[0]:.4f}, {ns_pos[1]:.4f}, {ns_pos[2]:.4f}) "
-                          f"yaw={math.degrees(ns_yaw):.1f}deg")
-
-                c2w = build_nerfstudio_c2w(ns_pos, ns_yaw, ns_pitch, ns_roll)
-                gs_pil = render_gs(sm.pipeline, c2w, IM_WIDTH, IM_HEIGHT, fov)
+            c2w = build_nerfstudio_c2w(ns_pos, ns_yaw, ns_pitch, ns_roll)
+            gs_pil = render_gs(sm.pipeline, c2w, IM_WIDTH, IM_HEIGHT, fov)
 
             combined = Image.new("RGB", (win_w, IM_HEIGHT))
             combined.paste(carla_pil, (0, 0))
-            if gs_pil:
-                combined.paste(gs_pil, (IM_WIDTH, 0))
+            combined.paste(gs_pil, (IM_WIDTH, 0))
 
-            # if save_flag:
-            #     carla_pil.save(os.path.join(
-            #         save_dir_carla, f"frame_{frame_id:06d}.png"))
-            #     if gs_pil:
-            #         gs_pil.save(os.path.join(
-            #             save_dir_gs, f"frame_{frame_id:06d}.png"))
-            #     combined.save(os.path.join(
-            #         save_dir_combined, f"frame_{frame_id:06d}.jpg"), quality=95)
+            if save_flag:
+                carla_pil.save(os.path.join(
+                    save_dir_carla, f"frame_{frame_id:06d}.png"))
+                gs_pil.save(os.path.join(
+                    save_dir_gs, f"frame_{frame_id:06d}.png"))
+                combined.save(os.path.join(
+                    save_dir_combined, f"frame_{frame_id:06d}.jpg"), quality=95)
 
             screen.blit(pygame.image.fromstring(
                 combined.tobytes(), combined.size, combined.mode), (0, 0))
@@ -1354,11 +1352,10 @@ def main():
                 f"CARLA CAM RPY: {cam_rot.roll:+.1f}  {cam_rot.pitch:+.1f}  "
                 f"{cam_rot.yaw:+.1f}",
                 True, (0, 255, 0)), (10, 50))
-            if split_models and ns_pos_raw is not None:
-                screen.blit(font.render(
-                    f"NS Z(interp): {ns_pos_raw[2]:.4f} + "
-                    f"offset {offsets.get('z_offset', 0.0):.4f} = {ns_pos[2]:.4f}",
-                    True, (255, 150, 0)), (IM_WIDTH + 10, 30))
+            screen.blit(font.render(
+                f"NS Z(interp): {ns_pos_raw[2]:.4f} + "
+                f"offset {offsets.get('z_offset', 0.0):.4f} = {ns_pos[2]:.4f}",
+                True, (255, 150, 0)), (IM_WIDTH + 10, 30))
 
             veh_tf = hero_vehicle.get_transform()
             screen.blit(font.render(
