@@ -1,16 +1,62 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+5D_sd_dave2.py
+
+Closed-loop DAVE-2 driving with Stable Diffusion in the loop.
+
+Spawns the hero vehicle in CARLA at the start of the bag trajectory and
+runs in real time: at each frame the SD pipeline transforms semantic +
+instance + previous-generated RGB into a synthetic RGB, which is sent
+to the DAVE-2 server. The returned steering angle is applied to the
+vehicle via Ackermann control. The active SD model part is chosen by
+hero position along the trajectory, with hysteresis to avoid thrashing.
+
+CLI arguments:
+    --bag-name <name>.bag    Bag filename including .bag extension. Must
+                             match an existing bag from step 1. Defaults
+                             to the BAG_NAME env var, or 'reference_bag.bag'.
+    --max_frames <N>         Stop the drive after N frames. Default: no
+                             limit (the drive ends on stuck detection,
+                             fall, or user interrupt).
+    --no_save                Disable frame and trajectory saving. Useful
+                             for quick visual checks without filling
+                             the disk.
+    --output_dir <path>      Override the output folder. By default the
+                             run writes to
+                             data/driving_runs/<BAG>/stable_diffusion/<TIMESTAMP>/.
+
+Reads from (project root):
+    data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
+    data/data_for_carla/<BAG>/instance_color_map.json
+    data/data_for_carla/camera.json
+
+Reads SD models from:
+    <SD_ROOT>/<BAG>/SD_Training_Outputs_Split/part_<N>/
+
+Writes to (project root):
+    data/driving_runs/<BAG>/stable_diffusion/<TIMESTAMP>/
+        rgb/, semantic/, instance/, generated/, combined/
+        prompts.txt
+        trajectory.json
+
+    <TIMESTAMP> is YYYY-MM-DD_HH-MM-SS.
+"""
+
 import os
 import sys
 
 
 # =============================================================================
-#  PATH SETUP (must come BEFORE any diffusers/HF import)
+#  PATH SETUP, script can be launched from any directory.
+#  (must come BEFORE any diffusers/HF import)
 # =============================================================================
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
 LOCAL_UTILS_DIR = os.path.join(SCRIPT_DIR, "utils")
-
 if not os.path.isdir(LOCAL_UTILS_DIR):
     raise FileNotFoundError(
         f"Expected utils folder next to this script, but not found: {LOCAL_UTILS_DIR}"
@@ -18,15 +64,20 @@ if not os.path.isdir(LOCAL_UTILS_DIR):
 
 if SCRIPT_DIR in sys.path:
     sys.path.remove(SCRIPT_DIR)
-
 sys.path.insert(0, SCRIPT_DIR)
 
 
 # =============================================================================
 #  HF CACHE SETUP (must come BEFORE diffusers import to take effect)
+#  Sets HF_HOME so Hugging Face libraries (diffusers, huggingface_hub) read
+#  and write models in our chosen SD storage root instead of the default
+#  ~/.cache/huggingface/. The env var is read at import time by
+#  huggingface_hub.constants, so it has to be set before the first
+#  diffusers/HF import — otherwise the library locks onto the default
+#  cache and our override is silently ignored.
 # =============================================================================
 
-from utils.sd_paths import resolve_sd_root, detect_num_trained_parts, require_trained_parts
+from utils.sd_paths import resolve_sd_root, require_trained_parts
 
 CAM2SIM_SD_ROOT, _ = resolve_sd_root(PROJECT_ROOT)
 os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
@@ -38,8 +89,8 @@ os.environ["HF_HOME"] = os.path.join(CAM2SIM_SD_ROOT, "huggingface_cache")
 
 import json
 import math
-import re
 import time
+import datetime
 import argparse
 from pathlib import Path
 from queue import Empty
@@ -87,6 +138,7 @@ from utils.dave2_connection import (
     send_image_over_connection,
 )
 
+
 # =============================================================================
 #  CONFIG (non bag-dependent)
 # =============================================================================
@@ -94,12 +146,8 @@ from utils.dave2_connection import (
 # Bag name (with .bag extension): must match an existing bag from step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
-
-# Output path (project root, same as 5D)
-DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "results")
-RUN_PREFIX = "sd_run"
-
-
+# Driving-runs storage root (project root).
+DEFAULT_DRIVING_RUNS_DIR = os.path.join(PROJECT_ROOT, "data", "driving_runs")
 
 # Sensors
 IM_WIDTH = 800
@@ -179,29 +227,17 @@ def clean_semantic_and_instance(sem_pil, inst_pil, min_area=MIN_PIXEL_AREA):
     return cleaned_sem_pil, cleaned_inst_pil
 
 
-
-
 # =============================================================================
 #  OUTPUT FOLDER
 # =============================================================================
 
-def next_run_folder(base_dir, prefix=RUN_PREFIX, forced_id=None):
-    os.makedirs(base_dir, exist_ok=True)
-    if forced_id is not None:
-        return os.path.join(base_dir, f"{prefix}{int(forced_id)}")
-
-    existing = []
-    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
-    for entry in os.listdir(base_dir):
-        full = os.path.join(base_dir, entry)
-        if not os.path.isdir(full):
-            continue
-        m = pattern.match(entry)
-        if m:
-            existing.append(int(m.group(1)))
-
-    next_n = max(existing) + 1 if existing else 1
-    return os.path.join(base_dir, f"{prefix}{next_n}")
+def make_run_folder(base_dir, bag_stem, method):
+    """
+    Build the output path for one driving run:
+        <base_dir>/<bag_stem>/<method>/<YYYY-MM-DD_HH-MM-SS>
+    """
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return os.path.join(base_dir, bag_stem, method, timestamp)
 
 
 def make_output_dirs(run_folder):
@@ -240,16 +276,13 @@ def main():
         help="Bag filename including .bag extension "
              "(default: env BAG_NAME or 'reference_bag.bag').",
     )
-    parser.add_argument("--only_carla", action="store_true",
-                        help="Run without SD - feed CARLA RGB directly to DAVE-2.")
     parser.add_argument("--max_frames", type=int, default=None,
                         help="Maximum frames to drive.")
     parser.add_argument("--no_save", action="store_true",
                         help="Disable frame saving.")
     parser.add_argument("--output_dir", type=str, default=None,
-                        help="Custom output dir. Default: data/results/sd_run<N>")
-    parser.add_argument("--run_id", type=int, default=None,
-                        help="Force a specific run number.")
+                        help="Custom output dir. Default: "
+                             "data/driving_runs/<BAG>/stable_diffusion/<TIMESTAMP>")
     args = parser.parse_args()
 
     bag_name = args.bag_name               # e.g. "reference_bag.bag"
@@ -268,7 +301,7 @@ def main():
         "instance_color_map.json",
     )
 
-    # SD models 
+    # SD models on external storage (per-bag)
     models_base_dir = os.path.join(
         CAM2SIM_SD_ROOT, bag_stem, "SD_Training_Outputs_Split"
     )
@@ -288,9 +321,9 @@ def main():
     print(f"[INFO] CARLA:           {CARLA_IP}:{CARLA_PORT}")
     print(f"[INFO] Device:          {DEVICE}")
     print(f"[INFO] Num parts:       {num_parts}")
-    print(f"[INFO] only_carla mode: {args.only_carla}")
     print(f"[INFO] Control start:   {CONTROL_START}")
     print(f"[INFO] Control end:     {CONTROL_END}")
+    print(f"[INFO] Guidance scale:  {GUIDANCE_SCALE}")
     print("=" * 80)
 
     # ---------- Camera config ----------
@@ -352,7 +385,9 @@ def main():
         target_loc, project_to_road=True, lane_type=carla.LaneType.Driving
     )
 
-    # Small backward offset (matches 5D pattern)
+    # Spawn the hero slightly behind the first trajectory point, along the
+    # negative direction of the starting yaw. This gives the vehicle a few
+    # frames to settle into physics and reach the first reference position.
     offset_distance = 0.13
     yaw_rad = math.radians(start_yaw)
     offset_x = -offset_distance * math.cos(yaw_rad)
@@ -450,10 +485,8 @@ def main():
         if args.output_dir:
             run_folder = args.output_dir
         else:
-            run_folder = next_run_folder(
-                DEFAULT_OUTPUT_DIR,
-                prefix=RUN_PREFIX,
-                forced_id=args.run_id,
+            run_folder = make_run_folder(
+                DEFAULT_DRIVING_RUNS_DIR, bag_stem, "stable_diffusion",
             )
         make_output_dirs(run_folder)
         print(f"[INFO] Output folder: {run_folder}")
@@ -566,100 +599,90 @@ def main():
                 (TARGET_SIZE, TARGET_SIZE), resample=Image.Resampling.NEAREST
             )
 
-            # ---- Decide steering image source ----
-            steering_image = None
-            generated_image = None
-            dynamic_prompt = ""
-            traj_distance = 0.0
-            status_indicator = ""
+            # ---- Model selection ----
+            required_part, traj_distance = select_model_part(
+                (cur_loc.x, cur_loc.y), trajectory_chunks
+            )
 
-            if args.only_carla:
-                steering_image = final_rgb
-                generated_image = None
-                current_model_part = 0
+            # ---- Hysteresis-based switching ----
+            status_indicator = ""
+            if required_part != current_model_part:
+                if pending_switch_to == required_part:
+                    frames_in_new_part += 1
+                    if frames_in_new_part >= SWITCH_HYSTERESIS_FRAMES:
+                        print(f"\n[F{frame}] MODEL SWITCH: "
+                              f"{current_model_part} -> {required_part} | "
+                              f"pos=({cur_loc.x:.1f},{cur_loc.y:.1f}) | "
+                              f"dist={traj_distance:.2f}m")
+                        previous_last_image = prev_image
+                        if pipe is not None:
+                            del pipe
+                            del model_data_gen
+                            torch.cuda.empty_cache()
+                            print(f"   Freed GPU memory.")
+
+                        model_path = os.path.join(
+                            models_base_dir, f"part_{required_part}"
+                        )
+                        print(f"   Loading from: {model_path}")
+                        pipe, model_data_gen = load_pipeline_models(
+                            model_path, DEVICE
+                        )
+                        current_model_part = required_part
+                        prev_image = previous_last_image
+                        frames_in_new_part = 0
+                        pending_switch_to = None
+                        print(f"   Model part {required_part} loaded.\n")
+                else:
+                    pending_switch_to = required_part
+                    frames_in_new_part = 1
             else:
-                # ---- Model selection ----
-                required_part, traj_distance = select_model_part(
+                frames_in_new_part = 0
+                pending_switch_to = None
+
+            if pending_switch_to is not None:
+                status_indicator = (
+                    f"[switching to {pending_switch_to} in "
+                    f"{SWITCH_HYSTERESIS_FRAMES - frames_in_new_part}]"
+                )
+
+            dynamic_prompt = (
+                f"pos x: {cur_loc.x:.2f}, y: {cur_loc.y:.2f}"
+            )
+
+            if pipe is not None:
+                generated_image = generate_image_realtime(
+                    pipe,
+                    seg_image=final_seg,
+                    inst_image=final_inst,
+                    model_data=model_data_gen,
+                    prev_image=prev_image,
+                    prompt=dynamic_prompt,
+                    guidance=GUIDANCE_SCALE,
+                    control_start=CONTROL_START,
+                    control_end=CONTROL_END,
+                )
+                prev_image = generated_image
+                steering_image = generated_image
+            else:
+                # First frame: load initial model based on spawn position.
+                initial_part, initial_dist = select_model_part(
                     (cur_loc.x, cur_loc.y), trajectory_chunks
                 )
-
-                # ---- Hysteresis-based switching ----
-                if required_part != current_model_part:
-                    if pending_switch_to == required_part:
-                        frames_in_new_part += 1
-                        if frames_in_new_part >= SWITCH_HYSTERESIS_FRAMES:
-                            print(f"\n[F{frame}] MODEL SWITCH: "
-                                  f"{current_model_part} -> {required_part} | "
-                                  f"pos=({cur_loc.x:.1f},{cur_loc.y:.1f}) | "
-                                  f"dist={traj_distance:.2f}m")
-                            previous_last_image = prev_image
-                            if pipe is not None:
-                                del pipe
-                                del model_data_gen
-                                torch.cuda.empty_cache()
-                                print(f"   Freed GPU memory.")
-
-                            model_path = os.path.join(
-                                models_base_dir, f"part_{required_part}"
-                            )
-                            print(f"   Loading from: {model_path}")
-                            pipe, model_data_gen = load_pipeline_models(
-                                model_path, DEVICE
-                            )
-                            current_model_part = required_part
-                            prev_image = previous_last_image
-                            frames_in_new_part = 0
-                            pending_switch_to = None
-                            print(f"   Model part {required_part} loaded.\n")
-                    else:
-                        pending_switch_to = required_part
-                        frames_in_new_part = 1
-                else:
-                    frames_in_new_part = 0
-                    pending_switch_to = None
-
-                if pending_switch_to is not None:
-                    status_indicator = (
-                        f"[switching to {pending_switch_to} in "
-                        f"{SWITCH_HYSTERESIS_FRAMES - frames_in_new_part}]"
-                    )
-
-                dynamic_prompt = (
-                    f"pos x: {cur_loc.x:.2f}, y: {cur_loc.y:.2f}"
+                print(f"[F{frame}] Loading initial model part "
+                      f"{initial_part} (dist={initial_dist:.2f}m)")
+                model_path = os.path.join(
+                    models_base_dir, f"part_{initial_part}"
                 )
-
-                if pipe is not None:
-                    generated_image = generate_image_realtime(
-                        pipe,
-                        seg_image=final_seg,
-                        inst_image=final_inst,
-                        model_data=model_data_gen,
-                        prev_image=prev_image,
-                        prompt=dynamic_prompt,
-                        guidance=GUIDANCE_SCALE,
-                        control_start=CONTROL_START,
-                        control_end=CONTROL_END,
-                    )
-                    prev_image = generated_image
-                    steering_image = generated_image
-                else:
-                    # First frame: load initial model based on spawn position
-                    initial_part, initial_dist = select_model_part(
-                        (cur_loc.x, cur_loc.y), trajectory_chunks
-                    )
-                    print(f"[F{frame}] Loading initial model part "
-                          f"{initial_part} (dist={initial_dist:.2f}m)")
-                    model_path = os.path.join(
-                        models_base_dir, f"part_{initial_part}"
-                    )
-                    pipe, model_data_gen = load_pipeline_models(
-                        model_path, DEVICE
-                    )
-                    current_model_part = initial_part
-                    print(f"[F{frame}] Initial model loaded.")
-                    # Use CARLA RGB this frame as fallback
-                    steering_image = final_rgb
-                    generated_image = None
+                pipe, model_data_gen = load_pipeline_models(
+                    model_path, DEVICE
+                )
+                current_model_part = initial_part
+                print(f"[F{frame}] Initial model loaded.")
+                # Use raw CARLA RGB for this single frame while the
+                # pipeline warms up.
+                steering_image = final_rgb
+                generated_image = None
 
             # ---- DAVE-2 inference ----
             raw_steer, throttle = send_image_over_connection(

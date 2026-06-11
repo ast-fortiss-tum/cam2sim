@@ -19,7 +19,7 @@ Reads from (project root):
     data/data_for_carla/<BAG>/instance_color_map.json (from 3F_OPT)
 
 Writes to (project root):
-    data/processed_dataset/<BAG>/carla_replay_dataset_sd/
+    data/replay_dataset/<BAG>/only_carla/
         data/all_frame_data.json
         rgb/        (CARLA rgb frames)
         semantic/   (CARLA cleaned semantic maps)
@@ -551,8 +551,7 @@ def main():
         carla_data_folder, "instance_color_map.json"
     )
     output_folder = os.path.join(
-        PROJECT_ROOT, "data", "processed_dataset", bag_stem,
-        "carla_replay_dataset_sd",
+        PROJECT_ROOT, "data", "replay_dataset", bag_stem, "only_carla",
     )
 
     print("=" * 80)

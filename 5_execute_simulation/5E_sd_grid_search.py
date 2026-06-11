@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-5G_stable_diff_offline_generation_grid.py
+5E_sd_grid_search.py
 
-Grid search version of 5E_stable_diff_offline_generation.py.
+Grid search version of 5C_sd_trajectory_replay.py.
 
-Generates the same replay dataset with MANY different SD control configurations,
-one folder per config. This is the script used to explore ControlNet parameters
-in the cam2sim research questions (RQ2): "which schedule/guess/seed combo
+Generates the same replay dataset with multiple different SD control configurations,
+one folder per config. Thi is used to explore ControlNet parameters, "which schedule/guess/seed combo
 produces the best frames?"
 
 Each configuration varies:
@@ -18,7 +17,7 @@ Each configuration varies:
   - use_fixed_seed= True (seed=FIXED_SEED) / False (random)
 
 Reads from (project root):
-    data/processed_dataset/<BAG>/carla_replay_dataset_sd/
+    data/replay_dataset/<BAG>/only_carla/
         semantic/, instance/, data/all_frame_data.json
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
 
@@ -104,12 +103,6 @@ from utils.stable_diffusion import (
     generate_image_realtime,
 )
 
-# We import NEGATIVE_PROMPT lazily so the script keeps working even on older
-# utils versions that don't export it.
-try:
-    from utils.stable_diffusion import NEGATIVE_PROMPT
-except ImportError:
-    NEGATIVE_PROMPT = "blurry, distorted, street without street lines"
 
 
 # =======================
@@ -274,8 +267,7 @@ def main():
 
     # ---------- Build bag-dependent paths ----------
     replay_dataset_folder = os.path.join(
-        PROJECT_ROOT, "data", "processed_dataset", bag_stem,
-        "carla_replay_dataset_sd",
+        PROJECT_ROOT, "data", "replay_dataset", bag_stem, "only_carla",
     )
     sem_folder = os.path.join(replay_dataset_folder, "semantic")
     inst_folder = os.path.join(replay_dataset_folder, "instance")
@@ -450,8 +442,7 @@ def main():
                 control_start=config["start"],
                 control_end=config["end"],
                 guess_mode=config["guess_mode"],
-                use_fixed_seed=config["use_fixed_seed"],
-                fixed_seed=FIXED_SEED,
+                seed=FIXED_SEED if config["use_fixed_seed"] else None,
             )
 
             out_img.save(out_path)

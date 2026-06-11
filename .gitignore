@@ -36,3 +36,5 @@ data/data_for_gaussian_splatting/*/
 data/data_for_carla/*/
 data/.sd_root
 data/stable_diff_models/
+data/driving_runs/*
+data/replay_dataset/*

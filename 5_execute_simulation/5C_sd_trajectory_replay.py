@@ -2,24 +2,23 @@
 # -*- coding: utf-8 -*-
 
 """
-5E_stable_diff_offline_generation.py
+5C_sd_trajectory_replay.py
 
 Offline Stable Diffusion generation on top of the CARLA replay dataset
 (produced by 5A_sd_trajectory_only_carla.py).
 
 For each frame:
   - selects the model part (LoRA + 3 ControlNets) based on hero position
-    along the trajectory (same logic as DAVE-2 with SD)
+    along the trajectory
   - runs the SD pipeline with seg + inst + temp ControlNets
   - the temporal ControlNet uses the previous generated frame
   - saves the generated RGB image
 
-Uses one fixed control schedule:
-    control_start = [0.0, 0.0, 0.35]   # [seg, inst, temp]
-    control_end   = [1.0, 0.6, 0.55]
+Uses the fixed control schedule defined by CONTROL_START and CONTROL_END
+in utils/stable_diffusion.py.
 
 Reads from (project root):
-    data/processed_dataset/<BAG>/carla_replay_dataset_sd/
+    data/replay_dataset/<BAG>/only_carla/
         semantic/, instance/, data/all_frame_data.json
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
 
@@ -32,7 +31,7 @@ Reads SD models from:
         controlnet_tempconsistency/
 
 Writes to (project root):
-    data/processed_dataset/<BAG>/sd_generated/
+    data/replay_dataset/<BAG>/stable_diffusion/
         rgb/frame_XXXXXX.png
         data/generation_info.json
 """
@@ -107,9 +106,10 @@ from utils.sd_paths import require_trained_parts
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
 # Limit generation to first N frames for testing. Set to None to disable.
-MAX_FRAMES = 3
+MAX_FRAMES = None
 
-# Skip frames whose output PNG already exists, to resume interrupted generation without redoing completed frames.
+# Skip frames whose output PNG already exists, to resume interrupted
+# generation without redoing completed frames.
 SKIP_EXISTING = False
 
 
@@ -118,6 +118,7 @@ SKIP_EXISTING = False
 # =======================
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 # =======================
 # MAIN
@@ -140,8 +141,7 @@ def main():
 
     # ---------- Build bag-dependent paths ----------
     replay_dataset_folder = os.path.join(
-        PROJECT_ROOT, "data", "processed_dataset", bag_stem,
-        "carla_replay_dataset_sd",
+        PROJECT_ROOT, "data", "replay_dataset", bag_stem, "only_carla",
     )
     sem_folder = os.path.join(replay_dataset_folder, "semantic")
     inst_folder = os.path.join(replay_dataset_folder, "instance")
@@ -158,7 +158,7 @@ def main():
 
     # Output paths (per-bag, in project root)
     output_folder = os.path.join(
-        PROJECT_ROOT, "data", "processed_dataset", bag_stem, "sd_generated",
+        PROJECT_ROOT, "data", "replay_dataset", bag_stem, "stable_diffusion",
     )
     output_rgb_folder = os.path.join(output_folder, "rgb")
     output_data_folder = os.path.join(output_folder, "data")
@@ -167,7 +167,7 @@ def main():
     # ---------- Sanity checks on inputs ----------
     if not os.path.exists(replay_dataset_folder):
         raise FileNotFoundError(
-            f"Replay dataset not found: {replay_dataset_folder}\n"
+            f"CARLA replay dataset not found: {replay_dataset_folder}\n"
             f"Run 5A_sd_trajectory_only_carla.py --bag-name {bag_name} first."
         )
 

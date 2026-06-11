@@ -9,8 +9,8 @@
 # 5A    | 5A_sd_trajectory_only_carla.py         | stable_diff  | NO
 # 5B    | 5B_dave2_only_carla.py                 | stable_diff  | YES
 # 5C    | 5A_sd_trajectory_only_carla.py THEN    | stable_diff  | NO
-#       | 5E_stable_diff_offline_generation.py   |              |
-# 5D    | 5F_sd_dave2.py                         | stable_diff  | YES
+#       | 5C_sd_trajectory_replay.py             |              |
+# 5D    | 5D_sd_dave2.py                         | stable_diff  | YES
 #
 # All modes use 3F_sd_generate_carla_scenario.py to populate the world
 # (different from step5.sh which uses 3F_generate_carla_scenario.py).
@@ -25,11 +25,15 @@
 #   5. Terminal 4: runs the chosen Step 5 SD script (or scripts, for 5C)
 #
 # Usage:
-#     bash step5_sd.sh <bag_name.bag>                  # defaults to mode 5C
+#     bash step5_sd.sh <bag_name.bag>                                  # mode 5C
 #     bash step5_sd.sh <bag_name.bag> --mode 5A
 #     bash step5_sd.sh <bag_name.bag> --mode 5B
 #     bash step5_sd.sh <bag_name.bag> --mode 5C
 #     bash step5_sd.sh <bag_name.bag> -m 5D
+#     bash step5_sd.sh <bag_name.bag> -m 5D -- --max_frames 50 --no_save
+#
+# Anything after '--' is forwarded verbatim to the Step 5 python script(s).
+# In mode 5C the passthrough args are forwarded to BOTH 5A_sd and 5C.
 # =============================================================================
 
 set -e
@@ -48,8 +52,8 @@ SCRIPT_3C="3_generate_simulation_data/3C_sd_setup_carla.py"
 SCRIPT_3F_SD="3_generate_simulation_data/3F_sd_generate_carla_scenario.py"
 SCRIPT_5A_SD="5_execute_simulation/5A_sd_trajectory_only_carla.py"
 SCRIPT_5B="5_execute_simulation/5B_dave2_only_carla.py"
-SCRIPT_5E_SD="5_execute_simulation/5E_stable_diff_offline_generation.py"
-SCRIPT_5F_SD="5_execute_simulation/5F_sd_dave2.py"
+SCRIPT_5C_SD="5_execute_simulation/5C_sd_trajectory_replay.py"
+SCRIPT_5D_SD="5_execute_simulation/5D_sd_dave2.py"
 SCRIPT_DAVE_SERVER="system_under_test/communicator.py"
 
 # CARLA RPC port (only used to wait for CARLA to be ready)
@@ -75,7 +79,7 @@ MAP_LOAD_TIMEOUT=180
 
 usage() {
     cat <<EOF
-Usage: $0 <bag_name.bag> [options]
+Usage: $0 <bag_name.bag> [options] [-- <extra args for python script>]
 
 Arguments:
   <bag_name.bag>            Bag filename including .bag extension
@@ -85,11 +89,20 @@ Options:
                             Allowed: 5A, 5B, 5C, 5D
   -h, --help                Show this help message
 
+Passthrough:
+  Anything after '--' is forwarded verbatim to the Step 5 python script(s).
+  In mode 5C the passthrough args are forwarded to BOTH 5A_sd and 5C.
+
 Modes:
   5A   SD CARLA-only replay with instance mapping  (env: $ENV_SD, no DAVE-2)
   5B   CARLA-only DAVE-2 drive                     (env: $ENV_SD, with DAVE-2)
-  5C   5A_sd + 5E offline SD generation            (env: $ENV_SD, no DAVE-2)
+  5C   5A_sd + 5C offline SD generation            (env: $ENV_SD, no DAVE-2)
   5D   SD DAVE-2 closed-loop drive                 (env: $ENV_SD, with DAVE-2)
+
+Examples:
+  bash $0 reference_bag.bag -m 5D
+  bash $0 reference_bag.bag -m 5D -- --max_frames 50 --no_save
+  bash $0 reference_bag.bag -m 5C -- --max_frames 100
 EOF
 }
 
@@ -97,6 +110,7 @@ EOF
 
 MODE="5C"
 BAG_NAME=""
+PASSTHROUGH_ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -107,6 +121,12 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             usage
             exit 0
+            ;;
+        --)
+            # Everything after '--' is forwarded verbatim to the python script(s).
+            shift
+            PASSTHROUGH_ARGS="$*"
+            break
             ;;
         -*)
             echo "[ERROR] Unknown option: $1"
@@ -154,15 +174,15 @@ case "$MODE" in
         NEED_DAVE_SERVER=1
         ;;
     5C|5c)
-        # 5C is two scripts run sequentially: 5A_sd then 5E
+        # 5C is two scripts run sequentially: 5A_sd then 5C
         STEP5_SCRIPT="$SCRIPT_5A_SD"
-        STEP5_SCRIPT_2="$SCRIPT_5E_SD"
+        STEP5_SCRIPT_2="$SCRIPT_5C_SD"
         STEP5_ENV="$ENV_SD"
         STEP5_LABEL="5C SD (CARLA replay + Stable Diffusion offline generation)"
         IS_MODE_5C=1
         ;;
     5D|5d)
-        STEP5_SCRIPT="$SCRIPT_5F_SD"
+        STEP5_SCRIPT="$SCRIPT_5D_SD"
         STEP5_ENV="$ENV_SD"
         STEP5_LABEL="5D SD (Stable Diffusion DAVE-2 drive)"
         NEED_DAVE_SERVER=1
@@ -186,6 +206,9 @@ if [ $IS_MODE_5C -eq 1 ]; then
     echo "[INFO] Step 5 script (2)  = $STEP5_SCRIPT_2"
 fi
 echo "[INFO] DAVE-2 server      = $( [ $NEED_DAVE_SERVER -eq 1 ] && echo YES || echo NO )"
+if [ -n "$PASSTHROUGH_ARGS" ]; then
+    echo "[INFO] Passthrough args   = $PASSTHROUGH_ARGS"
+fi
 echo "=========================================="
 
 # Detect terminal emulator
@@ -424,18 +447,19 @@ echo ""
 
 if [ $IS_MODE_5C -eq 1 ]; then
     # Mode 5C: run two scripts back-to-back in the same terminal.
-    # 5A_sd captures replay frames, then 5E generates SD images offline.
-    echo "[STEP $NEXT_TERM_NUM] Spawning Terminal $NEXT_TERM_NUM: $STEP5_LABEL (5A_sd + 5E)"
+    # 5A_sd captures replay frames, then 5C generates SD images offline.
+    # Passthrough args (if any) are forwarded to BOTH scripts.
+    echo "[STEP $NEXT_TERM_NUM] Spawning Terminal $NEXT_TERM_NUM: $STEP5_LABEL (5A_sd + 5C)"
     spawn_terminal \
         "Terminal $NEXT_TERM_NUM - $STEP5_LABEL" \
         "$STEP5_ENV" \
-        "python $STEP5_SCRIPT --bag-name '$BAG_NAME' && python $STEP5_SCRIPT_2 --bag-name '$BAG_NAME'"
+        "python $STEP5_SCRIPT --bag-name '$BAG_NAME' $PASSTHROUGH_ARGS && python $STEP5_SCRIPT_2 --bag-name '$BAG_NAME' $PASSTHROUGH_ARGS"
 else
     echo "[STEP $NEXT_TERM_NUM] Spawning Terminal $NEXT_TERM_NUM: $STEP5_LABEL"
     spawn_terminal \
         "Terminal $NEXT_TERM_NUM - $STEP5_LABEL" \
         "$STEP5_ENV" \
-        "python $STEP5_SCRIPT --bag-name '$BAG_NAME'"
+        "python $STEP5_SCRIPT --bag-name '$BAG_NAME' $PASSTHROUGH_ARGS"
 fi
 
 echo ""
