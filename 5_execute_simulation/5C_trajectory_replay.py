@@ -450,21 +450,68 @@ def render_gs(pipeline, c2w, width, height, fov):
 #  SPLIT DETECTION (cam2sim layout, multi-method)
 # =============================================================================
 
+def get_nerfstudio_method_subdir_candidates(method):
+    """
+    Return possible Nerfstudio internal method folders for a cam2sim method.
+
+    Nerfstudio stores some variant methods under the base method family:
+        splatfacto-big -> splatfacto
+        nerfacto-big   -> nerfacto
+
+    The outer experiment folder still keeps the full cam2sim method name:
+        outputs/splatfacto-big_split_1/splatfacto/<TIMESTAMP>/
+        outputs/nerfacto-big_split_1/nerfacto/<TIMESTAMP>/
+    """
+    aliases = {
+        "splatfacto-big": ["splatfacto-big", "splatfacto"],
+        "nerfacto-big": ["nerfacto-big", "nerfacto"],
+        "splatfacto": ["splatfacto"],
+        "nerfacto": ["nerfacto"],
+    }
+    return aliases.get(method, [method])
+
+
+def find_nerfstudio_method_subdir(exp_dir, method):
+    """
+    Find the internal Nerfstudio method folder inside one split experiment.
+
+    Example:
+        exp_dir = outputs/splatfacto-big_split_1
+        method  = splatfacto-big
+
+    Valid result:
+        outputs/splatfacto-big_split_1/splatfacto
+    """
+    candidates = get_nerfstudio_method_subdir_candidates(method)
+
+    for candidate in candidates:
+        candidate_path = os.path.join(exp_dir, candidate)
+        if os.path.isdir(candidate_path):
+            return candidate_path, candidate
+
+    return None, None
+
+
 def auto_detect_splits(gs_outputs_dir, gs_data_root, allowed_methods=None):
     """
     Look for split runs in:
-        <gs_outputs_dir>/<METHOD>_split_<N>/<METHOD>/<TS>/config.yml
+        <gs_outputs_dir>/<METHOD>_split_<N>/<NS_METHOD>/<TS>/config.yml
 
-    where METHOD is one of SUPPORTED_METHODS. If allowed_methods is given,
-    restrict to that subset.
+    METHOD is the cam2sim method:
+        splatfacto, splatfacto-big, nerfacto, nerfacto-big
+
+    NS_METHOD is the internal Nerfstudio folder. For big variants, Nerfstudio
+    may still use the base method folder:
+        splatfacto-big -> splatfacto
+        nerfacto-big   -> nerfacto
 
     For each split also resolves:
         - utm_to_nerfstudio_transform.json  (next to config.yml)
         - frame_positions_split_<N>_*.txt   (in gs_data_root)
 
     Returns a list of split configs. Each config has:
-        name, method, split_num, gs_config, utm_transform, frame_positions,
-        data_root, run_name
+        name, method, ns_method, split_num, gs_config, utm_transform,
+        frame_positions, data_root, run_name
     """
     if allowed_methods is None:
         allowed_methods = SUPPORTED_METHODS
@@ -475,14 +522,13 @@ def auto_detect_splits(gs_outputs_dir, gs_data_root, allowed_methods=None):
         print(f"[WARN] Outputs folder not found: {gs_outputs_dir}")
         return splits
 
-    # Sort methods by descending length so we match "splatfacto-big" BEFORE
+    # Sort methods by descending length so we match "splatfacto-big" before
     # "splatfacto" when checking which method a directory belongs to.
     methods_by_length = sorted(allowed_methods, key=len, reverse=True)
 
-    # Pre-compile a regex per method.
     method_patterns = {
-        m: re.compile(rf"^{re.escape(m)}_split_(\d+)$")
-        for m in allowed_methods
+        method: re.compile(rf"^{re.escape(method)}_split_(\d+)$")
+        for method in allowed_methods
     }
 
     all_dirs = sorted([
@@ -491,64 +537,96 @@ def auto_detect_splits(gs_outputs_dir, gs_data_root, allowed_methods=None):
     ])
 
     for split_dir in all_dirs:
-        # Determine which method this dir belongs to (longest match first).
         matched_method = None
         matched_split_num = None
-        for m in methods_by_length:
-            mm = method_patterns[m].match(split_dir)
-            if mm:
-                matched_method = m
-                matched_split_num = int(mm.group(1))
+
+        for method in methods_by_length:
+            match = method_patterns[method].match(split_dir)
+            if match:
+                matched_method = method
+                matched_split_num = int(match.group(1))
                 break
 
         if matched_method is None:
-            # Not a recognized "<method>_split_<N>" folder; skip silently.
             continue
 
-        method_subdir = os.path.join(gs_outputs_dir, split_dir, matched_method)
-        if not os.path.isdir(method_subdir):
-            print(f"[WARN] Missing '{matched_method}' subfolder in {split_dir}")
+        exp_dir = os.path.join(gs_outputs_dir, split_dir)
+
+        method_subdir, ns_method = find_nerfstudio_method_subdir(
+            exp_dir,
+            matched_method,
+        )
+
+        if method_subdir is None:
+            candidates = get_nerfstudio_method_subdir_candidates(
+                matched_method
+            )
+            print(
+                f"[WARN] Missing Nerfstudio method folder for "
+                f"{split_dir}. Tried: {', '.join(candidates)}"
+            )
             continue
+
+        if ns_method != matched_method:
+            print(
+                f"[INFO] Using Nerfstudio internal folder '{ns_method}' "
+                f"for cam2sim method '{matched_method}' in {split_dir}"
+            )
 
         runs = sorted([
             d for d in os.listdir(method_subdir)
             if os.path.isdir(os.path.join(method_subdir, d))
         ])
+
         if not runs:
             print(f"[WARN] No runs found in {method_subdir}")
             continue
 
         run_name = runs[-1]
         run_dir = os.path.join(method_subdir, run_name)
+
         config_path = os.path.join(run_dir, "config.yml")
-        utm_transform_path = os.path.join(run_dir, "utm_to_nerfstudio_transform.json")
+        utm_transform_path = os.path.join(
+            run_dir,
+            "utm_to_nerfstudio_transform.json",
+        )
 
         if not os.path.exists(config_path):
             print(f"[WARN] No config.yml in {run_dir}")
             continue
+
         if not os.path.exists(utm_transform_path):
             print(f"[WARN] No utm_to_nerfstudio_transform.json in {run_dir}")
-            print(f"       Run 4C_utm_yaw_to_nerfstudio.py for "
-                  f"{matched_method}_split_{matched_split_num} first.")
+            print(
+                f"       Run 4C_utm_yaw_to_nerfstudio.py for "
+                f"{matched_method}_split_{matched_split_num} first."
+            )
             continue
 
-        # Find frame_positions_split_<N>_*.txt (shared across methods because
-        # it's a property of the data split, not the model).
         frame_positions = None
+
         for fname in os.listdir(gs_data_root):
-            if (fname.startswith(f"frame_positions_split_{matched_split_num}_")
-                    and fname.endswith(".txt")):
+            if (
+                fname.startswith(
+                    f"frame_positions_split_{matched_split_num}_"
+                )
+                and fname.endswith(".txt")
+            ):
                 frame_positions = os.path.join(gs_data_root, fname)
                 break
 
         if frame_positions is None:
-            print(f"[WARN] No frame_positions_split_{matched_split_num}_*.txt "
-                  f"found in {gs_data_root}")
+            print(
+                f"[WARN] No frame_positions_split_"
+                f"{matched_split_num}_*.txt found in {gs_data_root}"
+            )
 
         split_name = f"{matched_method}_split_{matched_split_num}"
+
         splits.append({
             "name": split_name,
             "method": matched_method,
+            "ns_method": ns_method,
             "split_num": matched_split_num,
             "gs_config": config_path,
             "utm_transform": utm_transform_path,
@@ -556,13 +634,21 @@ def auto_detect_splits(gs_outputs_dir, gs_data_root, allowed_methods=None):
             "data_root": gs_data_root,
             "run_name": run_name,
         })
-        print(f"[INFO] Found {split_name} (run={run_name})")
 
-    # Sort: method first (in SUPPORTED_METHODS order), then split_num.
-    method_rank = {m: i for i, m in enumerate(SUPPORTED_METHODS)}
-    splits.sort(key=lambda s: (method_rank.get(s["method"], 999), s["split_num"]))
+        print(
+            f"[INFO] Found {split_name} "
+            f"(ns_method={ns_method}, run={run_name})"
+        )
+
+    method_rank = {method: i for i, method in enumerate(SUPPORTED_METHODS)}
+    splits.sort(
+        key=lambda split: (
+            method_rank.get(split["method"], 999),
+            split["split_num"],
+        )
+    )
+
     return splits
-
 
 def find_best_split(frame_id, splits, last_split_idx=0):
     current_split = splits[last_split_idx]

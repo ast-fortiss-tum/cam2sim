@@ -25,6 +25,10 @@
 #                               4C_utm_yaw_to_nerfstudio.py stays consistent)
 #   splatfacto*             -> none (poses are fixed by default)
 #
+# Nerfstudio internal method folders:
+#   splatfacto-big -> outputs/splatfacto-big_split_N/splatfacto/<TIMESTAMP>/
+#   nerfacto-big   -> outputs/nerfacto-big_split_N/nerfacto/<TIMESTAMP>/
+#
 # Prerequisites:
 #   - Step 2 GS  (produces images_gs_split_*_1_of_<SKIP>/ folders)
 #   - Step 4A    (produces colmap/split_<N>/sparse/0/*.bin)
@@ -44,6 +48,7 @@ set +e   # do NOT exit on error: keep going if one split fails
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
+SCRIPT_4C="${PROJECT_ROOT}/4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py"
 
 SPLIT_SKIP=2
 METHOD="splatfacto"
@@ -93,11 +98,26 @@ BAG_NAME=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --split-skip)  SPLIT_SKIP="$2"; shift 2 ;;
-        --method)      METHOD="$2"; shift 2 ;;
-        --no-masks)    USE_SKY_MASKS=false; shift ;;
-        --max-jobs)    MAX_JOBS="$2"; shift 2 ;;
-        -h|--help)     usage; exit 0 ;;
+        --split-skip)
+            SPLIT_SKIP="$2"
+            shift 2
+            ;;
+        --method)
+            METHOD="$2"
+            shift 2
+            ;;
+        --no-masks)
+            USE_SKY_MASKS=false
+            shift
+            ;;
+        --max-jobs)
+            MAX_JOBS="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
         -*)
             echo "[ERROR] Unknown option: $1"
             usage
@@ -151,7 +171,6 @@ case "$METHOD" in
         EXPECTED_FINAL_STEP=100000
         ;;
     *)
-        # Defensive: should not reach here due to method validation above.
         MIN_CHECKPOINT_STEP=29000
         EXPECTED_FINAL_STEP=30000
         ;;
@@ -169,6 +188,27 @@ EXTRA_NS_TRAIN_FLAGS=()
 case "$METHOD" in
     nerfacto|nerfacto-big)
         EXTRA_NS_TRAIN_FLAGS+=(--pipeline.model.camera-optimizer.mode off)
+        ;;
+esac
+
+# ---------- Nerfstudio internal method folder ----------
+# Nerfstudio stores some variant methods under the base method family:
+#   splatfacto-big -> splatfacto
+#   nerfacto-big   -> nerfacto
+#
+# The outer experiment folder still keeps the full cam2sim method name:
+#   outputs/splatfacto-big_split_1/splatfacto/<TIMESTAMP>/
+#   outputs/nerfacto-big_split_1/nerfacto/<TIMESTAMP>/
+
+case "$METHOD" in
+    splatfacto-big)
+        NS_METHOD_DIR_NAME="splatfacto"
+        ;;
+    nerfacto-big)
+        NS_METHOD_DIR_NAME="nerfacto"
+        ;;
+    *)
+        NS_METHOD_DIR_NAME="$METHOD"
         ;;
 esac
 
@@ -204,7 +244,7 @@ else
     echo "[INFO] gcc-11/g++-11 not found in PATH, leaving compiler env vars untouched."
 fi
 
-# ---------- Limit parallel CUDA build jobs (prevent RAM OOM during JIT) ----------
+# ---------- Limit parallel CUDA build jobs ----------
 
 if [[ -n "${MAX_JOBS}" ]]; then
     export MAX_JOBS="${MAX_JOBS}"
@@ -244,6 +284,7 @@ echo "Bag stem:             $BAG_STEM"
 echo "Split skip label:     $SPLIT_SKIP  (folder suffix: $SPLIT_LABEL)"
 echo "Splits detected:      $NUM_SPLITS"
 echo "Method:               $METHOD"
+echo "Nerfstudio dir name:  $NS_METHOD_DIR_NAME"
 echo "Use sky masks:        $USE_SKY_MASKS"
 echo "MAX_JOBS:             ${MAX_JOBS:-(default)}"
 echo "Expected final step:  $EXPECTED_FINAL_STEP"
@@ -254,15 +295,16 @@ echo "Output root:          $OUTPUT_ROOT"
 echo "=========================================="
 
 # =============================================================================
-# Helper: check whether a given split already has a "complete enough" model.
+# Helper: check whether a given split already has a complete enough model.
 #
-# A split is considered already trained if there exists at least one run
-# under outputs/<EXP_NAME>/<method>/<TIMESTAMP>/nerfstudio_models/
-# containing a checkpoint file step-NNNNNNNNN.ckpt with NNN >= MIN_CHECKPOINT_STEP.
+# A split is considered already trained if there exists at least one checkpoint
+# file step-NNNNNNNNN.ckpt under the experiment directory with
+# NNN >= MIN_CHECKPOINT_STEP.
 #
-# Echoes the step number of the best existing checkpoint on success,
-# or empty string if no acceptable checkpoint exists.
+# The search starts from EXP_DIR instead of METHOD_DIR on purpose, so it works
+# for methods whose internal Nerfstudio folder differs from the cam2sim method.
 # =============================================================================
+
 get_best_checkpoint_step() {
     local exp_dir="$1"
     local best_step=0
@@ -293,19 +335,46 @@ get_best_checkpoint_step() {
 # Helper: check whether the UTM-to-Nerfstudio transform JSON exists for a run.
 # Returns the run dir if a JSON is found, empty otherwise.
 # =============================================================================
+
 find_run_with_transform() {
     local method_dir="$1"
+
     if [[ ! -d "${method_dir}" ]]; then
         echo ""
         return
     fi
+
     while IFS= read -r run_dir; do
         if [[ -f "${run_dir}/utm_to_nerfstudio_transform.json" ]]; then
             echo "${run_dir}"
             return
         fi
     done < <(ls -td "${method_dir}"/*/ 2>/dev/null)
+
     echo ""
+}
+
+# =============================================================================
+# Helper: find newest timestamp directory inside a Nerfstudio method dir.
+# =============================================================================
+
+find_newest_timestamp_dir() {
+    local method_dir="$1"
+
+    if [[ ! -d "${method_dir}" ]]; then
+        echo ""
+        return
+    fi
+
+    local timestamp_dir
+    timestamp_dir=$(ls -td "${method_dir}/"*/ 2>/dev/null | head -n 1)
+
+    if [[ -z "${timestamp_dir}" ]]; then
+        echo ""
+        return
+    fi
+
+    basename "${timestamp_dir}"
 }
 
 # ---------- Per-split loop ----------
@@ -314,33 +383,50 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
     COLMAP_PATH="colmap/split_${SPLIT}/sparse/0"
     IMAGES_PATH="images_gs_split_${SPLIT}_${SPLIT_LABEL}"
     MASKS_PATH="sky_masks_gs_split_${SPLIT}_${SPLIT_LABEL}"
+
     EXP_NAME="${METHOD}_split_${SPLIT}"
     EXP_DIR="${OUTPUT_ROOT}/${EXP_NAME}"
-    METHOD_DIR="${EXP_DIR}/${METHOD}"
+    METHOD_DIR="${EXP_DIR}/${NS_METHOD_DIR_NAME}"
+
+    echo ""
+    echo "============================================================"
+    echo "Split ${SPLIT}/${NUM_SPLITS}"
+    echo "  Method:              ${METHOD}"
+    echo "  Nerfstudio dir name: ${NS_METHOD_DIR_NAME}"
+    echo "  Experiment:          ${EXP_NAME}"
+    echo "  Experiment dir:      ${EXP_DIR}"
+    echo "  Method dir:          ${METHOD_DIR}"
+    echo "============================================================"
 
     # ---- IDEMPOTENCY CHECK: skip if already trained ----
+
     BEST_STEP=$(get_best_checkpoint_step "${EXP_DIR}")
+
     if [[ -n "${BEST_STEP}" ]] && (( BEST_STEP >= MIN_CHECKPOINT_STEP )); then
-        echo ""
-        echo "============================================================"
-        echo "[SKIP] Split ${SPLIT} already trained "
-        echo "       (best checkpoint = step ${BEST_STEP} >= ${MIN_CHECKPOINT_STEP})"
+        echo "[SKIP] Split ${SPLIT} already trained"
+        echo "       Best checkpoint = step ${BEST_STEP} >= ${MIN_CHECKPOINT_STEP}"
         echo "       Output: ${EXP_DIR}"
-        echo "============================================================"
 
         # Even if training is done, still make sure the UTM transform JSON
         # exists. If not, run the conversion step.
         RUN_WITH_TF=$(find_run_with_transform "${METHOD_DIR}")
+
         if [[ -z "${RUN_WITH_TF}" ]]; then
-            TIMESTAMP_DIR=$(ls -td "${METHOD_DIR}/"*/ 2>/dev/null | head -n 1)
-            TIMESTAMP_DIR=$(basename "${TIMESTAMP_DIR}")
+            TIMESTAMP_DIR=$(find_newest_timestamp_dir "${METHOD_DIR}")
+
             if [[ -n "${TIMESTAMP_DIR}" ]]; then
                 echo "[INFO] Existing model has no utm_to_nerfstudio_transform.json,"
                 echo "       running conversion now..."
-                python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
+                echo "[INFO] Config:"
+                echo "       ${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml"
+
+                python "${SCRIPT_4C}" \
                     --gs_config "${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml" \
                     --utm_file "${DATA_ROOT}/frame_positions_split_${SPLIT}_${SPLIT_LABEL}.txt" \
                     --data_root "${DATA_ROOT}"
+            else
+                echo "[ERROR] No timestamp folder found in ${METHOD_DIR}"
+                echo "        Cannot run 4C conversion for split ${SPLIT}."
             fi
         else
             echo "[INFO] utm_to_nerfstudio_transform.json already present in"
@@ -351,24 +437,19 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
     fi
 
     if [[ -n "${BEST_STEP}" ]]; then
-        echo ""
-        echo "============================================================"
-        echo "[WARN] Split ${SPLIT} has only a partial checkpoint "
-        echo "       (best step = ${BEST_STEP}, below threshold ${MIN_CHECKPOINT_STEP})."
+        echo "[WARN] Split ${SPLIT} has only a partial checkpoint"
+        echo "       Best step = ${BEST_STEP}, below threshold ${MIN_CHECKPOINT_STEP}"
         echo "       Retraining from scratch."
-        echo "============================================================"
     fi
 
-    # ---- INPUT CHECKS ----
+    # ---- Input checks ----
+
     if [[ ! -f "${DATA_ROOT}/${COLMAP_PATH}/cameras.bin" ]] \
        || [[ ! -f "${DATA_ROOT}/${COLMAP_PATH}/images.bin" ]] \
        || [[ ! -f "${DATA_ROOT}/${COLMAP_PATH}/points3D.bin" ]]; then
-        echo ""
-        echo "============================================================"
         echo "[WARN] Skipping split ${SPLIT}: missing COLMAP reconstruction"
         echo "       Expected files in:"
         echo "       ${DATA_ROOT}/${COLMAP_PATH}/"
-        echo "============================================================"
         continue
     fi
 
@@ -378,18 +459,18 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
         continue
     fi
 
-    echo ""
-    echo "============================================================"
+    # ---- Training ----
+
     echo "Training split ${SPLIT}/${NUM_SPLITS}"
-    echo "  Method:       ${METHOD}"
-    echo "  Experiment:   ${EXP_NAME}"
-    echo "  Data root:    ${DATA_ROOT}"
-    echo "  COLMAP path:  ${COLMAP_PATH}"
-    echo "  Images path:  ${IMAGES_PATH}"
-    echo "  Masks path:   ${MASKS_PATH}"
-    echo "  Output dir:   ${OUTPUT_ROOT}"
-    echo "  Extra flags:  ${EXTRA_NS_TRAIN_FLAGS[*]:-(none)}"
-    echo "============================================================"
+    echo "  Method:              ${METHOD}"
+    echo "  Nerfstudio dir name: ${NS_METHOD_DIR_NAME}"
+    echo "  Experiment:          ${EXP_NAME}"
+    echo "  Data root:           ${DATA_ROOT}"
+    echo "  COLMAP path:         ${COLMAP_PATH}"
+    echo "  Images path:         ${IMAGES_PATH}"
+    echo "  Masks path:          ${MASKS_PATH}"
+    echo "  Output dir:          ${OUTPUT_ROOT}"
+    echo "  Extra flags:         ${EXTRA_NS_TRAIN_FLAGS[*]:-(none)}"
 
     if [[ "${USE_SKY_MASKS}" = true ]] && [[ -d "${DATA_ROOT}/${MASKS_PATH}" ]]; then
         ns-train "${METHOD}" \
@@ -407,6 +488,7 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
             echo "[WARN] Sky masks requested but not found: ${DATA_ROOT}/${MASKS_PATH}"
             echo "       Training without masks for this split."
         fi
+
         ns-train "${METHOD}" \
             --data "${DATA_ROOT}" \
             --output-dir "${OUTPUT_ROOT}" \
@@ -419,19 +501,29 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
     fi
 
     if [[ $? -ne 0 ]]; then
-        echo "!!! Split ${SPLIT} returned non-zero exit code, continuing..."
+        echo "[WARN] Split ${SPLIT} returned non-zero exit code, continuing..."
     fi
 
-    # Find the newest timestamp folder for this split
-    TIMESTAMP_DIR=$(ls -td "${METHOD_DIR}/"*/ 2>/dev/null | head -n 1)
-    TIMESTAMP_DIR=$(basename "${TIMESTAMP_DIR}")
+    # ---- Run 4C conversion for newest timestamp ----
+
+    TIMESTAMP_DIR=$(find_newest_timestamp_dir "${METHOD_DIR}")
 
     if [[ -z "${TIMESTAMP_DIR}" ]]; then
         echo "[ERROR] No timestamp folder found for ${EXP_NAME} in ${METHOD_DIR}"
         continue
     fi
 
-    python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
+    if [[ ! -f "${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml" ]]; then
+        echo "[ERROR] config.yml not found:"
+        echo "        ${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml"
+        continue
+    fi
+
+    echo "[INFO] Running 4C conversion"
+    echo "       Config: ${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml"
+    echo "       UTM:    ${DATA_ROOT}/frame_positions_split_${SPLIT}_${SPLIT_LABEL}.txt"
+
+    python "${SCRIPT_4C}" \
         --gs_config "${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml" \
         --utm_file "${DATA_ROOT}/frame_positions_split_${SPLIT}_${SPLIT_LABEL}.txt" \
         --data_root "${DATA_ROOT}"
@@ -442,6 +534,7 @@ conda deactivate
 echo ""
 echo "============================================================"
 echo "All splits processed."
-echo "Method:    ${METHOD}"
-echo "Outputs in: ${OUTPUT_ROOT}"
+echo "Method:               ${METHOD}"
+echo "Nerfstudio dir name:  ${NS_METHOD_DIR_NAME}"
+echo "Outputs in:           ${OUTPUT_ROOT}"
 echo "============================================================"
