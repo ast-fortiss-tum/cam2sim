@@ -1164,9 +1164,52 @@ For details on each individual script in Step 6, see the [`6_validation`](#6_val
 
 ---
 
-## Example ROS bag (optional)
+# 1_extract_ROS_data
 
-To run this pipeline without recording your own data, an example ROS bag (~6 GB) is provided on Google Drive. It corresponds to the dataset referenced as `reference_bag` throughout the pipeline.
+This folder contains the first step of the data-processing pipeline.
+
+The scripts read data from a ROS bag file and export selected camera, LiDAR,
+odometry, steering, and model-output data into a structured dataset folder.
+
+Input bags must be placed under:
+
+```text
+data/raw_ros_data/
+```
+
+For example:
+
+```text
+data/raw_ros_data/reference_bag.bag
+```
+
+All outputs are written to:
+
+```text
+data/raw_dataset/<BAG>/
+```
+
+where `<BAG>` is the bag filename without the `.bag` extension.
+
+For example, if the input bag is:
+
+```text
+data/raw_ros_data/reference_bag.bag
+```
+
+then the output folder is:
+
+```text
+data/raw_dataset/reference_bag/
+```
+
+---
+
+## Example ROS bag optional
+
+To run this pipeline without recording your own data, an example ROS bag
+approximately 6 GB is provided on Google Drive. It corresponds to the dataset
+referenced as `reference_bag` throughout the pipeline.
 
 Make sure the `data_extraction` environment is active, then run:
 
@@ -1176,65 +1219,18 @@ conda activate data_extraction
 gdown 1ijhejhNO19jvrb3BUkEKRlxw-SkfZRhu -O data/raw_ros_data/reference_bag.bag
 ```
 
-Alternatively, download the file manually from this link and place it in `data/raw_ros_data/`:
-
-- Example bag: <https://drive.google.com/file/d/1ijhejhNO19jvrb3BUkEKRlxw-SkfZRhu/view?usp=sharing>
-
-After downloading, the folder should look like:
+Alternatively, download the file manually from this link and place it in
+`data/raw_ros_data/`:
 
 ```text
-data/raw_ros_data/
-└── reference_bag.bag
+https://drive.google.com/file/d/1ijhejhNO19jvrb3BUkEKRlxw-SkfZRhu/view?usp=sharing
 ```
 
-Verify the file:
+After downloading, verify the file:
 
 ```bash
 ls -lh data/raw_ros_data/reference_bag.bag
 ```
-
-If you use your own bag instead of the example one, update the `bag_path` value at the top of each script to point to it.
-
-# 1_extract_ROS_data
-
-This folder contains the first step of the data-processing pipeline.
-
-The scripts read data from a ROS bag file and export selected camera, LiDAR, odometry, steering, and model-output data into a structured dataset folder.
-
-Each script is intended to be run from the project root:
-
-```bash
-python 1_extract_ROS_data/<script_name>.py
-```
-
-For example:
-
-```bash
-python 1_extract_ROS_data/1A_camera_with_odometry.py
-```
-
-Alternatively the script step1.sh runs all scripts in order
-```bash
-bash 1_extract_ROS_data/step1.sh
-```
-
-
----
-
-## Purpose
-
-The goal of this step is to convert raw ROS bag messages into files that are easier to use in later stages of the pipeline.
-
-The scripts can extract:
-
-- Camera images
-- Camera images synchronized with odometry
-- LiDAR point clouds
-- LiDAR point clouds synchronized with odometry
-- Full odometry and simplified trajectory
-- Vehicle steering status
-- Steering target / model output
-- ROS bag topic information
 
 ---
 
@@ -1243,11 +1239,10 @@ The scripts can extract:
 ```text
 project_root/
 ├── 1_extract_ROS_data/
+│   ├── step1.sh
 │   ├── 1UTIL_print_bag_info.py
-│   ├── 1A_camera_without_odometry.py
-│   ├── 1A_camera_with_odometry.py
-│   ├── 1B_lidar_without_odometry.py
-│   ├── 1B_lidar_with_odometry.py
+│   ├── 1A_extract_camera.py
+│   ├── 1B_extract_lidar.py
 │   ├── 1C_poses_and_trajectory.py
 │   ├── 1D_steering_status.py
 │   └── 1E_model_output.py
@@ -1257,7 +1252,7 @@ project_root/
 │   │   └── reference_bag.bag
 │   │
 │   └── raw_dataset/
-│       └── <bag_name>/
+│       └── reference_bag/
 │           ├── images/
 │           ├── point_clouds/
 │           ├── images_positions.txt
@@ -1268,278 +1263,289 @@ project_root/
 │           └── steering_predictions.txt
 ```
 
-All scripts write their output to:
-
-```text
-data/raw_dataset/<bag_name>/
-```
-
-where `<bag_name>` is automatically taken from the ROS bag filename.
-
-For example, if the bag file is:
-
-```text
-data/raw_ros_data/reference_bag.bag
-```
-
-then the output folder will be:
-
-```text
-data/raw_dataset/reference_bag/
-```
-
 ---
 
 ## Requirements
 
 Use the existing Conda environment named `data_extraction`.
 
-Activate it before running any extraction script:
-
 ```bash
 conda activate data_extraction
 ```
 
-The scripts use `rosbags`, `numpy`, and, for camera extraction, `opencv-python`.
+The scripts use:
+
+```text
+rosbags
+numpy
+opencv-python
+```
+
+The wrapper script `step1.sh` activates `data_extraction` automatically by default.
 
 ---
 
-## Configuration
+## Recommended usage
 
-Each script has a configuration section near the top.
-
-Typical configuration values include:
-
-```python
-bag_path = Path("data/raw_ros_data/reference_bag.bag")
-```
-
-and one or more ROS topic names, for example:
-
-```python
-cam_topic = "/gmsl_camera/front_narrow/image_raw"
-lidar_topic = "/velodyne_points"
-odom_topic = "/odom"
-topic = "/vehicle/steering_pct"
-```
-
-Before running a script, check that:
-
-1. The ROS bag exists at the configured `bag_path`.
-2. The topic names match the topics in your ROS bag.
-3. You are running the command from the project root.
-
-To inspect the available topics in a bag, run:
+Run the full extraction step with:
 
 ```bash
-python 1_extract_ROS_data/1UTIL_print_bag_info.py
+bash 1_extract_ROS_data/step1.sh reference_bag.bag
+```
+
+For a custom bag:
+
+```bash
+bash 1_extract_ROS_data/step1.sh snowy.bag
+```
+
+If the bag does not contain odometry, run:
+
+```bash
+bash 1_extract_ROS_data/step1.sh snowy.bag --no-odom
+```
+
+This extracts camera and LiDAR data without synchronization and skips
+`1C_poses_and_trajectory.py`.
+
+---
+
+## step1.sh
+
+Runs the full step-1 extraction pipeline.
+
+Default behavior:
+
+```text
+1A_extract_camera.py            camera images + images_positions.txt
+1B_extract_lidar.py             point clouds + lidar_positions.txt
+1C_poses_and_trajectory.py      odometry.csv + trajectory.csv
+1D_steering_status.py           steering_pct.txt
+1E_model_output.py              steering_predictions.txt
+```
+
+Parameters:
+
+```text
+<bag_name.bag>
+    ROS bag filename to process.
+    The file must exist under:
+        data/raw_ros_data/<bag_name.bag>
+
+--no-odom
+    Extract camera and LiDAR without odometry synchronization.
+    This passes --no-odom to 1A and 1B and skips 1C.
+
+--conda-env <ENV>
+    Conda environment to activate.
+    Default: data_extraction.
+
+-h, --help
+    Show help message.
+```
+
+Usage:
+
+```bash
+bash 1_extract_ROS_data/step1.sh reference_bag.bag
+
+bash 1_extract_ROS_data/step1.sh snowy.bag
+
+bash 1_extract_ROS_data/step1.sh snowy.bag --no-odom
+
+bash 1_extract_ROS_data/step1.sh snowy.bag --conda-env data_extraction
 ```
 
 ---
 
-## Scripts
-
-### 1UTIL_print_bag_info.py
+## 1UTIL_print_bag_info.py
 
 Utility script for inspecting a ROS bag.
 
-It prints information such as:
+It prints:
 
-- Available ROS topics
-- Message type for each topic
-- Number of messages per topic
-- Start and end timestamps of the bag
-
-Run:
-
-```bash
-python 1_extract_ROS_data/1UTIL_print_bag_info.py
+```text
+available ROS topics
+message type for each topic
+number of messages per topic
+start and end timestamps of the bag
 ```
 
-Use this script before extraction to confirm the correct topic names for camera, LiDAR, odometry, steering status, and steering target messages.
+Use this before extraction to confirm the correct topic names.
+
+Parameters:
+
+```text
+--bag-name <BAG>.bag
+    ROS bag filename to inspect.
+    Default: env BAG_NAME or reference_bag.bag.
+```
+
+Usage:
+
+```bash
+python 1_extract_ROS_data/1UTIL_print_bag_info.py --bag-name reference_bag.bag
+```
 
 ---
 
-### 1A_camera_without_odometry.py
+## 1A_extract_camera.py
 
-Extracts camera frames from the ROS bag and saves them as PNG images.
+Extracts RGB frames from a ROS bag camera topic.
 
-Default camera topic:
-
-```text
-/gmsl_camera/front_narrow/image_raw
-```
-
-Output:
-
-```text
-data/raw_dataset/<bag_name>/images/frame_000000.png
-data/raw_dataset/<bag_name>/images/frame_000001.png
-...
-```
-
-Run:
-
-```bash
-python 1_extract_ROS_data/1A_camera_without_odometry.py
-```
-
-This script only extracts images. It does not associate camera frames with odometry.
-
-Supported image encodings include:
-
-- `mono8`
-- `rgb8`
-- `bgr8`
-- Bayer encodings
-
-Unsupported image encodings raise an error for the affected frame.
-
----
-
-### 1A_camera_with_odometry.py
-
-Extracts camera frames and synchronizes each image timestamp with odometry.
-
-Default topics:
-
-```text
-/gmsl_camera/front_narrow/image_raw
-/odom
-```
+By default, it also reads odometry and writes synchronized camera poses.
 
 Outputs:
 
 ```text
-data/raw_dataset/<bag_name>/images/
-data/raw_dataset/<bag_name>/images_positions.txt
+data/raw_dataset/<BAG>/images/frame_000000.png
+data/raw_dataset/<BAG>/images/frame_000001.png
+...
+data/raw_dataset/<BAG>/images_positions.txt
 ```
 
-Image files are saved as:
+If `--no-odom` is used, only the images are written and
+`images_positions.txt` is not generated.
+
+Supported image encodings:
 
 ```text
-frame_000000.png
-frame_000001.png
-...
+mono8
+rgb8
+bgr8
+Bayer encodings
 ```
 
-The synchronized metadata file contains:
+Parameters:
+
+```text
+--bag-name <BAG>.bag
+    ROS bag filename to process.
+    Default: env BAG_NAME or reference_bag.bag.
+
+--cam-topic <TOPIC>
+    ROS image topic to extract RGB frames from.
+    Default: /gmsl_camera/front_narrow/image_raw.
+
+--odom-topic <TOPIC>
+    ROS odometry topic used to interpolate the vehicle pose at each camera
+    frame timestamp.
+    Default: /odom.
+
+--no-odom
+    Extract only RGB frames.
+    Do not read odometry and do not write images_positions.txt.
+```
+
+Usage:
+
+```bash
+python 1_extract_ROS_data/1A_extract_camera.py --bag-name reference_bag.bag
+
+python 1_extract_ROS_data/1A_extract_camera.py \
+    --bag-name snowy.bag \
+    --no-odom
+
+python 1_extract_ROS_data/1A_extract_camera.py \
+    --bag-name snowy.bag \
+    --cam-topic /gmsl_camera/front_narrow/image_raw \
+    --odom-topic /odom
+```
+
+`images_positions.txt` contains:
 
 ```text
 # FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Z, Qx, Qy, Qz, Qw, Odom_Yaw, ImageFile
 ```
 
-Run:
-
-```bash
-python 1_extract_ROS_data/1A_camera_with_odometry.py
-```
-
-This script interpolates odometry values at each camera timestamp.
-
-Position values are linearly interpolated. Quaternion components are also interpolated component-by-component, normalized, and then used to compute yaw.
+Position values are linearly interpolated. Quaternion components are interpolated
+component-by-component, normalized, and then used to compute yaw.
 
 ---
 
-### 1B_lidar_without_odometry.py
+## 1B_extract_lidar.py
 
-Extracts LiDAR point clouds from the ROS bag and saves each scan as a binary `.bin` file.
+Extracts LiDAR point clouds from a ROS bag.
 
-Default LiDAR topic:
-
-```text
-/velodyne_points
-```
-
-Output:
-
-```text
-data/raw_dataset/<bag_name>/point_clouds/point_cloud_000000.bin
-data/raw_dataset/<bag_name>/point_clouds/point_cloud_000001.bin
-...
-```
-
-Each `.bin` file stores points as float32 values in the following order:
-
-```text
-x, y, z, intensity
-```
-
-Run:
-
-```bash
-python 1_extract_ROS_data/1B_lidar_without_odometry.py
-```
-
-This script only extracts point clouds. It does not associate LiDAR scans with odometry.
-
-If the point cloud message does not contain an `intensity` field, intensity is written as `0.0`.
-
----
-
-### 1B_lidar_with_odometry.py
-
-Extracts LiDAR point clouds and synchronizes each scan timestamp with odometry.
-
-Default topics:
-
-```text
-/velodyne_points
-/odom
-```
+By default, it also reads odometry and writes synchronized LiDAR poses.
 
 Outputs:
 
 ```text
-data/raw_dataset/<bag_name>/point_clouds/
-data/raw_dataset/<bag_name>/lidar_positions.txt
-```
-
-Point clouds are saved as:
-
-```text
-point_cloud_000000.bin
-point_cloud_000001.bin
+data/raw_dataset/<BAG>/point_clouds/point_cloud_000000.bin
+data/raw_dataset/<BAG>/point_clouds/point_cloud_000001.bin
 ...
+data/raw_dataset/<BAG>/lidar_positions.txt
 ```
 
-Each `.bin` file stores points as float32 values in the following order:
+If `--no-odom` is used, only the point clouds are written and
+`lidar_positions.txt` is not generated.
+
+Each `.bin` file stores float32 values in the following order:
 
 ```text
 x, y, z, intensity
 ```
 
-The synchronized metadata file contains:
+If the point cloud message does not contain an `intensity` field, intensity is
+written as `0.0`.
+
+Parameters:
+
+```text
+--bag-name <BAG>.bag
+    ROS bag filename to process.
+    Default: env BAG_NAME or reference_bag.bag.
+
+--lidar-topic <TOPIC>
+    ROS PointCloud2 topic to extract LiDAR scans from.
+    Default: /velodyne_points.
+
+--odom-topic <TOPIC>
+    ROS odometry topic used to interpolate the vehicle pose at each LiDAR scan
+    timestamp.
+    Default: /odom.
+
+--no-odom
+    Extract only LiDAR point clouds.
+    Do not read odometry and do not write lidar_positions.txt.
+```
+
+Usage:
+
+```bash
+python 1_extract_ROS_data/1B_extract_lidar.py --bag-name reference_bag.bag
+
+python 1_extract_ROS_data/1B_extract_lidar.py \
+    --bag-name snowy.bag \
+    --no-odom
+
+python 1_extract_ROS_data/1B_extract_lidar.py \
+    --bag-name snowy.bag \
+    --lidar-topic /velodyne_points \
+    --odom-topic /odom
+```
+
+`lidar_positions.txt` contains:
 
 ```text
 # FrameID, Timestamp_Sec, Odom_X, Odom_Y, Odom_Yaw, PointCloudFile
-```
-
-Run:
-
-```bash
-python 1_extract_ROS_data/1B_lidar_with_odometry.py
 ```
 
 This script interpolates odometry position and yaw at each LiDAR timestamp.
 
 ---
 
-### 1C_poses_and_trajectory.py
+## 1C_poses_and_trajectory.py
 
-Extracts odometry from the ROS bag and exports both full odometry and a simplified trajectory.
-
-Default odometry topic:
-
-```text
-/odom
-```
+Extracts odometry from the ROS bag and exports both full odometry and a compact
+trajectory.
 
 Outputs:
 
 ```text
-data/raw_dataset/<bag_name>/odometry.csv
-data/raw_dataset/<bag_name>/trajectory.csv
+data/raw_dataset/<BAG>/odometry.csv
+data/raw_dataset/<BAG>/trajectory.csv
 ```
 
 `odometry.csv` contains:
@@ -1554,74 +1560,96 @@ timestamp, tx, ty, tz, qx, qy, qz, qw, yaw
 timestamp, x, y, z, yaw
 ```
 
-Run:
+Parameters:
 
-```bash
-python 1_extract_ROS_data/1C_poses_and_trajectory.py
+```text
+--bag-name <BAG>.bag
+    ROS bag filename to process.
+    Default: env BAG_NAME or reference_bag.bag.
+
+--odom-topic <TOPIC>
+    ROS odometry topic to extract poses from.
+    Default: /odom.
 ```
 
-This script converts quaternion orientation to yaw and sorts all odometry samples by timestamp before writing the output files.
+Usage:
+
+```bash
+python 1_extract_ROS_data/1C_poses_and_trajectory.py --bag-name reference_bag.bag
+
+python 1_extract_ROS_data/1C_poses_and_trajectory.py \
+    --bag-name snowy.bag \
+    --odom-topic /odom
+```
+
+This script converts quaternion orientation to yaw and sorts all odometry
+samples by timestamp before writing the output files.
 
 ---
 
-### 1D_steering_status.py
+## 1D_steering_status.py
 
 Extracts the actual vehicle steering status from the ROS bag.
-
-Default topic:
-
-```text
-/vehicle/steering_pct
-```
 
 Output:
 
 ```text
-data/raw_dataset/<bag_name>/steering_pct.txt
+data/raw_dataset/<BAG>/steering_pct.txt
 ```
 
 The output file contains:
 
 ```text
-# timestamp value
+# timestamp, steering_value
 ```
 
 Each data row is written as:
 
 ```text
-timestamp, value
+timestamp, steering_value
 ```
 
-Run:
+Parameters:
+
+```text
+--bag-name <BAG>.bag
+    ROS bag filename to process.
+    Default: env BAG_NAME or reference_bag.bag.
+
+--topic <TOPIC>
+    ROS topic containing steering percentage values.
+    Default: /vehicle/steering_pct.
+```
+
+Usage:
 
 ```bash
-python 1_extract_ROS_data/1D_steering_status.py
+python 1_extract_ROS_data/1D_steering_status.py --bag-name reference_bag.bag
+
+python 1_extract_ROS_data/1D_steering_status.py \
+    --bag-name snowy.bag \
+    --topic /vehicle/steering_pct
 ```
 
-Use this file to compare actual steering status against predicted or commanded steering values.
+Use this file to compare actual steering status against predicted or commanded
+steering values.
 
 ---
 
-### 1E_model_output.py
+## 1E_model_output.py
 
 Extracts steering target / model-output values from the ROS bag.
-
-Default topic:
-
-```text
-/cmd/steering_target
-```
 
 Output:
 
 ```text
-data/raw_dataset/<bag_name>/steering_predictions.txt
+data/raw_dataset/<BAG>/steering_predictions.txt
 ```
 
 The output file contains:
 
 ```text
-# timestamp steering_target
+# timestamp, steering_target
 ```
 
 Each data row is written as:
@@ -1630,34 +1658,65 @@ Each data row is written as:
 timestamp, steering_target
 ```
 
-Run:
+Parameters:
 
-```bash
-python 1_extract_ROS_data/1E_model_output.py
+```text
+--bag-name <BAG>.bag
+    ROS bag filename to process.
+    Default: env BAG_NAME or reference_bag.bag.
+
+--topic <TOPIC>
+    ROS topic containing driving model steering target values.
+    Default: /cmd/steering_target.
 ```
 
-Use this file as the model prediction or command signal for later comparison with the vehicle steering status.
+Usage:
+
+```bash
+python 1_extract_ROS_data/1E_model_output.py --bag-name reference_bag.bag
+
+python 1_extract_ROS_data/1E_model_output.py \
+    --bag-name snowy.bag \
+    --topic /cmd/steering_target
+```
+
+Use this file as the model prediction or command signal for later comparison
+with the vehicle steering status.
 
 ---
 
 ## Suggested execution order
 
-A typical workflow is:
+Recommended full execution:
 
 ```bash
-python 1_extract_ROS_data/1UTIL_print_bag_info.py
-python 1_extract_ROS_data/1A_camera_with_odometry.py
-python 1_extract_ROS_data/1B_lidar_with_odometry.py
-python 1_extract_ROS_data/1C_poses_and_trajectory.py
-python 1_extract_ROS_data/1D_steering_status.py
-python 1_extract_ROS_data/1E_model_output.py
+bash 1_extract_ROS_data/step1.sh reference_bag.bag
 ```
 
-If odometry synchronization is not needed, use the scripts without odometry:
+Manual execution:
 
 ```bash
-python 1_extract_ROS_data/1A_camera_without_odometry.py
-python 1_extract_ROS_data/1B_lidar_without_odometry.py
+python 1_extract_ROS_data/1UTIL_print_bag_info.py --bag-name reference_bag.bag
+python 1_extract_ROS_data/1A_extract_camera.py --bag-name reference_bag.bag
+python 1_extract_ROS_data/1B_extract_lidar.py --bag-name reference_bag.bag
+python 1_extract_ROS_data/1C_poses_and_trajectory.py --bag-name reference_bag.bag
+python 1_extract_ROS_data/1D_steering_status.py --bag-name reference_bag.bag
+python 1_extract_ROS_data/1E_model_output.py --bag-name reference_bag.bag
+```
+
+If odometry synchronization is not needed:
+
+```bash
+bash 1_extract_ROS_data/step1.sh reference_bag.bag --no-odom
+```
+
+or manually:
+
+```bash
+python 1_extract_ROS_data/1A_extract_camera.py --bag-name reference_bag.bag --no-odom
+python 1_extract_ROS_data/1B_extract_lidar.py --bag-name reference_bag.bag --no-odom
+python 1_extract_ROS_data/1D_steering_status.py --bag-name reference_bag.bag
+python 1_extract_ROS_data/1E_model_output.py --bag-name reference_bag.bag
 ```
 
 ---
@@ -1667,10 +1726,8 @@ python 1_extract_ROS_data/1B_lidar_without_odometry.py
 | Script | Main output |
 |---|---|
 | `1UTIL_print_bag_info.py` | Console printout of bag topics, message counts, message types, and time range |
-| `1A_camera_without_odometry.py` | `images/frame_XXXXXX.png` |
-| `1A_camera_with_odometry.py` | `images/frame_XXXXXX.png`, `images_positions.txt` |
-| `1B_lidar_without_odometry.py` | `point_clouds/point_cloud_XXXXXX.bin` |
-| `1B_lidar_with_odometry.py` | `point_clouds/point_cloud_XXXXXX.bin`, `lidar_positions.txt` |
+| `1A_extract_camera.py` | `images/frame_XXXXXX.png`, optionally `images_positions.txt` |
+| `1B_extract_lidar.py` | `point_clouds/point_cloud_XXXXXX.bin`, optionally `lidar_positions.txt` |
 | `1C_poses_and_trajectory.py` | `odometry.csv`, `trajectory.csv` |
 | `1D_steering_status.py` | `steering_pct.txt` |
 | `1E_model_output.py` | `steering_predictions.txt` |
@@ -1692,11 +1749,12 @@ The exported timestamps are written in seconds.
 ## Notes
 
 - Output folders are created automatically if they do not already exist.
-- The scripts assume a single ROS bag file configured by `bag_path`.
-- The output folder name is derived from `bag_path.stem`.
-- Make sure the topic names in each script match the topics in your ROS bag.
+- Each extraction script is self-contained and includes the helper functions it needs.
+- Input bags are selected with `--bag-name` and read from `data/raw_ros_data/`.
+- The output folder name is derived from the bag filename stem.
 - Run `1UTIL_print_bag_info.py` first when working with a new bag.
-- If the configured bag file is not found, the script prints an error message and stops.
+- Make sure the topic names match the topics in your ROS bag.
+- If the bag file is not found, the script raises an error.
 - If a required topic is missing, the corresponding script raises an error.
 - Camera outputs are saved as `.png`.
 - LiDAR outputs are saved as raw float32 `.bin` files containing `x, y, z, intensity`.
