@@ -53,6 +53,12 @@ parser.add_argument(
     help="Bag filename including .bag extension "
          "(default: env BAG_NAME or 'reference_bag.bag').",
 )
+parser.add_argument(
+    "--num-parts",
+    type=int,
+    default=3,
+    help="Number of Stable Diffusion training parts/splits. Default: 2.",
+)
 parser.add_argument("--output-root", type=str, default=None,
                     help="Where to store trained SD models. "
                          "First time: optional (default: data/stable_diff_models). "
@@ -70,7 +76,7 @@ os.chdir(PROJECT_ROOT)
 BAG_NAME = args.bag_name                # e.g. "reference_bag.bag"
 BAG_STEM = Path(BAG_NAME).stem          # e.g. "reference_bag"
 
-NUM_PARTS = 2                       # Match the 3 GS splits of cam2sim
+NUM_PARTS = args.num_parts              
 RESOLUTION = 512
 PRETRAINED_SD = "stable-diffusion-v1-5/stable-diffusion-v1-5"
 
