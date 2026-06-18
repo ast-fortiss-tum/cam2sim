@@ -4,41 +4,60 @@
 """
 2A_sd_camera_parked_cars_detection.py
 
-Superset of 2A_camera_parked_cars_detection.py with two additions for the
-Stable Diffusion branch:
-  - Color extraction: each detected cluster gets a dominant RGB color
-    extracted from the car body via YOLOv8-seg pixel masks.
-  - Instance maps: per-frame PNG where each detected car is painted with
-    its cluster color (consistent across frames), used as conditional
-    input for SD / ControlNet training.
+Superset of 2A_camera_parked_cars_detection.py for the Stable Diffusion branch.
 
-Writes to the same camera_detections/ folder as the standard 2A, so this
-script is a drop-in replacement when the SD branch is needed.
+It performs the same parked-car detection pipeline as the standard 2A script:
+    - FCOS3D detection from RGB frames
+    - camera-to-world transformation
+    - tracking in world coordinates
+    - clustering of repeated detections
+    - trajectory-based side/orientation classification
+    - 3D bounding-box overlay export
 
-Reads from (project root):
+It additionally produces:
+    - a dominant RGB color for each detected parked-car cluster
+    - per-frame instance maps where each detected car is painted with its
+      cluster color
+
+Reads from:
     data/raw_dataset/<BAG>/images/
     data/raw_dataset/<BAG>/images_positions.txt
     2_process_datasets/utils/fcos3d_config.py
     2_process_datasets/utils/fcos3d.pth
-    2_process_datasets/utils/yolov8n-seg.pt   (downloaded on first use)
+    2_process_datasets/utils/yolov8n-seg.pt
 
-Writes to (project root):
+Writes to:
     data/processed_dataset/<BAG>/camera_detections/
-        camera_detections.json (now with "color" field per car)
-        unified_clusters.txt (now with rgb_color column)
+        camera_detections.json
+        unified_clusters.txt
         unified_bbox_overlays/bbox_<N:06d>.png
         instance_maps/frame_<N:06d>.png
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        The input dataset is read from:
+            data/raw_dataset/<BAG>/
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 2_process_datasets/2A_sd_camera_parked_cars_detection.py --bag-name snowy.bag
+
+    python 2_process_datasets/2A_sd_camera_parked_cars_detection.py \
+        --bag-name snowy.bag
 """
+
 import os
 import shutil
 import json
 import argparse
 from pathlib import Path
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
 import cv2
 import torch
-from collections import defaultdict
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import splprep, splev
 from scipy.spatial import cKDTree
@@ -56,47 +75,22 @@ from ultralytics import YOLO
 
 
 # ==========================================
+# PATH SETUP
+# ==========================================
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+
+
+# ==========================================
 # CONFIGURATION
 # ==========================================
 
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
-parser = argparse.ArgumentParser(
-    description="Parked car detection + color extraction + instance maps "
-                "from RGB frames (Stable Diffusion branch)."
-)
-parser.add_argument(
-    "--bag-name",
-    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
-    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
-)
-args = parser.parse_args()
-
-bag_name = args.bag_name                # e.g. "reference_bag.bag"
-bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
-
-# Input folders from step 1
-EXTRACTED_ROOT = Path("data") / "raw_dataset"
-DATASET_DIR    = EXTRACTED_ROOT / bag_stem
-
-DATA_DIR   = DATASET_DIR
-POSES_FILE = DATASET_DIR / "images_positions.txt"
-
-# Output folders for step 2
-PROCESSED_ROOT     = Path("data") / "processed_dataset"
-OUTPUT_DATASET_DIR = PROCESSED_ROOT / bag_stem
-
-# Same folder as the standard 2A — this script is a superset
-OUTPUT_DIR = OUTPUT_DATASET_DIR / "camera_detections"
-
-FCOS3D_CONFIG = "2_process_datasets/utils/fcos3d_config.py"
-FCOS3D_CHECKPOINT = "2_process_datasets/utils/fcos3d.pth"
-YOLO_SEG_MODEL = "2_process_datasets/utils/yolov8n-seg.pt"
-
-OUTPUT_JSON     = OUTPUT_DIR / "camera_detections.json"
-OUTPUT_CLUSTERS = OUTPUT_DIR / "unified_clusters.txt"
-OUTPUT_BBOX_DIR = OUTPUT_DIR / "unified_bbox_overlays"
-OUTPUT_MAPS_DIR = OUTPUT_DIR / "instance_maps"
+FCOS3D_CONFIG = PROJECT_ROOT / "2_process_datasets" / "utils" / "fcos3d_config.py"
+FCOS3D_CHECKPOINT = PROJECT_ROOT / "2_process_datasets" / "utils" / "fcos3d.pth"
+YOLO_SEG_MODEL = PROJECT_ROOT / "2_process_datasets" / "utils" / "yolov8n-seg.pt"
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -112,12 +106,12 @@ X_SCALE = 0.84
 X_OFFSET = 0.0
 Y_OFFSET = 0.0
 
-# Tracking
+# Tracking settings
 TRACK_MATCH_DIST = 2.0
 TRACK_MAX_AGE = 15
 TRACK_MIN_HITS = 4
 
-# Clustering
+# Clustering settings
 CLUSTER_DIST_STAGE1 = 1.8
 CLUSTER_DIST_STAGE2 = 2.5
 
@@ -128,7 +122,8 @@ TOP_K_COLORS = 5
 # Instance map pass: match a YOLO mask to a cluster within this world distance
 INSTANCE_MATCH_DIST = 7.0
 
-# Minimum YOLO bbox height (px) for instance map (filters far cars)
+# Minimum YOLO bbox height in pixels for instance maps.
+# This filters very distant cars.
 MIN_BBOX_HEIGHT_FOR_INSTANCE = 30
 
 # Frame processing
@@ -142,9 +137,42 @@ CAM_INTRINSICS = np.array([
 ], dtype=np.float32)
 
 CLASS_NAMES = [
-    "car", "truck", "trailer", "bus", "construction_vehicle",
-    "bicycle", "motorcycle", "pedestrian", "traffic_cone", "barrier",
+    "car",
+    "truck",
+    "trailer",
+    "bus",
+    "construction_vehicle",
+    "bicycle",
+    "motorcycle",
+    "pedestrian",
+    "traffic_cone",
+    "barrier",
 ]
+
+
+# ==========================================
+# CLI
+# ==========================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Parked car detection from RGB frames with color extraction "
+            "and instance-map generation for the Stable Diffusion branch."
+        )
+    )
+
+    parser.add_argument(
+        "--bag-name",
+        default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+        help=(
+            "Bag filename including .bag extension "
+            "(default: env BAG_NAME or 'reference_bag.bag')."
+        ),
+    )
+
+    return parser.parse_args()
+
 
 # ==========================================
 # WORLD TRACKER
@@ -163,6 +191,7 @@ class SimpleWorldTracker:
         self.frame_count = 0
 
     def update(self, detections):
+        """Update tracks with new detections in world coordinates."""
         self.frame_count += 1
         unmatched = list(range(len(detections)))
 
@@ -175,6 +204,7 @@ class SimpleWorldTracker:
                 dist = np.linalg.norm(
                     np.array(det["world_pos"][:2]) - np.array(track["pos"][:2])
                 )
+
                 if dist < best_dist:
                     best_dist = dist
                     best_idx = idx
@@ -189,11 +219,14 @@ class SimpleWorldTracker:
             else:
                 track["age"] += 1
 
+        # Archive dead tracks
         for tid in [t for t, tr in self.tracks.items() if tr["age"] > self.max_age]:
             if self.tracks[tid]["hits"] >= self.min_hits:
                 self.archived[tid] = self.tracks[tid]
+
             del self.tracks[tid]
 
+        # New tracks
         for idx in unmatched:
             det = detections[idx]
             self.tracks[self.next_id] = {
@@ -206,13 +239,17 @@ class SimpleWorldTracker:
             self.next_id += 1
 
     def get_confirmed(self):
-        confirmed = {tid: t for tid, t in self.tracks.items() if t["hits"] >= self.min_hits}
+        confirmed = {
+            tid: t
+            for tid, t in self.tracks.items()
+            if t["hits"] >= self.min_hits
+        }
         confirmed.update(self.archived)
         return confirmed
 
 
 # ==========================================
-# TRANSFORMS
+# TRANSFORM FUNCTIONS
 # ==========================================
 
 def make_tf(trans, quat_xyzw):
@@ -229,13 +266,26 @@ def get_static_chain():
         [0.580393, 0.0727572, -0.211861],
         [-0.502988, 0.496432, -0.507426, 0.493029],
     )
+
     return T_loc_imar @ T_imar_velo @ T_velo_cam
 
 
 def get_pose_matrix(row, origin):
+    """Build 4x4 pose matrix directly from a row of the per-frame pose file."""
     T = np.eye(4)
-    T[:3, :3] = R.from_quat([row["qx"], row["qy"], row["qz"], row["qw"]]).as_matrix()
-    T[:3, 3] = [row["tx"] - origin[0], row["ty"] - origin[1], row["tz"] - origin[2]]
+    T[:3, :3] = R.from_quat([
+        row["qx"],
+        row["qy"],
+        row["qz"],
+        row["qw"],
+    ]).as_matrix()
+
+    T[:3, 3] = [
+        row["tx"] - origin[0],
+        row["ty"] - origin[1],
+        row["tz"] - origin[2],
+    ]
+
     return T
 
 
@@ -248,38 +298,52 @@ def get_T_cam_world(row, origin):
 # ==========================================
 
 def load_fcos3d(config, checkpoint, device):
-    cfg = Config.fromfile(config)
+    cfg = Config.fromfile(str(config))
+
     model = MODELS.build(cfg.model)
     model.cfg = cfg
-    load_checkpoint(model, checkpoint, map_location="cpu")
+
+    load_checkpoint(model, str(checkpoint), map_location="cpu")
+
     model.CLASSES = CLASS_NAMES
     model.to(device).eval()
+
     return model
 
 
 def run_fcos3d(model, img_path, intrinsics, device):
-    img = cv2.imread(img_path)
+    img = cv2.imread(str(img_path))
+
     if img is None:
         return None, None
 
     data = dict(
-        images=dict(CAM2=dict(img_path=os.path.abspath(img_path), cam2img=intrinsics.tolist())),
+        images=dict(
+            CAM2=dict(
+                img_path=os.path.abspath(str(img_path)),
+                cam2img=intrinsics.tolist(),
+            )
+        ),
         box_type_3d=CameraInstance3DBoxes,
         box_mode_3d=1,
     )
 
     pipeline = Compose([
-        TRANSFORMS.build(t) for t in [
+        TRANSFORMS.build(t)
+        for t in [
             dict(type="LoadImageFromFileMono3D"),
             dict(type="mmdet.Resize", scale_factor=1.0),
             dict(type="Pack3DDetInputs", keys=["img"]),
         ]
     ])
+
     data = pipeline(data)
 
     with torch.no_grad():
         results = model.test_step({
-            "inputs": {"img": data["inputs"]["img"].unsqueeze(0).to(device)},
+            "inputs": {
+                "img": data["inputs"]["img"].unsqueeze(0).to(device)
+            },
             "data_samples": [data["data_samples"]],
         })
 
@@ -292,12 +356,31 @@ def run_fcos3d(model, img_path, intrinsics, device):
 
 def box_to_world(box_cam, T):
     x, y, z = box_cam[:3]
+
     center = T @ np.array([x, y, z, 1.0])
+
     yaw_cam = box_cam[6] if len(box_cam) > 6 else 0
-    dir_w = T @ np.array([np.cos(yaw_cam), 0, -np.sin(yaw_cam), 0])
+
+    # FCOS3D yaw rotation:
+    # forward direction is [cos, 0, -sin]
+    dir_w = T @ np.array([
+        np.cos(yaw_cam),
+        0,
+        -np.sin(yaw_cam),
+        0,
+    ])
+
     yaw_world = np.arctan2(dir_w[1], dir_w[0])
-    return np.array([center[0], center[1], center[2],
-                     box_cam[3], box_cam[4], box_cam[5], yaw_world])
+
+    return np.array([
+        center[0],
+        center[1],
+        center[2],
+        box_cam[3],
+        box_cam[4],
+        box_cam[5],
+        yaw_world,
+    ])
 
 
 # ==========================================
@@ -305,21 +388,42 @@ def box_to_world(box_cam, T):
 # ==========================================
 
 def fit_trajectory(positions, smoothing=50.0):
+    """
+    Fit smooth spline through ego positions.
+
+    Robust against:
+      - NaN / inf positions
+      - duplicate or stationary positions
+      - too few unique points for cubic splprep
+    """
     positions = np.asarray(positions, dtype=np.float64)
+
+    # Keep only finite rows.
     finite_mask = np.isfinite(positions).all(axis=1)
     positions = positions[finite_mask]
-    if len(positions) < 2:
-        raise RuntimeError(f"Not enough valid trajectory positions: {len(positions)}")
 
+    if len(positions) < 2:
+        raise RuntimeError(
+            f"Not enough valid trajectory positions after filtering: {len(positions)}"
+        )
+
+    # Remove consecutive duplicates / near-duplicates before subsampling.
     diffs = np.linalg.norm(np.diff(positions, axis=0), axis=1)
     keep = np.ones(len(positions), dtype=bool)
     keep[1:] = diffs > 1e-4
     positions = positions[keep]
-    if len(positions) < 2:
-        raise RuntimeError("Trajectory has fewer than 2 unique positions.")
 
+    if len(positions) < 2:
+        raise RuntimeError(
+            "Trajectory has fewer than 2 unique positions. "
+            "The vehicle may be stationary or the pose file may be invalid."
+        )
+
+    # Subsample, but do not destroy short trajectories.
     step = max(1, len(positions) // 500)
     pts = positions[::step]
+
+    # Remove consecutive duplicates again after subsampling.
     if len(pts) >= 2:
         diffs = np.linalg.norm(np.diff(pts, axis=0), axis=1)
         keep = np.ones(len(pts), dtype=bool)
@@ -328,64 +432,106 @@ def fit_trajectory(positions, smoothing=50.0):
 
     print(f"  Valid trajectory positions: {len(positions)}")
     print(f"  Spline input points:        {len(pts)}")
+    print(f"  Trajectory x range:         [{pts[:, 0].min():.3f}, {pts[:, 0].max():.3f}]")
+    print(f"  Trajectory y range:         [{pts[:, 1].min():.3f}, {pts[:, 1].max():.3f}]")
 
+    # If too few points for cubic spline, fallback to piecewise-linear trajectory.
     if len(pts) < 4:
-        print("  [WARN] Too few points for cubic spline; linear fallback.")
+        print("  [WARN] Too few points for cubic spline; using linear trajectory fallback.")
+
         traj = pts.copy()
+
         if len(traj) == 2:
             u = np.linspace(0.0, 1.0, 2000)
             traj = (1.0 - u[:, None]) * pts[0] + u[:, None] * pts[1]
+
         tang = np.gradient(traj, axis=0)
         norms = np.linalg.norm(tang, axis=1, keepdims=True)
         norms[norms < 1e-8] = 1.0
         tang = tang / norms
+
         return traj, tang
 
+    # Cubic needs k <= number_of_points - 1.
     k = min(3, len(pts) - 1)
+
+    # Parametrize by arc length. This avoids splprep failing on repeated implicit u.
     seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
     dist = np.concatenate([[0.0], np.cumsum(seg)])
+
     if dist[-1] <= 1e-8:
-        raise RuntimeError("Trajectory length is ~0 after filtering.")
+        raise RuntimeError(
+            "Trajectory length is ~0 after filtering. Cannot fit trajectory."
+        )
+
     u_in = dist / dist[-1]
 
     try:
-        tck, _ = splprep([pts[:, 0], pts[:, 1]], u=u_in, s=smoothing, k=k)
+        tck, _ = splprep(
+            [pts[:, 0], pts[:, 1]],
+            u=u_in,
+            s=smoothing,
+            k=k,
+        )
+
         u = np.linspace(0, 1, 2000)
+
         traj = np.array(splev(u, tck)).T
         tang = np.array(splev(u, tck, der=1)).T
+
     except Exception as e:
-        print(f"  [WARN] splprep failed: {e}; linear fallback.")
+        print(f"  [WARN] splprep failed: {e}")
+        print("  [WARN] Falling back to linear interpolation trajectory.")
+
         u = np.linspace(0.0, 1.0, 2000)
         traj_x = np.interp(u, u_in, pts[:, 0])
         traj_y = np.interp(u, u_in, pts[:, 1])
         traj = np.stack([traj_x, traj_y], axis=1)
+
         tang = np.gradient(traj, axis=0)
 
+    # Normalize tangents safely.
     norms = np.linalg.norm(tang, axis=1, keepdims=True)
     norms[norms < 1e-8] = 1.0
     tang = tang / norms
+
     return traj, tang
 
 
 def get_side_from_trajectory(pos, traj, tang):
+    """Determine if car is on left or right side of trajectory."""
     tree = cKDTree(traj)
     _, idx = tree.query(pos[:2])
+
     to_car = pos[:2] - traj[idx]
     cross = tang[idx, 0] * to_car[1] - tang[idx, 1] * to_car[0]
+
     return "left" if cross > 0 else "right"
 
 
 def get_orientation_from_trajectory(yaw, pos, traj, tang):
+    """
+    Determine if car is parallel or perpendicular to the trajectory.
+
+    Compares the car yaw with the local trajectory direction at the nearest
+    point on the trajectory.
+    """
     tree = cKDTree(traj)
     _, idx = tree.query(pos[:2])
+
     traj_angle = np.arctan2(tang[idx, 1], tang[idx, 0])
+
     yaw = (yaw + np.pi) % (2 * np.pi) - np.pi
     traj_angle = (traj_angle + np.pi) % (2 * np.pi) - np.pi
+
     angle_diff = abs(yaw - traj_angle)
+
     if angle_diff > np.pi:
         angle_diff = 2 * np.pi - angle_diff
+
     if angle_diff < np.pi / 4 or angle_diff > 3 * np.pi / 4:
         return "parallel"
+
     return "perpendicular"
 
 
@@ -393,25 +539,34 @@ def get_orientation_from_trajectory(yaw, pos, traj, tang):
 # COLOR EXTRACTION
 # ==========================================
 
-def get_dominant_color(img_crop, mask_crop=None, quantize=COLOR_QUANTIZE_STEP, top_k=TOP_K_COLORS):
-    """Extract dominant color (RGB) from masked region, focusing on car body."""
+def get_dominant_color(
+    img_crop,
+    mask_crop=None,
+    quantize=COLOR_QUANTIZE_STEP,
+    top_k=TOP_K_COLORS,
+):
+    """Extract dominant color in RGB format from a masked image crop."""
     if img_crop.size == 0:
         return None
 
     if mask_crop is not None and mask_crop.sum() > 100:
-        # Use bottom 60% of the mask (body, not windows)
+        # Use bottom 60% of the mask to focus on car body instead of windows.
         h = mask_crop.shape[0]
         body_mask = mask_crop.copy()
         body_mask[:int(h * 0.4), :] = 0
+
         if body_mask.sum() < 50:
             body_mask = mask_crop
+
         pixels = img_crop[body_mask > 0]
     else:
         h, w = img_crop.shape[:2]
         mh, mw = h // 4, w // 4
         center = img_crop[mh:h - mh, mw:w - mw]
+
         if center.size == 0:
             center = img_crop
+
         pixels = center.reshape(-1, 3)
 
     if len(pixels) < 10:
@@ -420,56 +575,91 @@ def get_dominant_color(img_crop, mask_crop=None, quantize=COLOR_QUANTIZE_STEP, t
     quant = (pixels // quantize) * quantize
     unique, counts = np.unique(quant, axis=0, return_counts=True)
     idx = np.argsort(-counts)[:top_k]
+
     total = counts[idx].sum()
     if total == 0:
         return None
+
     weighted = (unique[idx] * counts[idx, None]).sum(axis=0) / total
 
-    # img is BGR -> return RGB
+    # Input image is BGR, output color is RGB.
     return (int(weighted[2]), int(weighted[1]), int(weighted[0]))
 
 
 # ==========================================
-# 3D BBOX VISUALIZATION
+# 3D BOUNDING BOX VISUALIZATION
 # ==========================================
 
-def draw_3d_box(img, box_cam, T_cam_world, intrinsics, color=(0, 255, 0), thickness=2):
+def draw_3d_box(
+    img,
+    box_cam,
+    T_cam_world,
+    intrinsics,
+    color=(0, 255, 0),
+    thickness=2,
+):
+    """Draw 3D bounding box on image."""
     x, y, z = box_cam[:3]
     l, w, h = box_cam[3:6]
     yaw = box_cam[6] if len(box_cam) > 6 else 0
 
     corners_3d = np.array([
-        [-l/2, -w/2, -h/2], [l/2, -w/2, -h/2], [l/2, w/2, -h/2], [-l/2, w/2, -h/2],
-        [-l/2, -w/2, h/2], [l/2, -w/2, h/2], [l/2, w/2, h/2], [-l/2, w/2, h/2],
+        [-l / 2, -w / 2, -h / 2],
+        [l / 2, -w / 2, -h / 2],
+        [l / 2, w / 2, -h / 2],
+        [-l / 2, w / 2, -h / 2],
+        [-l / 2, -w / 2, h / 2],
+        [l / 2, -w / 2, h / 2],
+        [l / 2, w / 2, h / 2],
+        [-l / 2, w / 2, h / 2],
     ])
+
     rot_mat = np.array([
         [np.cos(yaw), 0, np.sin(yaw)],
         [0, 1, 0],
         [-np.sin(yaw), 0, np.cos(yaw)],
     ])
+
     corners_3d = np.dot(corners_3d, rot_mat.T)
     corners_3d += np.array([x, y, z])
 
     corners_2d = []
+
     for corner in corners_3d:
         if corner[2] <= 0:
             return
+
         px = intrinsics[0, 0] * corner[0] / corner[2] + intrinsics[0, 2]
         py = intrinsics[1, 1] * corner[1] / corner[2] + intrinsics[1, 2]
+
         corners_2d.append([int(px), int(py)])
+
     corners_2d = np.array(corners_2d)
 
     H, W = img.shape[:2]
+
     if not any(0 <= x < W and 0 <= y < H for x, y in corners_2d):
         return
 
     edges = [
-        [0, 1], [1, 2], [2, 3], [3, 0],
-        [4, 5], [5, 6], [6, 7], [7, 4],
-        [0, 4], [1, 5], [2, 6], [3, 7],
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 0],
+        [4, 5],
+        [5, 6],
+        [6, 7],
+        [7, 4],
+        [0, 4],
+        [1, 5],
+        [2, 6],
+        [3, 7],
     ]
+
     for edge in edges:
-        cv2.line(img, tuple(corners_2d[edge[0]]), tuple(corners_2d[edge[1]]), color, thickness)
+        pt1 = corners_2d[edge[0]]
+        pt2 = corners_2d[edge[1]]
+        cv2.line(img, tuple(pt1), tuple(pt2), color, thickness)
 
 
 # ==========================================
@@ -478,6 +668,7 @@ def draw_3d_box(img, box_cam, T_cam_world, intrinsics, color=(0, 255, 0), thickn
 
 def cluster_tracks(confirmed, dist_thresh):
     clusters = []
+
     for tid, track in confirmed.items():
         sum_box = np.zeros(7)
         sum_w = 0
@@ -490,23 +681,29 @@ def cluster_tracks(confirmed, dist_thresh):
             sum_box += np.array(det["box"]) * w
             sum_w += w
             orients[det["orient"]] += 1
+
             if det.get("color"):
                 colors[det["color"]] += 1
 
         avg_box = sum_box / sum_w
 
         merged = False
+
         for c in clusters:
             c_pos = c["sum_box"][:2] / c["sum_w"]
+
             if np.linalg.norm(avg_box[:2] - c_pos) < dist_thresh:
                 c["sum_box"] += sum_box
                 c["sum_w"] += sum_w
                 c["count"] += track["hits"]
                 c["first_frame"] = min(c["first_frame"], first_frame)
+
                 for k, v in orients.items():
                     c["orients"][k] = c["orients"].get(k, 0) + v
+
                 for k, v in colors.items():
                     c["colors"][k] = c["colors"].get(k, 0) + v
+
                 merged = True
                 break
 
@@ -526,9 +723,11 @@ def cluster_tracks(confirmed, dist_thresh):
 def merge_clusters(clusters, dist_thresh):
     merged = []
     used = [False] * len(clusters)
+
     for i, c1 in enumerate(clusters):
         if used[i]:
             continue
+
         mc = {
             "sum_box": c1["sum_box"].copy(),
             "sum_w": c1["sum_w"],
@@ -537,23 +736,35 @@ def merge_clusters(clusters, dist_thresh):
             "colors": dict(c1["colors"]),
             "first_frame": c1.get("first_frame", 0),
         }
+
         used[i] = True
+
         for j, c2 in enumerate(clusters):
             if used[j]:
                 continue
+
             p1 = mc["sum_box"][:2] / mc["sum_w"]
             p2 = c2["sum_box"][:2] / c2["sum_w"]
+
             if np.linalg.norm(p1 - p2) < dist_thresh:
                 mc["sum_box"] += c2["sum_box"]
                 mc["sum_w"] += c2["sum_w"]
                 mc["count"] += c2["count"]
-                mc["first_frame"] = min(mc["first_frame"], c2.get("first_frame", 0))
+                mc["first_frame"] = min(
+                    mc["first_frame"],
+                    c2.get("first_frame", 0),
+                )
+
                 for k, v in c2["orients"].items():
                     mc["orients"][k] = mc["orients"].get(k, 0) + v
+
                 for k, v in c2["colors"].items():
                     mc["colors"][k] = mc["colors"].get(k, 0) + v
+
                 used[j] = True
+
         merged.append(mc)
+
     return merged
 
 
@@ -562,72 +773,134 @@ def merge_clusters(clusters, dist_thresh):
 # ==========================================
 
 def main():
+    args = parse_args()
+
+    bag_name = args.bag_name
+    bag_stem = Path(bag_name).stem
+
+    dataset_dir = PROJECT_ROOT / "data" / "raw_dataset" / bag_stem
+    data_dir = dataset_dir
+    poses_file = dataset_dir / "images_positions.txt"
+    images_dir = data_dir / "images"
+
+    output_dataset_dir = PROJECT_ROOT / "data" / "processed_dataset" / bag_stem
+    output_dir = output_dataset_dir / "camera_detections"
+
+    output_json = output_dir / "camera_detections.json"
+    output_clusters = output_dir / "unified_clusters.txt"
+    output_bbox_dir = output_dir / "unified_bbox_overlays"
+    output_maps_dir = output_dir / "instance_maps"
+
     print("=" * 70)
     print("PARKED CAR DETECTION + INSTANCE MAPS (Stable Diffusion branch)")
     print("=" * 70)
 
-    print(f"\nBag:           {bag_name}")
-    print(f"Bag stem:      {bag_stem}")
-    print(f"Input dataset: {DATASET_DIR}")
-    print(f"Output folder: {OUTPUT_DIR}")
+    print(f"\nProject root:   {PROJECT_ROOT}")
+    print(f"Bag:            {bag_name}")
+    print(f"Bag stem:       {bag_stem}")
+    print(f"Input dataset:  {dataset_dir}")
+    print(f"Output folder:  {output_dir}")
     print(f"Device: {DEVICE}")
 
     # Validate inputs
-    if not os.path.exists(DATASET_DIR):
-        raise FileNotFoundError(f"Input dataset folder not found: {DATASET_DIR}")
-    if not os.path.exists(POSES_FILE):
-        raise FileNotFoundError(f"Pose file not found: {POSES_FILE}")
+    if not dataset_dir.is_dir():
+        raise FileNotFoundError(f"Input dataset folder not found: {dataset_dir}")
 
-    images_dir = os.path.join(DATA_DIR, "images")
-    if not os.path.exists(images_dir):
+    if not poses_file.is_file():
+        raise FileNotFoundError(f"Pose file not found: {poses_file}")
+
+    if not images_dir.is_dir():
         raise FileNotFoundError(f"Images folder not found: {images_dir}")
-    if not os.path.exists(FCOS3D_CONFIG):
+
+    if not FCOS3D_CONFIG.is_file():
         raise FileNotFoundError(f"FCOS3D config not found: {FCOS3D_CONFIG}")
-    if not os.path.exists(FCOS3D_CHECKPOINT):
+
+    if not FCOS3D_CHECKPOINT.is_file():
         raise FileNotFoundError(f"FCOS3D checkpoint not found: {FCOS3D_CHECKPOINT}")
 
-    # Wipe output (safe: OUTPUT_DIR only contains outputs from this script / 2A standard)
-    if os.path.exists(OUTPUT_DIR):
-        shutil.rmtree(OUTPUT_DIR)
-    os.makedirs(OUTPUT_BBOX_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_MAPS_DIR, exist_ok=True)
+    if not YOLO_SEG_MODEL.is_file():
+        raise FileNotFoundError(f"YOLOv8-seg checkpoint not found: {YOLO_SEG_MODEL}")
+
+    # Wipe output. Safe because output_dir only contains outputs from 2A / 2A_sd.
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+
+    output_bbox_dir.mkdir(parents=True, exist_ok=True)
+    output_maps_dir.mkdir(parents=True, exist_ok=True)
 
     # ---------- Load data ----------
     print("\n[1/7] Loading data...", flush=True)
+
     pose_df = pd.read_csv(
-        POSES_FILE,
+        poses_file,
         comment="#",
         header=None,
-        names=["frame_id", "timestamp", "tx", "ty", "tz",
-               "qx", "qy", "qz", "qw", "yaw", "image_file"],
+        names=[
+            "frame_id",
+            "timestamp",
+            "tx",
+            "ty",
+            "tz",
+            "qx",
+            "qy",
+            "qz",
+            "qw",
+            "yaw",
+            "image_file",
+        ],
         skipinitialspace=True,
     )
-    pose_df = pose_df.sort_values("frame_id").reset_index(drop=True)
-    if pose_df.empty:
-        raise RuntimeError(f"No poses found in: {POSES_FILE}")
 
-    img_files = [os.path.join(DATA_DIR, "images", str(name)) for name in pose_df["image_file"]]
-    origin = np.array([pose_df.iloc[0]["tx"], pose_df.iloc[0]["ty"], pose_df.iloc[0]["tz"]])
+    pose_df = pose_df.sort_values("frame_id").reset_index(drop=True)
+
+    if pose_df.empty:
+        raise RuntimeError(f"No poses found in: {poses_file}")
+
+    img_files = [
+        images_dir / str(name)
+        for name in pose_df["image_file"]
+    ]
+
+    origin = np.array([
+        pose_df.iloc[0]["tx"],
+        pose_df.iloc[0]["ty"],
+        pose_df.iloc[0]["tz"],
+    ])
+
     print(f"  Frames with pose: {len(pose_df)}")
 
     # ---------- Load models ----------
     print("\n[2/7] Loading models...", flush=True)
-    fcos3d = load_fcos3d(FCOS3D_CONFIG, FCOS3D_CHECKPOINT, DEVICE)
+
+    fcos3d = load_fcos3d(
+        FCOS3D_CONFIG,
+        FCOS3D_CHECKPOINT,
+        DEVICE,
+    )
+
     print("  FCOS3D loaded")
 
-    yolo_seg = YOLO(YOLO_SEG_MODEL)
+    yolo_seg = YOLO(str(YOLO_SEG_MODEL))
     yolo_seg.to(DEVICE)
+
     print("  YOLOv8-seg loaded")
 
     # ---------- Trajectory ----------
     print("\n[3/7] Fitting trajectory...", flush=True)
+
     positions = pose_df[["tx", "ty"]].values
     trajectory, tangents = fit_trajectory(positions)
+
     print(f"  Trajectory points: {len(trajectory)}")
 
     # ---------- PASS 1: Detection + tracking ----------
-    print(f"\n[4/7] Detection pass (skip={SKIP_FRAMES})...", flush=True)
-    tracker = SimpleWorldTracker(TRACK_MATCH_DIST, TRACK_MAX_AGE, TRACK_MIN_HITS)
+    print(f"\n[4/7] Detection pass, skip={SKIP_FRAMES}...", flush=True)
+
+    tracker = SimpleWorldTracker(
+        TRACK_MATCH_DIST,
+        TRACK_MAX_AGE,
+        TRACK_MIN_HITS,
+    )
 
     for i, img_file in enumerate(img_files):
         if i % SKIP_FRAMES != 0:
@@ -636,12 +909,19 @@ def main():
         row = pose_df.iloc[i]
         T = get_T_cam_world(row, origin)
 
-        result, img = run_fcos3d(fcos3d, img_file, CAM_INTRINSICS, DEVICE)
+        result, img = run_fcos3d(
+            fcos3d,
+            img_file,
+            CAM_INTRINSICS,
+            DEVICE,
+        )
+
         if result is None:
             tracker.update([])
             continue
 
         pred = result.pred_instances_3d
+
         if len(pred) == 0:
             tracker.update([])
             continue
@@ -652,16 +932,27 @@ def main():
 
         # YOLOv8-seg for masks and colors
         yolo_results = yolo_seg.predict(
-            img, conf=YOLO_CONF_THRESH, device=DEVICE,
-            verbose=False, retina_masks=True, classes=[2],
+            img,
+            conf=YOLO_CONF_THRESH,
+            device=DEVICE,
+            verbose=False,
+            retina_masks=True,
+            classes=[2],
         )
 
         frame_dets = []
+
         for box, score, label in zip(bboxes, scores, labels):
-            if score < FCOS3D_CONF_THRESH or label != 0 or box[2] > MAX_DETECTION_RANGE:
+            if (
+                score < FCOS3D_CONF_THRESH
+                or label != 0
+                or box[2] > MAX_DETECTION_RANGE
+            ):
                 continue
 
             box = box.copy()
+
+            # Apply position corrections
             box[0] = box[0] * X_SCALE + X_OFFSET
             box[1] = box[1] + Y_OFFSET
             box[2] = box[2] * DEPTH_SCALE - DEPTH_OFFSET
@@ -669,79 +960,161 @@ def main():
             world_box = box_to_world(box, T)
             world_pos = world_box[:3] + origin
 
-            orient = get_orientation_from_trajectory(world_box[6], world_pos, trajectory, tangents)
+            orient = get_orientation_from_trajectory(
+                world_box[6],
+                world_pos,
+                trajectory,
+                tangents,
+            )
 
-            # Extract color from YOLO mask containing the projected 3D center
+            # Extract color from the YOLO mask that contains the projected 3D center.
             color = None
-            if len(yolo_results) > 0 and yolo_results[0].masks is not None and box[2] > 0:
-                cx = int(box[0] * CAM_INTRINSICS[0, 0] / box[2] + CAM_INTRINSICS[0, 2])
-                cy = int(box[1] * CAM_INTRINSICS[1, 1] / box[2] + CAM_INTRINSICS[1, 2])
+
+            if (
+                len(yolo_results) > 0
+                and yolo_results[0].masks is not None
+                and box[2] > 0
+            ):
+                cx = int(
+                    box[0] * CAM_INTRINSICS[0, 0] / box[2]
+                    + CAM_INTRINSICS[0, 2]
+                )
+                cy = int(
+                    box[1] * CAM_INTRINSICS[1, 1] / box[2]
+                    + CAM_INTRINSICS[1, 2]
+                )
 
                 for ybox, ymask in zip(yolo_results[0].boxes, yolo_results[0].masks):
                     x1, y1, x2, y2 = ybox.xyxy[0].cpu().numpy().astype(int)
+
                     if x1 <= cx <= x2 and y1 <= cy <= y2:
                         mask = ymask.data[0].cpu().numpy()
+
                         if mask.shape[:2] != img.shape[:2]:
                             mask = cv2.resize(mask, (img.shape[1], img.shape[0]))
+
                         mask = (mask > 0.5).astype(np.uint8)
+
                         crop = img[y1:y2, x1:x2]
                         mask_crop = mask[y1:y2, x1:x2]
+
                         color = get_dominant_color(crop, mask_crop)
                         break
 
-            depth_weight = 1.0 / (1.0 + box[2] / 20.0)
+            depth = box[2]
+            depth_weight = 1.0 / (1.0 + depth / 20.0)
+            weighted_score = score * depth_weight
+
             frame_dets.append({
                 "world_pos": world_pos,
                 "box": world_box,
-                "score": score * depth_weight,
+                "score": weighted_score,
                 "orient": orient,
                 "color": color,
             })
 
-        # 3D bbox overlay (visualization)
+        # Save detected bounding boxes overlaid on original image.
         bbox_img = img.copy()
+
         for box, score, label in zip(bboxes, scores, labels):
-            if score < FCOS3D_CONF_THRESH or label != 0 or box[2] > MAX_DETECTION_RANGE:
+            if (
+                score < FCOS3D_CONF_THRESH
+                or label != 0
+                or box[2] > MAX_DETECTION_RANGE
+            ):
                 continue
+
             box_draw = box.copy()
-            box_draw[1] = box[1] - box[4] / 2  # shift up by h/2
-            draw_3d_box(bbox_img, box_draw, T, CAM_INTRINSICS, color=(0, 255, 0), thickness=2)
+
+            # Shift center up by h/2 for visualization.
+            box_draw[1] = box[1] - box[4] / 2
+
+            draw_3d_box(
+                bbox_img,
+                box_draw,
+                T,
+                CAM_INTRINSICS,
+                color=(0, 255, 0),
+                thickness=2,
+            )
+
             if box[2] > 0:
-                px = int(CAM_INTRINSICS[0, 0] * box[0] / box[2] + CAM_INTRINSICS[0, 2])
-                py = int(CAM_INTRINSICS[1, 1] * box_draw[1] / box[2] + CAM_INTRINSICS[1, 2])
+                px = int(
+                    CAM_INTRINSICS[0, 0] * box[0] / box[2]
+                    + CAM_INTRINSICS[0, 2]
+                )
+                py = int(
+                    CAM_INTRINSICS[1, 1] * box_draw[1] / box[2]
+                    + CAM_INTRINSICS[1, 2]
+                )
+
                 cv2.circle(bbox_img, (px, py), 4, (0, 0, 255), -1)
-        cv2.imwrite(os.path.join(OUTPUT_BBOX_DIR, f"bbox_{i:06d}.png"), bbox_img)
+
+        cv2.imwrite(
+            str(output_bbox_dir / f"bbox_{i:06d}.png"),
+            bbox_img,
+        )
 
         tracker.update(frame_dets)
 
         if i == 0:
-            print(f"  First frame done, {len(frame_dets)} detections (CUDA warmup)", flush=True)
+            print(
+                f"  First frame done, {len(frame_dets)} detections "
+                f"(CUDA warmup complete)",
+                flush=True,
+            )
+
         elif i % 50 == 0:
-            print(f"  Frame {i}/{len(img_files)}, dets={len(frame_dets)}, "
-                  f"tracks={len(tracker.get_confirmed())}", flush=True)
+            print(
+                f"  Frame {i}/{len(img_files)}, "
+                f"detections: {len(frame_dets)}, "
+                f"tracks: {len(tracker.get_confirmed())}",
+                flush=True,
+            )
 
     # ---------- Clustering ----------
     print("\n[5/7] Clustering...", flush=True)
+
     confirmed = tracker.get_confirmed()
     print(f"  Confirmed tracks: {len(confirmed)}")
 
     clusters = cluster_tracks(confirmed, CLUSTER_DIST_STAGE1)
     print(f"  After stage 1: {len(clusters)}")
+
     clusters = merge_clusters(clusters, CLUSTER_DIST_STAGE2)
     print(f"  After stage 2: {len(clusters)}")
+
     clusters.sort(key=lambda c: c.get("first_frame", 0))
 
     final_clusters = []
+
     for idx, c in enumerate(clusters, 1):
         avg_box = c["sum_box"] / c["sum_w"]
         pos = avg_box[:3] + origin
-        orient = get_orientation_from_trajectory(avg_box[6], pos, trajectory, tangents)
-        side = get_side_from_trajectory(pos, trajectory, tangents)
+
+        orient = get_orientation_from_trajectory(
+            avg_box[6],
+            pos,
+            trajectory,
+            tangents,
+        )
+
+        side = get_side_from_trajectory(
+            pos,
+            trajectory,
+            tangents,
+        )
+
         color = max(c["colors"], key=c["colors"].get) if c["colors"] else None
+
         final_clusters.append({
             "id": idx,
-            "x": pos[0], "y": pos[1], "z": pos[2],
-            "length": avg_box[3], "width": avg_box[4], "height": avg_box[5],
+            "x": pos[0],
+            "y": pos[1],
+            "z": pos[2],
+            "length": avg_box[3],
+            "width": avg_box[4],
+            "height": avg_box[5],
             "yaw": avg_box[6],
             "count": c["count"],
             "conf": c["sum_w"] / c["count"],
@@ -756,56 +1129,87 @@ def main():
 
     # ---------- Save JSON + TXT ----------
     print("\n[6/7] Saving detection results...", flush=True)
-    
+
     json_data = {
         "source": "camera",
         "dataset_name": bag_stem,
-        "input_dataset": str(DATASET_DIR),
+        "input_dataset": str(dataset_dir),
         "global_origin": origin.tolist(),
         "cars": [],
     }
+
     for c in final_clusters:
         json_data["cars"].append({
             "id": int(c["id"]),
-            "x": float(c["x"]), "y": float(c["y"]), "z": float(c["z"]),
-            "length": float(c["length"]), "width": float(c["width"]),
-            "height": float(c["height"]), "yaw": float(c["yaw"]),
-            "count": int(c["count"]), "conf": float(c["conf"]),
-            "side": c["side"], "orient": c["orient"],
+            "x": float(c["x"]),
+            "y": float(c["y"]),
+            "z": float(c["z"]),
+            "length": float(c["length"]),
+            "width": float(c["width"]),
+            "height": float(c["height"]),
+            "yaw": float(c["yaw"]),
+            "count": int(c["count"]),
+            "conf": float(c["conf"]),
+            "side": c["side"],
+            "orient": c["orient"],
             "color": list(c["color"]) if c["color"] else None,
         })
 
-    with open(OUTPUT_JSON, "w") as f:
+    with open(output_json, "w") as f:
         json.dump(json_data, f, indent=2)
-    print(f"  Saved JSON to {OUTPUT_JSON}")
 
-    with open(OUTPUT_CLUSTERS, "w") as f:
+    print(f"  Saved JSON to {output_json}")
+
+    with open(output_clusters, "w") as f:
         f.write("# cluster_id, x, y, z, count, conf, orientation, side, rgb_color\n")
+
         for c in final_clusters:
-            color_str = (f"{c['color'][0]}-{c['color'][1]}-{c['color'][2]}"
-                         if c["color"] else "unknown")
-            f.write(f"{c['id']}, {c['x']:.3f}, {c['y']:.3f}, {c['z']:.3f}, "
-                    f"{c['count']}, {c['conf']:.3f}, {c['orient']}, "
-                    f"{c['side']}, {color_str}\n")
-    print(f"  Saved clusters to {OUTPUT_CLUSTERS}")
+            color_str = (
+                f"{c['color'][0]}-{c['color'][1]}-{c['color'][2]}"
+                if c["color"]
+                else "unknown"
+            )
+
+            f.write(
+                f"{c['id']}, "
+                f"{c['x']:.3f}, "
+                f"{c['y']:.3f}, "
+                f"{c['z']:.3f}, "
+                f"{c['count']}, "
+                f"{c['conf']:.3f}, "
+                f"{c['orient']}, "
+                f"{c['side']}, "
+                f"{color_str}\n"
+            )
+
+    print(f"  Saved clusters to {output_clusters}")
 
     # ---------- PASS 2: Instance maps ----------
-    print(f"\n[7/7] Generating instance maps (all frames)...", flush=True)
+    print("\n[7/7] Generating instance maps for all frames...", flush=True)
 
     cluster_lookup = []
+
     for c in final_clusters:
         cluster_lookup.append({
             "id": c["id"],
             "pos": np.array([c["x"], c["y"]]),
-            "color_bgr": (c["color"][2], c["color"][1], c["color"][0]) if c["color"]
-                         else (128, 128, 128),
+            "color_bgr": (
+                (c["color"][2], c["color"][1], c["color"][0])
+                if c["color"]
+                else (128, 128, 128)
+            ),
         })
 
-    sample = cv2.imread(img_files[0])
+    sample = cv2.imread(str(img_files[0]))
+
+    if sample is None:
+        raise RuntimeError(f"Could not read first image: {img_files[0]}")
+
     H, W = sample.shape[:2]
 
     for i, img_file in enumerate(img_files):
-        img = cv2.imread(img_file)
+        img = cv2.imread(str(img_file))
+
         if img is None:
             continue
 
@@ -815,47 +1219,66 @@ def main():
         instance_map = np.zeros((H, W, 3), dtype=np.uint8)
 
         results = yolo_seg.predict(
-            img, conf=YOLO_CONF_THRESH, device=DEVICE,
-            verbose=False, retina_masks=True, classes=[2],
+            img,
+            conf=YOLO_CONF_THRESH,
+            device=DEVICE,
+            verbose=False,
+            retina_masks=True,
+            classes=[2],
         )
 
         if len(results) > 0 and results[0].masks is not None:
             for box, mask_data in zip(results[0].boxes, results[0].masks):
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                 bbox_h = y2 - y1
+
                 if bbox_h < MIN_BBOX_HEIGHT_FOR_INSTANCE:
                     continue
 
-                # Crude depth estimate from bbox height to localize in world
+                # Crude depth estimate from bbox height to localize in world.
                 est_z = 1.5 * (200 / bbox_h) * 8
                 cx_pix = (x1 + x2) / 2
                 cy_pix = (y1 + y2) / 2
-                est_x = (cx_pix - CAM_INTRINSICS[0, 2]) * est_z / CAM_INTRINSICS[0, 0]
-                est_y = (cy_pix - CAM_INTRINSICS[1, 2]) * est_z / CAM_INTRINSICS[1, 1]
+
+                est_x = (
+                    (cx_pix - CAM_INTRINSICS[0, 2])
+                    * est_z
+                    / CAM_INTRINSICS[0, 0]
+                )
+                est_y = (
+                    (cy_pix - CAM_INTRINSICS[1, 2])
+                    * est_z
+                    / CAM_INTRINSICS[1, 1]
+                )
 
                 p_cam = np.array([est_x, est_y, est_z, 1.0])
                 p_world = (T @ p_cam)[:3] + origin
 
-                # Find nearest cluster
+                # Find nearest cluster.
                 best_dist = INSTANCE_MATCH_DIST
                 matched = None
+
                 for cl in cluster_lookup:
                     d = np.linalg.norm(p_world[:2] - cl["pos"])
+
                     if d < best_dist:
                         best_dist = d
                         matched = cl
 
-                # Resize mask if needed
                 mask = mask_data.data[0].cpu().numpy()
+
                 if mask.shape[:2] != (H, W):
                     mask = cv2.resize(mask, (W, H))
+
                 mask = (mask > 0.5).astype(np.uint8)
 
                 color = matched["color_bgr"] if matched else (128, 128, 128)
                 instance_map[mask == 1] = color
 
-        # Save with the same frame index used elsewhere in the pipeline
-        cv2.imwrite(os.path.join(OUTPUT_MAPS_DIR, f"frame_{i:06d}.png"), instance_map)
+        cv2.imwrite(
+            str(output_maps_dir / f"frame_{i:06d}.png"),
+            instance_map,
+        )
 
         if i % 200 == 0:
             print(f"  Instance map {i}/{len(img_files)}", flush=True)
@@ -863,10 +1286,10 @@ def main():
     print(f"\n{'=' * 70}")
     print("DONE!")
     print(f"{'=' * 70}")
-    print(f"  JSON:          {OUTPUT_JSON} ({len(final_clusters)} cars)")
-    print(f"  Clusters:      {OUTPUT_CLUSTERS}")
-    print(f"  BB overlays:   {OUTPUT_BBOX_DIR}/")
-    print(f"  Instance maps: {OUTPUT_MAPS_DIR}/  ({len(img_files)} frames)")
+    print(f"  JSON:          {output_json} ({len(final_clusters)} cars)")
+    print(f"  Clusters:      {output_clusters}")
+    print(f"  BB overlays:   {output_bbox_dir}/")
+    print(f"  Instance maps: {output_maps_dir}/  ({len(img_files)} frames)")
     print(f"{'=' * 70}")
 
 

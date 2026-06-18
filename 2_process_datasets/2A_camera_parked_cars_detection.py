@@ -6,31 +6,47 @@
 
 Parked car detection from RGB frames using FCOS3D + tracking + clustering.
 
-Reads from (project root):
+Reads from:
     data/raw_dataset/<BAG>/images/
     data/raw_dataset/<BAG>/images_positions.txt
     2_process_datasets/utils/fcos3d_config.py
     2_process_datasets/utils/fcos3d.pth
 
-Writes to (project root):
+Writes to:
     data/processed_dataset/<BAG>/camera_detections/
-        camera_detections.json (clustered parked-car detections in world frame)
-        unified_clusters.txt (compact CSV: id, x, y, z, count, conf, orient, side)
-        unified_bbox_overlays/bbox_<N:06d>.png (per-frame 3D box overlays)
+        camera_detections.json
+        unified_clusters.txt
+        unified_bbox_overlays/bbox_<N:06d>.png
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        The input dataset is read from:
+            data/raw_dataset/<BAG>/
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 2_process_datasets/2A_camera_parked_cars_detection.py --bag-name snowy.bag
+
+    python 2_process_datasets/2A_camera_parked_cars_detection.py \
+        --bag-name snowy.bag
 """
+
 import os
 import shutil
 import json
+import argparse
+from pathlib import Path
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
 import cv2
 import torch
-from collections import defaultdict
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import splprep, splev
 from scipy.spatial import cKDTree
-import argparse
-from pathlib import Path
+
 # FCOS3D imports
 from mmengine.config import Config
 from mmengine.runner import load_checkpoint
@@ -41,46 +57,21 @@ from mmdet3d.structures import CameraInstance3DBoxes
 
 
 # ==========================================
+# PATH SETUP
+# ==========================================
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+
+
+# ==========================================
 # CONFIGURATION
 # ==========================================
 
-# Dataset name (with .bag extension): must match an existing bag in step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
-parser = argparse.ArgumentParser(
-    description="Parked car detection from RGB frames using FCOS3D + tracking + clustering."
-)
-parser.add_argument(
-    "--bag-name",
-    default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
-    help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
-)
-args = parser.parse_args()
-
-bag_name = args.bag_name                # e.g. "reference_bag.bag"
-bag_stem = Path(bag_name).stem          # e.g. "reference_bag"
-
-# Input folders from step 1: ROS extraction
-EXTRACTED_ROOT = Path("data") / "raw_dataset"
-DATASET_DIR    = EXTRACTED_ROOT / bag_stem
-
-DATA_DIR   = DATASET_DIR
-POSES_FILE = DATASET_DIR / "images_positions.txt"
-
-# Output folders for step 2: processed datasets
-PROCESSED_ROOT     = Path("data") / "processed_dataset"
-OUTPUT_DATASET_DIR = PROCESSED_ROOT / bag_stem
-
-# All camera detection outputs are saved here
-OUTPUT_DIR = OUTPUT_DATASET_DIR / "camera_detections"
-
-FCOS3D_CONFIG = "2_process_datasets/utils/fcos3d_config.py"
-FCOS3D_CHECKPOINT = "2_process_datasets/utils/fcos3d.pth"
-
-# Output files
-OUTPUT_JSON     = OUTPUT_DIR / "camera_detections.json"
-OUTPUT_CLUSTERS = OUTPUT_DIR / "unified_clusters.txt"
-OUTPUT_BBOX_DIR = OUTPUT_DIR / "unified_bbox_overlays"
+FCOS3D_CONFIG = PROJECT_ROOT / "2_process_datasets" / "utils" / "fcos3d_config.py"
+FCOS3D_CHECKPOINT = PROJECT_ROOT / "2_process_datasets" / "utils" / "fcos3d.pth"
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -131,6 +122,29 @@ CLASS_NAMES = [
     "traffic_cone",
     "barrier",
 ]
+
+
+# ==========================================
+# CLI
+# ==========================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Parked car detection from RGB frames using FCOS3D + tracking + clustering."
+    )
+
+    parser.add_argument(
+        "--bag-name",
+        default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
+        help=(
+            "Bag filename including .bag extension "
+            "(default: env BAG_NAME or 'reference_bag.bag')."
+        ),
+    )
+
+    return parser.parse_args()
+
+
 # ==========================================
 # WORLD TRACKER
 # ==========================================
@@ -255,12 +269,12 @@ def get_T_cam_world(row, origin):
 # ==========================================
 
 def load_fcos3d(config, checkpoint, device):
-    cfg = Config.fromfile(config)
+    cfg = Config.fromfile(str(config))
 
     model = MODELS.build(cfg.model)
     model.cfg = cfg
 
-    load_checkpoint(model, checkpoint, map_location="cpu")
+    load_checkpoint(model, str(checkpoint), map_location="cpu")
 
     model.CLASSES = CLASS_NAMES
     model.to(device).eval()
@@ -269,7 +283,7 @@ def load_fcos3d(config, checkpoint, device):
 
 
 def run_fcos3d(model, img_path, intrinsics, device):
-    img = cv2.imread(img_path)
+    img = cv2.imread(str(img_path))
 
     if img is None:
         return None, None
@@ -277,7 +291,7 @@ def run_fcos3d(model, img_path, intrinsics, device):
     data = dict(
         images=dict(
             CAM2=dict(
-                img_path=os.path.abspath(img_path),
+                img_path=os.path.abspath(str(img_path)),
                 cam2img=intrinsics.tolist(),
             )
         ),
@@ -670,46 +684,62 @@ def merge_clusters(clusters, dist_thresh):
 # ==========================================
 
 def main():
+    args = parse_args()
+
+    bag_name = args.bag_name
+    bag_stem = Path(bag_name).stem
+
+    dataset_dir = PROJECT_ROOT / "data" / "raw_dataset" / bag_stem
+    data_dir = dataset_dir
+    poses_file = dataset_dir / "images_positions.txt"
+    images_dir = data_dir / "images"
+
+    output_dataset_dir = PROJECT_ROOT / "data" / "processed_dataset" / bag_stem
+    output_dir = output_dataset_dir / "camera_detections"
+
+    output_json = output_dir / "camera_detections.json"
+    output_clusters = output_dir / "unified_clusters.txt"
+    output_bbox_dir = output_dir / "unified_bbox_overlays"
+
     print("=" * 70)
     print("UNIFIED PARKED CAR DETECTION PIPELINE")
     print("=" * 70)
 
-    print(f"\nBag:           {bag_name}")
-    print(f"Bag stem:      {bag_stem}")
-    print(f"Input dataset: {DATASET_DIR}")
-    print(f"Output folder: {OUTPUT_DIR}")
+    print(f"\nProject root:   {PROJECT_ROOT}")
+    print(f"Bag:            {bag_name}")
+    print(f"Bag stem:       {bag_stem}")
+    print(f"Input dataset:  {dataset_dir}")
+    print(f"Output folder:  {output_dir}")
     print(f"Device: {DEVICE}")
 
     # Validate input paths
-    if not os.path.exists(DATASET_DIR):
-        raise FileNotFoundError(f"Input dataset folder not found: {DATASET_DIR}")
+    if not dataset_dir.is_dir():
+        raise FileNotFoundError(f"Input dataset folder not found: {dataset_dir}")
 
-    if not os.path.exists(POSES_FILE):
-        raise FileNotFoundError(f"Pose file not found: {POSES_FILE}")
+    if not poses_file.is_file():
+        raise FileNotFoundError(f"Pose file not found: {poses_file}")
 
-    images_dir = os.path.join(DATA_DIR, "images")
-
-    if not os.path.exists(images_dir):
+    if not images_dir.is_dir():
         raise FileNotFoundError(f"Images folder not found: {images_dir}")
 
-    if not os.path.exists(FCOS3D_CONFIG):
+    if not FCOS3D_CONFIG.is_file():
         raise FileNotFoundError(f"FCOS3D config not found: {FCOS3D_CONFIG}")
 
-    if not os.path.exists(FCOS3D_CHECKPOINT):
+    if not FCOS3D_CHECKPOINT.is_file():
         raise FileNotFoundError(f"FCOS3D checkpoint not found: {FCOS3D_CHECKPOINT}")
 
     # Setup output directories
-    # Safe to delete because OUTPUT_DIR only contains outputs from this script
-    if os.path.exists(OUTPUT_DIR):
-        shutil.rmtree(OUTPUT_DIR)
+    # Safe to delete because output_dir only contains outputs from this script
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
 
-    os.makedirs(OUTPUT_BBOX_DIR, exist_ok=True)
+    output_bbox_dir.mkdir(parents=True, exist_ok=True)
 
     # Load data
     print("\n[1/6] Loading data...", flush=True)
 
     pose_df = pd.read_csv(
-        POSES_FILE,
+        poses_file,
         comment="#",
         header=None,
         names=[
@@ -731,10 +761,10 @@ def main():
     pose_df = pose_df.sort_values("frame_id").reset_index(drop=True)
 
     if pose_df.empty:
-        raise RuntimeError(f"No poses found in: {POSES_FILE}")
+        raise RuntimeError(f"No poses found in: {poses_file}")
 
     img_files = [
-        os.path.join(DATA_DIR, "images", str(name))
+        images_dir / str(name)
         for name in pose_df["image_file"]
     ]
 
@@ -878,7 +908,7 @@ def main():
                 cv2.circle(bbox_img, (px, py), 4, (0, 0, 255), -1)
 
         cv2.imwrite(
-            os.path.join(OUTPUT_BBOX_DIR, f"bbox_{i:06d}.png"),
+            str(output_bbox_dir / f"bbox_{i:06d}.png"),
             bbox_img,
         )
 
@@ -961,7 +991,7 @@ def main():
     json_data = {
         "source": "camera",
         "dataset_name": bag_stem,
-        "input_dataset": str(DATASET_DIR),
+        "input_dataset": str(dataset_dir),
         "global_origin": origin.tolist(),
         "cars": [],
     }
@@ -982,12 +1012,12 @@ def main():
             "orient": c["orient"],
         })
 
-    with open(OUTPUT_JSON, "w") as f:
+    with open(output_json, "w") as f:
         json.dump(json_data, f, indent=2)
 
-    print(f"  Saved JSON to {OUTPUT_JSON}")
+    print(f"  Saved JSON to {output_json}")
 
-    with open(OUTPUT_CLUSTERS, "w") as f:
+    with open(output_clusters, "w") as f:
         f.write("# cluster_id, x, y, z, count, conf, orientation, side\n")
 
         for c in final_clusters:
@@ -1002,14 +1032,14 @@ def main():
                 f"{c['side']}\n"
             )
 
-    print(f"  Saved clusters to {OUTPUT_CLUSTERS}")
+    print(f"  Saved clusters to {output_clusters}")
 
     print(f"\n{'=' * 70}")
     print("DONE!")
     print(f"{'=' * 70}")
-    print(f"  JSON:        {OUTPUT_JSON} ({len(final_clusters)} cars)")
-    print(f"  Clusters:    {OUTPUT_CLUSTERS}")
-    print(f"  BB overlays: {OUTPUT_BBOX_DIR}/")
+    print(f"  JSON:        {output_json} ({len(final_clusters)} cars)")
+    print(f"  Clusters:    {output_clusters}")
+    print(f"  BB overlays: {output_bbox_dir}/")
     print(f"{'=' * 70}")
 
 
