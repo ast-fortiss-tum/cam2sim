@@ -1205,14 +1205,14 @@ def main():
             if gs_pil:
                 combined.paste(gs_pil, (IM_WIDTH, 0))
 
-            # if save_flag:
-            #     carla_pil.save(os.path.join(
-            #         save_dir_carla, f"frame_{frame_id:06d}.png"))
-            #     if gs_pil:
-            #         gs_pil.save(os.path.join(
-            #             save_dir_gs, f"frame_{frame_id:06d}.png"))
-            #     combined.save(os.path.join(
-            #         save_dir_combined, f"frame_{frame_id:06d}.jpg"), quality=95)
+            if save_flag:
+                carla_pil.save(os.path.join(
+                    save_dir_carla, f"frame_{frame_id:06d}.png"))
+                if gs_pil:
+                    gs_pil.save(os.path.join(
+                        save_dir_gs, f"frame_{frame_id:06d}.png"))
+                combined.save(os.path.join(
+                    save_dir_combined, f"frame_{frame_id:06d}.jpg"), quality=95)
 
             screen.blit(pygame.image.fromstring(
                 combined.tobytes(), combined.size, combined.mode), (0, 0))
