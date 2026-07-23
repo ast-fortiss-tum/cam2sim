@@ -7,18 +7,34 @@
 Prepare cropped images and overlapping splits for Gaussian Splatting,
 with per-frame sky masks generated via SegFormer (Cityscapes).
 
-Reads from (project root):
+Reads from:
     data/raw_dataset/<BAG>/images/
     data/raw_dataset/<BAG>/images_positions.txt
 
-Writes to (project root):
+Writes to:
     data/data_for_gaussian_splatting/<BAG>/
-        _tmp_images_gs_1_of_<SKIP>/ (cropped frames, all subsampled)
-        _tmp_sky_masks_gs_1_of_<SKIP>/ (sky masks: 255=keep, 0=sky)
         images_gs_split_<N>_1_of_<SKIP>/ (per-split cropped frames)
         sky_masks_gs_split_<N>_1_of_<SKIP>/ (per-split sky masks)
         frame_positions_split_<N>_1_of_<SKIP>.txt (per-split pose subset)
         colmap/split_<N>/sparse/0/ (empty folders ready for COLMAP)
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        Default: env BAG_NAME or reference_bag.bag.
+
+    --frame-skip <N>
+        Process every Nth frame. Default: 2.
+
+    --num-splits <N>
+        Number of overlapping output splits. Default: 3.
+
+    --overlap-frames <N>
+        Split overlap in original-frame units. Default: 100.
+
+Usage:
+    python 2_process_datasets/2E_prepare_dataset_for_gaussian_splatting.py \
+        --bag-name snowy.bag
 """
 
 import os
@@ -59,6 +75,18 @@ sys.path.insert(0, SCRIPT_DIR)
 # Bag name (with .bag extension): must match an existing bag from step 1.
 DEFAULT_BAG_NAME = "reference_bag.bag"
 
+def positive_int(value):
+    value = int(value)
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return value
+
+def nonnegative_int(value):
+    value = int(value)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
+    return value
+
 parser = argparse.ArgumentParser(
     description="Prepare cropped images and overlapping splits for Gaussian Splatting, "
                 "with per-frame sky masks generated via SegFormer."
@@ -68,6 +96,9 @@ parser.add_argument(
     default=os.environ.get("BAG_NAME", DEFAULT_BAG_NAME),
     help="Bag filename including .bag extension (default: env BAG_NAME or 'reference_bag.bag').",
 )
+parser.add_argument("--frame-skip", type=positive_int, default=2)
+parser.add_argument("--num-splits", type=positive_int, default=3)
+parser.add_argument("--overlap-frames", type=nonnegative_int, default=100)
 args = parser.parse_args()
 
 bag_name = args.bag_name                # e.g. "reference_bag.bag"
@@ -85,9 +116,9 @@ OUTPUT_ROOT = os.path.join(
 
 CROP_BOTTOM = 45
 
-FRAME_SKIP = 2
-NUM_SPLITS = 2
-OVERLAP_FRAMES = 100   # in ORIGINAL frame_id units
+FRAME_SKIP = args.frame_skip
+NUM_SPLITS = args.num_splits
+OVERLAP_FRAMES = args.overlap_frames
 
 OVERWRITE_EXISTING = True
 
@@ -416,6 +447,10 @@ def process_frames():
                 f"\n[WARN] No overlap between split_{split_index + 1} "
                 f"and split_{split_index + 2}"
             )
+
+    shutil.rmtree(tmp_image_folder)
+    shutil.rmtree(tmp_mask_folder)
+    print("\n[INFO] Removed temporary cropped images and sky masks.")
 
     print("\n[INFO] Done.")
     print(f"[INFO] Gaussian Splatting data saved in: {OUTPUT_ROOT}")

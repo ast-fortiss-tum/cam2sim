@@ -6,13 +6,13 @@
 Build a HuggingFace dataset (Arrow binary) for Stable Diffusion / ControlNet
 training, using the cam2sim project layout.
 
-Reads from (project root):
+Reads from:
     data/raw_dataset/<BAG>/images/frame_XXXXXX.png
     data/processed_dataset/<BAG>/semantic_maps/frame_XXXXXX.png   (from 2F)
     data/processed_dataset/<BAG>/camera_detections/instance_maps/frame_XXXXXX.png  (from 2A_sd)
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
 
-Writes to (project root):
+Writes to:
     data/data_for_stable_diffusion/<BAG>/
         images/         (RGB, 512x512)
         segmentation/   (semantic, 512x512, NEAREST)
@@ -20,6 +20,15 @@ Writes to (project root):
         previous/       (previous-frame RGB, 512x512)
         hf_binary/      (Arrow dataset with columns:
                          image, segmentation, instance, previous, text, frame_id)
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 2_process_datasets/2H_prepare_dataset_for_stable_diffusion.py \
+        --bag-name snowy.bag
 """
 
 import os

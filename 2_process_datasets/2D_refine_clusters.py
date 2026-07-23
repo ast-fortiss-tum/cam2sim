@@ -25,6 +25,7 @@ When matching is enabled, the GUI displays:
     - editable final detections as colored points and orientation bars
 
 After optional matching, the GUI opens and allows manual edits.
+Use --no-window to save the automatic matching result without opening the GUI.
 
 Reads from:
     data/raw_dataset/<BAG>/trajectory.csv
@@ -58,6 +59,10 @@ Parameters:
         Maximum camera-LiDAR distance for greedy matching.
         Default: 4.0.
 
+    --no-window
+        Save the refinement result without opening the interactive GUI.
+        The GUI opens by default.
+
 Usage:
     python 2_process_datasets/2D_refine_clusters.py \
         --bag-name snowy.bag \
@@ -77,6 +82,9 @@ Usage:
         --source camera \
         --match \
         --match-threshold 4.0
+
+    python 2_process_datasets/2D_refine_clusters.py \
+        --bag-name snowy.bag --source camera --match --no-window
 """
 
 import os
@@ -192,6 +200,12 @@ def parse_args():
             "Maximum camera-LiDAR distance in meters for matching. "
             f"Default: {DEFAULT_MATCH_THRESHOLD}."
         ),
+    )
+
+    parser.add_argument(
+        "--no-window",
+        action="store_true",
+        help="Save the result without opening the GUI. The GUI opens by default.",
     )
 
     return parser.parse_args()
@@ -765,7 +779,7 @@ def main():
     lidar_gt_file = processed_dataset_dir / "lidar_detections" / "unified_clusters.txt"
 
     print("=" * 70)
-    print("INTERACTIVE CLUSTER CLEANER")
+    print("CLUSTER CLEANER")
     print("=" * 70)
     print(f"Project root:      {PROJECT_ROOT}")
     print(f"Bag:               {bag_name}")
@@ -778,6 +792,7 @@ def main():
     print(f"Output:            {output_filtered_file}")
     print(f"Match enabled:     {args.match}")
     print(f"Match threshold:   {args.match_threshold}")
+    print(f"Interactive window: {not args.no_window}")
     print("=" * 70)
 
     if not centroid_file.is_file():
@@ -816,6 +831,11 @@ def main():
             lidar_gt_list=lidar_gt_list,
             threshold=args.match_threshold,
         )
+
+    if args.no_window:
+        save_filtered_centroids(output_filtered_file, centroid_data_list)
+        print("[OK] Non-interactive cluster refinement completed.")
+        return
 
     proj_tx, proj_ty = get_projected_coords(odom_x, odom_y)
 

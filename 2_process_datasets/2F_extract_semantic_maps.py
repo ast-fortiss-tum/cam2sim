@@ -5,12 +5,20 @@
 Extract reduced semantic segmentation maps (road, car, background) from RGB frames
 using SegFormer (Cityscapes).
 
-Reads from (project root):
+Reads from:
     data/raw_dataset/<BAG>/images/
 
-Writes to (project root):
-    data/processed_dataset/<BAG>/
-        semantic_maps/
+Writes to:
+    data/processed_dataset/<BAG>/semantic_maps/frame_<N:06d>.png
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 2_process_datasets/2F_extract_semantic_maps.py \
+        --bag-name snowy.bag
 """
 
 import os
