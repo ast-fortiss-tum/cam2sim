@@ -5,8 +5,8 @@
 3B_sd_transform_parked_vehicles_to_carla.py
 
 Same as 3B_transform_parked_vehicles_to_carla.py but:
-  - reads centroids from camera_detections/unified_clusters.txt (the file
-    produced by 2A_OPTIONAL, which includes a per-car RGB color)
+  - prefers camera_detections/unified_clusters_filtered.txt produced by 2D
+  - falls back to camera_detections/unified_clusters.txt produced by 2A_sd
   - parses the rgb_color column (format "R-G-B")
   - writes a "color" field (list [R, G, B]) into each spawn_positions entry
 
@@ -14,7 +14,10 @@ This is the Stable Diffusion branch counterpart of 3B. The standard 3B is
 kept untouched for the Gaussian Splatting branch.
 
 Reads from (project root):
+    data/processed_dataset/<BAG>/camera_detections/unified_clusters_filtered.txt
+        preferred when available
     data/processed_dataset/<BAG>/camera_detections/unified_clusters.txt
+        fallback when filtered clusters are unavailable
     data/processed_dataset/<BAG>/maps/map.xodr
     data/processed_dataset/<BAG>/maps/vehicle_data.json (optional)
     data/data_for_carla/<BAG>/vehicle_data.json (optional, preserved if present)
@@ -23,6 +26,15 @@ Writes to (project root):
     data/data_for_carla/<BAG>/
         vehicle_data.json (spawn_positions overwritten with color field,
                            hero_car preserved)
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 3_generate_simulation_data/3B_sd_transform_parked_vehicles_to_carla.py \
+        --bag-name snowy.bag
 """
 
 import os
@@ -87,14 +99,29 @@ MAP_FOLDER = os.path.join(
     "maps",
 )
 
-# CAMERA detections (with colors), not LIDAR
-CENTROIDS_FILE = os.path.join(
+# Camera detections retain the RGB colors extracted by 2A_sd.
+CAMERA_DETECTIONS_FOLDER = os.path.join(
     PROJECT_ROOT,
     "data",
     "processed_dataset",
     bag_stem,
     "camera_detections",
+)
+
+FILTERED_CENTROIDS_FILE = os.path.join(
+    CAMERA_DETECTIONS_FOLDER,
+    "unified_clusters_filtered.txt",
+)
+
+UNFILTERED_CENTROIDS_FILE = os.path.join(
+    CAMERA_DETECTIONS_FOLDER,
     "unified_clusters.txt",
+)
+
+CENTROIDS_FILE = (
+    FILTERED_CENTROIDS_FILE
+    if os.path.isfile(FILTERED_CENTROIDS_FILE)
+    else UNFILTERED_CENTROIDS_FILE
 )
 
 OUTPUT_FOLDER = os.path.join(
@@ -213,7 +240,7 @@ def normalize_vehicle_data(vehicle_data):
 
 def load_centroids_with_colors(path: str):
     """
-    Parse camera_detections/unified_clusters.txt produced by 2A_OPTIONAL.
+    Parse camera centroids produced by 2A_sd and optionally filtered by 2D.
 
     Expected format:
       # cluster_id, x, y, z, count, conf, orientation, side, rgb_color
@@ -539,8 +566,10 @@ def main():
 
     if not os.path.exists(CENTROIDS_FILE):
         raise FileNotFoundError(
-            f"Camera centroid file not found: {CENTROIDS_FILE}\n"
-            f"Run 2_process_datasets/2A_OPTIONAL.py first to generate it."
+            "Camera centroid file not found. Checked:\n"
+            f"  {FILTERED_CENTROIDS_FILE}\n"
+            f"  {UNFILTERED_CENTROIDS_FILE}\n"
+            f"Run 2_process_datasets/step2_sd.sh for {bag_name} first."
         )
 
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)

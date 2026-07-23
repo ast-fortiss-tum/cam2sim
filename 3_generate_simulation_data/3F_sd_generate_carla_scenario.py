@@ -26,11 +26,24 @@ CARLA instance maps with bag colors before feeding them to the SD model.
 
 Reads from (project root):
     data/processed_dataset/<BAG>/maps/map.xodr
-    data/data_for_carla/<BAG>/vehicle_data.json  (with color field, from 3B_OPT)
+    data/data_for_carla/<BAG>/vehicle_data.json  (with color field, from 3B_sd)
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json (optional)
 
 Writes to (project root):
     data/data_for_carla/<BAG>/instance_color_map.json
+
+World side effects:
+    Loads map.xodr into CARLA, replaces existing vehicles and sensors, and
+    leaves the generated hero and parked vehicles in the prepared world.
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 3_generate_simulation_data/3F_sd_generate_carla_scenario.py \
+        --bag-name snowy.bag
 """
 
 import os
@@ -255,7 +268,7 @@ def main():
     if not os.path.exists(VEHICLE_DATA_PATH):
         raise FileNotFoundError(
             f"vehicle_data.json not found: {VEHICLE_DATA_PATH}\n"
-            f"Run 3B_OPT_transform_parked_vehicles_with_colors.py first."
+            f"Run 3B_sd_transform_parked_vehicles_to_carla.py first."
         )
 
     xodr_data = load_text_file(XODR_FILE)
@@ -273,7 +286,7 @@ def main():
 
     if n_with_color == 0:
         raise RuntimeError(
-            "No spawn entry has a 'color'. Did you run 3B_OPT instead of 3B?"
+            "No spawn entry has a 'color'. Did you run 3B_sd instead of standard 3B?"
         )
 
     # ---------- Connect to CARLA ----------

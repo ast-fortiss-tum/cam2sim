@@ -12,7 +12,18 @@ Reads from (project root):
     data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
     data/data_for_carla/<BAG>/trajectory_positions_rear.json 
 
+World side effects:
+    Loads map.xodr into CARLA, removes existing vehicles when configured, and
+    spawns the hero and parked vehicles. Actors remain in CARLA by default.
 
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 3_generate_simulation_data/3F_generate_carla_scenario.py \
+        --bag-name snowy.bag
 """
 
 import os
@@ -40,7 +51,7 @@ if not os.path.isdir(LOCAL_UTILS_DIR):
     )
 
 # Force imports from:
-#   5_execute_simulation/utils/
+#   3_generate_simulation_data/utils/
 # instead of:
 #   project_root/utils/
 if SCRIPT_DIR in sys.path:

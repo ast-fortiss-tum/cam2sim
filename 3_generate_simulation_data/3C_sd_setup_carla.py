@@ -24,6 +24,16 @@ Reads from (project root):
         CARLA_INSTALLATION_PATH   - root of the CARLA installation
         CARLA_GLASS_PATH          - relative path of Glass.uasset inside CARLA
         ASSET_PATH                - folder containing the custom assets
+
+Writes to:
+    The configured CARLA Glass.uasset is temporarily replaced while CARLA runs.
+    The original asset is restored when this script exits.
+
+Parameters:
+    None.
+
+Usage:
+    python 3_generate_simulation_data/3C_sd_setup_carla.py
 """
 
 import os

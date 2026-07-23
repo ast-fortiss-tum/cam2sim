@@ -18,6 +18,15 @@ Writes to (project root):
         trajectory_positions_rear.json
         trajectory_positions_odom_yaw.json
         trajectory_positions_rear_odom_yaw.json
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 3_generate_simulation_data/3A_transform_coordinates_to_carla.py \
+        --bag-name snowy.bag
 """
 
 import os

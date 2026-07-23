@@ -1,32 +1,58 @@
-#!/bin/bash
-#
-# step3.sh
-#
-# Step 3 - Gaussian Splatting branch
-# Runs the GS-specific scenario generation pipeline.
-#
-# Prerequisites (run BEFORE this script):
-#   - Step 1 (1_extract_ROS_data/step1.sh <bag>)
-#   - Step 2 GS (2_process_datasets/step2.sh <bag>)
-#   - Conda env: data_extraction
-
+#!/usr/bin/env bash
 set -e
 
-# ---------- Conda init ----------
-# Required for `conda activate` to work in non-interactive scripts.
-CONDA_BASE="$(conda info --base)"
-# shellcheck disable=SC1091
-source "${CONDA_BASE}/etc/profile.d/conda.sh"
+# =============================================================================
+# step3.sh
+#
+# Generate one Gaussian Splatting CARLA scenario.
+#
+# Reads from:
+#   data/raw_dataset/<BAG>/images_positions.txt
+#   data/processed_dataset/<BAG>/maps/
+#   data/processed_dataset/<BAG>/lidar_detections/unified_clusters.txt
+#
+# Writes to:
+#   data/data_for_carla/<BAG>/
+#   CARLA world state (map, hero vehicle, and parked vehicles)
+#
+# Parameters:
+#   <bag_name.bag>
+#       Bag filename whose scenario should be generated.
+#
+# Required Conda environment:
+#   data_extraction
+#
+# Usage:
+#   bash 3_generate_simulation_data/step3.sh snowy.bag
+# =============================================================================
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
+cd "$PROJECT_ROOT"
 
 # ---------- Usage ----------
-if [ $# -lt 1 ]; then
+if [[ $# -ne 1 ]]; then
     echo "Usage: $0 <bag_name.bag>"
     echo "Example: $0 reference_bag.bag"
     exit 1
 fi
 
 BAG_NAME="$1"
-BAG_STEM="${BAG_NAME%.bag}"
+DATASET_DIR="${PROJECT_ROOT}/data/raw_dataset/${BAG_NAME%.bag}"
+
+if [[ ! -d "$DATASET_DIR" ]]; then
+    echo "[ERROR] Extracted dataset not found: $DATASET_DIR"
+    exit 1
+fi
+
+if ! command -v conda >/dev/null 2>&1; then
+    echo "[ERROR] conda command not found."
+    exit 1
+fi
+
+CONDA_BASE="$(conda info --base)"
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
 
 echo "=========================================="
 echo "Step 3 (GS branch) for bag: $BAG_NAME"

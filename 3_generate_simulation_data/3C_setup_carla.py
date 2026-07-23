@@ -9,6 +9,11 @@ Launch the CARLA simulator (CarlaUE4.sh) at low quality.
 Reads from (project root):
     utils/config.py (CARLA_INSTALLATION_PATH)
 
+Parameters:
+    None.
+
+Usage:
+    python 3_generate_simulation_data/3C_setup_carla.py
 """
 
 import os

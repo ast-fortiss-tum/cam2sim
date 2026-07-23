@@ -15,6 +15,15 @@ Reads from (project root):
 Writes to (project root):
     data/data_for_carla/<BAG>/
         vehicle_data.json (spawn_positions overwritten, hero_car preserved)
+
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+        Default: env BAG_NAME or reference_bag.bag.
+
+Usage:
+    python 3_generate_simulation_data/3B_transform_parked_vehicles_to_carla.py \
+        --bag-name snowy.bag
 """
 
 import os

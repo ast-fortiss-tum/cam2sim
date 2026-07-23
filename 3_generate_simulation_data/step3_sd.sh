@@ -1,39 +1,60 @@
-#!/bin/bash
-#
-# step3_sd.sh
-#
-# Step 3 - Stable Diffusion branch
-# Runs the SD-specific scenario generation pipeline.
-#
-# Uses 3B_sd (camera centroids with RGB colors) instead of the standard 3B,
-# and uses 3F_sd (scenario with instance color mapping) instead of the
-# standard 3F.
-#
-# Note: 3A is NOT run here, it was already run by step2_sd.sh.
-#
-# Prerequisites (run BEFORE this script):
-#   - Step 1 (1_extract_ROS_data/step1.sh <bag>)
-#   - Step 2 SD (2_process_datasets/step2_sd.sh <bag>)
-#     which also runs 3A and produces trajectory_positions_rear_odom_yaw.json
-#   - Conda env: data_extraction
-
+#!/usr/bin/env bash
 set -e
 
-# ---------- Conda init ----------
-# Required for `conda activate` to work in non-interactive scripts.
-CONDA_BASE="$(conda info --base)"
-# shellcheck disable=SC1091
-source "${CONDA_BASE}/etc/profile.d/conda.sh"
+# =============================================================================
+# step3_sd.sh
+#
+# Generate one Stable Diffusion CARLA scenario and instance-color map.
+#
+# Reads from:
+#   data/processed_dataset/<BAG>/maps/map.xodr
+#   data/processed_dataset/<BAG>/camera_detections/unified_clusters_filtered.txt
+#     or camera_detections/unified_clusters.txt as fallback
+#   data/data_for_carla/<BAG>/trajectory_positions_rear_odom_yaw.json
+#
+# Writes to:
+#   data/data_for_carla/<BAG>/vehicle_data.json
+#   data/data_for_carla/<BAG>/instance_color_map.json
+#   CARLA world state (map, hero vehicle, parked vehicles, and sensors)
+#
+# Parameters:
+#   <bag_name.bag>
+#       Bag filename whose scenario should be generated.
+#
+# Required Conda environment:
+#   data_extraction
+#
+# Usage:
+#   bash 3_generate_simulation_data/step3_sd.sh snowy.bag
+# =============================================================================
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
+cd "$PROJECT_ROOT"
 
 # ---------- Usage ----------
-if [ $# -lt 1 ]; then
+if [[ $# -ne 1 ]]; then
     echo "Usage: $0 <bag_name.bag>"
     echo "Example: $0 reference_bag.bag"
     exit 1
 fi
 
 BAG_NAME="$1"
-BAG_STEM="${BAG_NAME%.bag}"
+DATASET_DIR="${PROJECT_ROOT}/data/raw_dataset/${BAG_NAME%.bag}"
+
+if [[ ! -d "$DATASET_DIR" ]]; then
+    echo "[ERROR] Extracted dataset not found: $DATASET_DIR"
+    exit 1
+fi
+
+if ! command -v conda >/dev/null 2>&1; then
+    echo "[ERROR] conda command not found."
+    exit 1
+fi
+
+CONDA_BASE="$(conda info --base)"
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
 
 echo "=========================================="
 echo "Step 3 (SD branch) for bag: $BAG_NAME"
