@@ -14,9 +14,13 @@ Reads from (project root):
 Writes to (project root):
     same config.yml files, updated in place (originals saved as <config>.yml.bak).
 
-CLI flags:
+Parameters:
     --dry_run             print what would change without writing
     --project_root <path> override project root used for the rewrite
+
+Usage:
+    python 4_gaussian_splatting_preparation/4D_fix_paths.py --dry_run
+    python 4_gaussian_splatting_preparation/4D_fix_paths.py
 """
 
 import argparse

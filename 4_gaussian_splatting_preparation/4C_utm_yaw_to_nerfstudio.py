@@ -7,14 +7,28 @@
 Compute similarity transform (UTM → Nerfstudio) from a trained Gaussian Splatting
 model, including position alignment (Umeyama) and yaw offset.
 
-Reads from (CLI args):
+Reads from:
     --gs_config <path>/config.yml
     --utm_file <path>/frame_positions.txt
     --data_root <path>
 
-Writes to (CLI args):
+Writes to:
     --output utm_to_nerfstudio_transform.json
 
+Parameters:
+    --gs_config <PATH>
+        Nerfstudio config.yml to load.
+    --utm_file <PATH>
+        Frame-position file containing UTM coordinates.
+    --data_root <PATH>
+        Nerfstudio data root. Default: project root.
+    --output <PATH>
+        Optional output JSON path; defaults next to config.yml.
+
+Usage:
+    python 4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py \
+        --gs_config <config.yml> --utm_file <frame_positions.txt> \
+        --data_root <data_root>
 """
 
 import os
@@ -27,6 +41,9 @@ from pathlib import Path
 
 import torch
 from nerfstudio.utils.eval_utils import eval_setup
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 
 
 # ==============================================================================
@@ -272,7 +289,7 @@ def main():
     )
     parser.add_argument(
         "--data_root",
-        default=".",
+        default=str(PROJECT_ROOT),
         help="Data root directory (where nerfstudio expects to find data)",
     )
     parser.add_argument(
@@ -285,6 +302,13 @@ def main():
 
     config_path = Path(args.gs_config).resolve()
     data_root = Path(args.data_root).resolve()
+    utm_path = Path(args.utm_file).resolve()
+
+    for required_path, label in ((config_path, "config"), (utm_path, "UTM file")):
+        if not required_path.is_file():
+            parser.error(f"{label} not found: {required_path}")
+    if not data_root.is_dir():
+        parser.error(f"data root not found: {data_root}")
 
     if args.output is None:
         output_path = config_path.parent / "utm_to_nerfstudio_transform.json"
@@ -355,8 +379,8 @@ def main():
     print("STEP 2: Loading UTM positions (ground truth)")
     print("=" * 70)
 
-    utm_positions = read_utm_positions(args.utm_file)
-    print(f"[INFO] Loaded {len(utm_positions)} UTM positions from: {args.utm_file}")
+    utm_positions = read_utm_positions(utm_path)
+    print(f"[INFO] Loaded {len(utm_positions)} UTM positions from: {utm_path}")
 
     sorted_utm_frames = sorted(utm_positions.keys())[:5]
     print(f"\n[INFO] First 5 UTM positions:")

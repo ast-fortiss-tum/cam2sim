@@ -2,33 +2,29 @@
 # -*- coding: utf-8 -*-
 
 """
-4A_train_stable_diff.py
+4B_train_stable_diff.py
 
-Train a per-split LoRA + 3 ControlNets (segmentation, instance, temporal) for
-the Stable Diffusion branch of cam2sim. Mirrors the GS split structure
-(NUM_PARTS=3), so each model expert covers one geographical chunk of the bag.
+Train per-part LoRA and ControlNet models for the Stable Diffusion branch.
 
-Reads from (project root):
-    data/data_for_stable_diffusion/<BAG>/hf_binary/   (built by 2H)
+Reads from:
+    data/data_for_stable_diffusion/<BAG>/hf_binary/
 
-Writes to (external SSD):
-    <EXTERNAL_DRIVE>/cam2sim_sd/
-        diffusers_repo/                          (cloned once)
-        cityscapes-controlnet/                   (downloaded via huggingface_hub)
-        huggingface_cache/                       (HF_HOME, SD1.5 weights)
-        <BAG>/
-            local_data_shards/part_<N>/data/train-00000-of-00001.parquet
-            SD_Training_Outputs_Split/part_<N>/
-                stable_diffusion/                (LoRA weights)
-                controlnet_segmentation/
-                controlnet_instance/
-                controlnet_tempconsistency/
-                config.json
+Writes to:
+    data/stable_diff_models/ by default, or --output-root when supplied.
 
-Run from project root:
-    python 4B_stable_diffusion_training/4A_train_stable_diff.py
-    python 4B_stable_diffusion_training/4A_train_stable_diff.py --bag-name snowy.bag
-    python 4B_stable_diffusion_training/4A_train_stable_diff.py --force
+Parameters:
+    --bag-name <BAG>.bag
+        Bag filename including .bag extension.
+    --num-parts <N>
+        Number of geographical training parts. Default: 3.
+    --output-root <PATH>
+        Optional model and cache storage root.
+    --force
+        Retrain models even when completion markers exist.
+
+Usage:
+    python 4_gaussian_splatting_preparation/4B_train_stable_diff.py --bag-name snowy.bag --num-parts 2
+    python 4_gaussian_splatting_preparation/4B_train_stable_diff.py --bag-name sunny.bag --num-parts 3
 """
 
 import subprocess
@@ -57,7 +53,7 @@ parser.add_argument(
     "--num-parts",
     type=int,
     default=3,
-    help="Number of Stable Diffusion training parts/splits. Default: 2.",
+    help="Number of Stable Diffusion training parts/splits. Default: 3.",
 )
 parser.add_argument("--output-root", type=str, default=None,
                     help="Where to store trained SD models. "
@@ -65,7 +61,10 @@ parser.add_argument("--output-root", type=str, default=None,
                          "Saved to data/.sd_root so you don't need to repeat it.")
 parser.add_argument("--force", action="store_true",
                     help="Force retrain even if model markers exist")
-args, unknown = parser.parse_known_args()
+args = parser.parse_args()
+
+if args.num_parts <= 0:
+    parser.error("--num-parts must be greater than zero")
 
 # Project root is the parent of this script's folder
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

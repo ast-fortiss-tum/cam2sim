@@ -2,44 +2,32 @@
 # =============================================================================
 # 4B_train_gaussian_splatting.sh
 #
-# Train one nerfstudio model per split (splatfacto, splatfacto-big, nerfacto,
-# nerfacto-big).
+# Train one Nerfstudio model per detected Gaussian Splatting split.
 #
-# IDEMPOTENT: if a split already has a trained checkpoint, skip it.
-# This means re-running the script only trains the splits that are
-# missing or incomplete.
+# Reads from:
+#   data/data_for_gaussian_splatting/<BAG>/images_gs_split_*_1_of_*/
+#   data/data_for_gaussian_splatting/<BAG>/sky_masks_gs_split_*_1_of_*/
+#   data/data_for_gaussian_splatting/<BAG>/colmap/split_*/sparse/0/
 #
-# Uses --viewer.quit-on-train-completion so the viewer auto-closes when
-# training ends and the script moves to the next split without manual Ctrl+C.
+# Writes to:
+#   data/data_for_gaussian_splatting/<BAG>/outputs/
 #
-# The number of splits is auto-detected from the folder names produced by 2E.
-# Sky masks are used automatically if present; pass --no-masks to skip them.
+# Parameters:
+#   <bag_name.bag>
+#       Bag filename whose splits should be trained.
+#   --method <NAME>
+#       Nerfstudio method. Default: splatfacto.
+#   --no-masks
+#       Train without sky masks.
+#   --max-jobs <N>
+#       Limit CUDA build jobs.
 #
-# Method-family-aware "trained" threshold:
-#   splatfacto / splatfacto-big -> default 30000 steps  (threshold 29000)
-#   nerfacto   / nerfacto-big   -> default 100000 steps (threshold 99000)
-#
-# Method-family-aware extra training flags:
-#   nerfacto / nerfacto-big -> --pipeline.model.camera-optimizer.mode off
-#                              (keeps extrinsics aligned with COLMAP poses so
-#                               4C_utm_yaw_to_nerfstudio.py stays consistent)
-#   splatfacto*             -> none (poses are fixed by default)
-#
-# Nerfstudio internal method folders:
-#   splatfacto-big -> outputs/splatfacto-big_split_N/splatfacto/<TIMESTAMP>/
-#   nerfacto-big   -> outputs/nerfacto-big_split_N/nerfacto/<TIMESTAMP>/
-#
-# Prerequisites:
-#   - Step 2 GS  (produces images_gs_split_*_1_of_<SKIP>/ folders)
-#   - Step 4A    (produces colmap/split_<N>/sparse/0/*.bin)
-#   - Conda env: nerfstudio
+# Required Conda environment:
+#   nerfstudio
 #
 # Usage:
-#   bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh <bag_name.bag>
-#   bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh <bag_name.bag> --method splatfacto-big
-#   bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh <bag_name.bag> --method nerfacto
-#   bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh <bag_name.bag> --no-masks
-#   bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh <bag_name.bag> --max-jobs 2
+#   bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh snowy.bag
+#   bash 4_gaussian_splatting_preparation/4B_train_gaussian_splatting.sh snowy.bag --method splatfacto-big
 # =============================================================================
 
 set +e   # do NOT exit on error: keep going if one split fails
@@ -48,9 +36,9 @@ set +e   # do NOT exit on error: keep going if one split fails
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
+cd "$PROJECT_ROOT"
 SCRIPT_4C="${PROJECT_ROOT}/4_gaussian_splatting_preparation/4C_utm_yaw_to_nerfstudio.py"
 
-SPLIT_SKIP=2
 METHOD="splatfacto"
 CONDA_ENV="nerfstudio"
 USE_SKY_MASKS=true
@@ -74,8 +62,6 @@ Arguments:
   <bag_name.bag>            Bag filename including .bag extension
 
 Options:
-  --split-skip N            Skip value used by 2E in folder names
-                            (matches FRAME_SKIP in 2E; default: $SPLIT_SKIP)
   --method NAME             nerfstudio method (default: $METHOD)
                             Allowed: ${ALLOWED_METHODS[*]}
   --no-masks                Do not pass sky masks to ns-train even if present
@@ -84,8 +70,7 @@ Options:
                             if you hit RAM OOM during build (default: unset).
   -h, --help                Show this help message
 
-The number of splits is auto-detected from how many
-images_gs_split_*_1_of_<SPLIT_SKIP>/ folders exist.
+Frame skip and split IDs are inferred from the 2E output folders.
 EOF
 }
 
@@ -98,11 +83,8 @@ BAG_NAME=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --split-skip)
-            SPLIT_SKIP="$2"
-            shift 2
-            ;;
         --method)
+            [[ $# -ge 2 && -n "$2" ]] || { echo "[ERROR] --method requires a value."; exit 1; }
             METHOD="$2"
             shift 2
             ;;
@@ -111,6 +93,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --max-jobs)
+            [[ $# -ge 2 && "$2" =~ ^[1-9][0-9]*$ ]] || { echo "[ERROR] --max-jobs requires a positive integer."; exit 1; }
             MAX_JOBS="$2"
             shift 2
             ;;
@@ -213,7 +196,6 @@ case "$METHOD" in
 esac
 
 BAG_STEM="${BAG_NAME%.bag}"
-SPLIT_LABEL="1_of_${SPLIT_SKIP}"
 
 # ---------- Paths ----------
 
@@ -225,7 +207,23 @@ if [[ ! -d "${DATA_ROOT}" ]]; then
     exit 1
 fi
 
+mapfile -t SKIP_VALUES < <(
+    find "$DATA_ROOT" -maxdepth 1 -type d -printf '%f\n' |
+        sed -n 's/^images_gs_split_[0-9]\+_1_of_\([0-9]\+\)$/\1/p' | sort -nu
+)
+if [[ "${#SKIP_VALUES[@]}" -ne 1 ]]; then
+    echo "[ERROR] Expected exactly one frame-skip value, found: ${SKIP_VALUES[*]:-(none)}"
+    exit 1
+fi
+SPLIT_SKIP="${SKIP_VALUES[0]}"
+SPLIT_LABEL="1_of_${SPLIT_SKIP}"
+
 # ---------- Conda init + activate ----------
+
+if ! command -v conda >/dev/null 2>&1; then
+    echo "[ERROR] conda command not found."
+    exit 1
+fi
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV}"
@@ -265,7 +263,13 @@ mapfile -t SPLIT_DIRS < <(
         -name "images_gs_split_*_${SPLIT_LABEL}" | sort -V
 )
 
-NUM_SPLITS="${#SPLIT_DIRS[@]}"
+SPLIT_IDS=()
+for split_dir in "${SPLIT_DIRS[@]}"; do
+    split_base="$(basename "$split_dir")"
+    split_id="$(sed -n "s/^images_gs_split_\([0-9]\+\)_${SPLIT_LABEL}$/\1/p" <<< "$split_base")"
+    [[ -n "$split_id" ]] && SPLIT_IDS+=("$split_id")
+done
+NUM_SPLITS="${#SPLIT_IDS[@]}"
 
 if [ "$NUM_SPLITS" -eq 0 ]; then
     echo "[ERROR] No split folders found under $DATA_ROOT"
@@ -379,7 +383,8 @@ find_newest_timestamp_dir() {
 
 # ---------- Per-split loop ----------
 
-for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
+FAILURES=0
+for SPLIT in "${SPLIT_IDS[@]}"; do
     COLMAP_PATH="colmap/split_${SPLIT}/sparse/0"
     IMAGES_PATH="images_gs_split_${SPLIT}_${SPLIT_LABEL}"
     MASKS_PATH="sky_masks_gs_split_${SPLIT}_${SPLIT_LABEL}"
@@ -450,12 +455,14 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
         echo "[WARN] Skipping split ${SPLIT}: missing COLMAP reconstruction"
         echo "       Expected files in:"
         echo "       ${DATA_ROOT}/${COLMAP_PATH}/"
+        FAILURES=$((FAILURES + 1))
         continue
     fi
 
     if [[ ! -d "${DATA_ROOT}/${IMAGES_PATH}" ]]; then
         echo "[WARN] Skipping split ${SPLIT}: images folder missing:"
         echo "       ${DATA_ROOT}/${IMAGES_PATH}"
+        FAILURES=$((FAILURES + 1))
         continue
     fi
 
@@ -500,8 +507,11 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
             --images-path "${IMAGES_PATH}"
     fi
 
-    if [[ $? -ne 0 ]]; then
-        echo "[WARN] Split ${SPLIT} returned non-zero exit code, continuing..."
+    TRAIN_STATUS=$?
+    if [[ $TRAIN_STATUS -ne 0 ]]; then
+        echo "[ERROR] Split ${SPLIT} training failed."
+        FAILURES=$((FAILURES + 1))
+        continue
     fi
 
     # ---- Run 4C conversion for newest timestamp ----
@@ -510,12 +520,14 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
 
     if [[ -z "${TIMESTAMP_DIR}" ]]; then
         echo "[ERROR] No timestamp folder found for ${EXP_NAME} in ${METHOD_DIR}"
+        FAILURES=$((FAILURES + 1))
         continue
     fi
 
     if [[ ! -f "${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml" ]]; then
         echo "[ERROR] config.yml not found:"
         echo "        ${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml"
+        FAILURES=$((FAILURES + 1))
         continue
     fi
 
@@ -526,10 +538,15 @@ for SPLIT in $(seq 1 "${NUM_SPLITS}"); do
     python "${SCRIPT_4C}" \
         --gs_config "${METHOD_DIR}/${TIMESTAMP_DIR}/config.yml" \
         --utm_file "${DATA_ROOT}/frame_positions_split_${SPLIT}_${SPLIT_LABEL}.txt" \
-        --data_root "${DATA_ROOT}"
+        --data_root "${DATA_ROOT}" || { FAILURES=$((FAILURES + 1)); continue; }
 done
 
 conda deactivate
+
+if [[ $FAILURES -gt 0 ]]; then
+    echo "[ERROR] $FAILURES split(s) failed or were incomplete."
+    exit 1
+fi
 
 echo ""
 echo "============================================================"

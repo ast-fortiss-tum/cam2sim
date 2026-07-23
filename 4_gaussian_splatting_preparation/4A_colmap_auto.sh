@@ -1,33 +1,32 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 4A_colmap_reconstruction.sh
+# 4A_colmap_auto.sh
 #
-# Automated COLMAP reconstruction for all GS splits.
+# Reconstruct COLMAP models for every Gaussian Splatting split.
 #
-# Per split, runs:
-#   1. feature_extractor   (camera model + intrinsics, single camera, optional masks)
-#   2. sequential_matcher  (overlap=10)
-#   3. mapper              (intrinsics refinement DISABLED to keep calibration)
+# Reads from:
+#   data/data_for_gaussian_splatting/<BAG>/images_gs_split_*_1_of_*/
+#   data/data_for_gaussian_splatting/<BAG>/sky_masks_gs_split_*_1_of_*/
 #
-# Sparse model is exported automatically by mapper into:
-#   data/data_for_gaussian_splatting/<BAG>/colmap/split_<N>/sparse/0/
-#       {cameras,images,points3D}.bin
+# Writes to:
+#   data/data_for_gaussian_splatting/<BAG>/colmap/
 #
-# Replaces the manual GUI steps documented in 4A_colmap_guide.md.
+# Parameters:
+#   <bag_name.bag>
+#       Bag filename whose splits should be reconstructed.
+#   --camera-model <MODEL>
+#       COLMAP camera model. Default: OPENCV.
+#   --camera-params <VALUES>
+#       Comma-separated camera intrinsics.
+#   --no-masks
+#       Run COLMAP without sky masks.
 #
-# Prerequisites:
-#   - GS dataset preparation, which produces:
-#       data/data_for_gaussian_splatting/<BAG>/images_gs_split_*_1_of_<FRAME_SKIP>/
-#       data/data_for_gaussian_splatting/<BAG>/sky_masks_gs_split_*_1_of_<FRAME_SKIP>/
-#   - Conda env: nerfstudio
-#   - COLMAP available in PATH
+# Required Conda environment:
+#   nerfstudio
 #
 # Usage:
-#   bash 4_gaussian_splatting_preparation/4A_colmap_reconstruction.sh <bag_name.bag>
-#   bash 4_gaussian_splatting_preparation/4A_colmap_reconstruction.sh <bag_name.bag> --frame-skip 4
-#   bash 4_gaussian_splatting_preparation/4A_colmap_reconstruction.sh <bag_name.bag> \
-#       --camera-model PINHOLE --camera-params "800,800,400,250"
-#   bash 4_gaussian_splatting_preparation/4A_colmap_reconstruction.sh <bag_name.bag> --no-masks
+#   bash 4_gaussian_splatting_preparation/4A_colmap_auto.sh snowy.bag
+#   bash 4_gaussian_splatting_preparation/4A_colmap_auto.sh snowy.bag --no-masks
 # =============================================================================
 
 set -e
@@ -37,7 +36,14 @@ set -e
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
 
+cd "$PROJECT_ROOT"
+
 # ---------- Conda init ----------
+
+if ! command -v conda >/dev/null 2>&1; then
+    echo "[ERROR] conda command not found."
+    exit 1
+fi
 
 CONDA_BASE="$(conda info --base)"
 # shellcheck disable=SC1091
@@ -45,7 +51,6 @@ source "${CONDA_BASE}/etc/profile.d/conda.sh"
 
 # ---------- Defaults ----------
 
-FRAME_SKIP=2
 SEQUENTIAL_OVERLAP=10
 CONDA_ENV="nerfstudio"
 
@@ -72,8 +77,6 @@ Arguments:
   <bag_name.bag>            Bag filename including .bag extension
 
 Options:
-  --frame-skip N            Frame skip used during GS dataset preparation
-                            (default: $FRAME_SKIP)
   --camera-model MODEL      COLMAP camera model (default: $CAMERA_MODEL)
   --camera-params "p1,..."  Camera intrinsics
                             (default: front narrow camera params)
@@ -84,9 +87,6 @@ Split detection:
   The script auto-detects split folders from:
       data/data_for_gaussian_splatting/<BAG>/images_gs_split_*_1_of_<FRAME_SKIP>/
 
-  Example with --frame-skip 2:
-      images_gs_split_1_1_of_2/
-      images_gs_split_2_1_of_2/
 EOF
 }
 
@@ -99,15 +99,13 @@ BAG_NAME=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --frame-skip)
-            FRAME_SKIP="$2"
-            shift 2
-            ;;
         --camera-model)
+            [[ $# -ge 2 && -n "$2" ]] || { echo "[ERROR] --camera-model requires a value."; exit 1; }
             CAMERA_MODEL="$2"
             shift 2
             ;;
         --camera-params)
+            [[ $# -ge 2 && -n "$2" ]] || { echo "[ERROR] --camera-params requires a value."; exit 1; }
             CAMERA_PARAMS="$2"
             shift 2
             ;;
@@ -149,13 +147,25 @@ BAG_STEM="${BAG_NAME%.bag}"
 
 GS_DATA_ROOT="${PROJECT_ROOT}/data/data_for_gaussian_splatting/${BAG_STEM}"
 COLMAP_ROOT="${GS_DATA_ROOT}/colmap"
-SPLIT_LABEL="1_of_${FRAME_SKIP}"
 
 if [ ! -d "$GS_DATA_ROOT" ]; then
     echo "[ERROR] GS data folder not found: $GS_DATA_ROOT"
     echo "        Run the GS dataset preparation step first."
     exit 1
 fi
+
+mapfile -t SKIP_VALUES < <(
+    find "$GS_DATA_ROOT" -maxdepth 1 -type d -printf '%f\n' |
+        sed -n 's/^images_gs_split_[0-9]\+_1_of_\([0-9]\+\)$/\1/p' | sort -nu
+)
+
+if [[ "${#SKIP_VALUES[@]}" -ne 1 ]]; then
+    echo "[ERROR] Expected exactly one frame-skip value, found: ${SKIP_VALUES[*]:-(none)}"
+    exit 1
+fi
+
+FRAME_SKIP="${SKIP_VALUES[0]}"
+SPLIT_LABEL="1_of_${FRAME_SKIP}"
 
 mkdir -p "$COLMAP_ROOT"
 
